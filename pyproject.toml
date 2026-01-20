@@ -1,0 +1,14 @@
+[project]
+name = "psilocybin-eeg"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "ipython>=9.9.0",
+    "jupyterlab>=4.5.2",
+    "mne>=1.11.0",
+    "pandas>=2.3.3",
+    "pytest>=9.0.2",
+    "seaborn>=0.13.2",
+]
