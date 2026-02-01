@@ -1,4 +1,8 @@
-data/
+data/coordinates
+data/participant_keys
+data/raw
+data/raw_mock
+
 logs/
 *__pycache__*
 .vscode/

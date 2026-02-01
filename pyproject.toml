@@ -5,10 +5,15 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "autoreject>=0.4.3",
+    "ipympl>=0.10.0",
     "ipython>=9.9.0",
     "jupyterlab>=4.5.2",
     "mne>=1.11.0",
+    "mne-icalabel>=0.8.1",
     "pandas>=2.3.3",
+    "pyqt6>=6.10.2",
     "pytest>=9.0.2",
     "seaborn>=0.13.2",
+    "torch>=2.10.0",
 ]
