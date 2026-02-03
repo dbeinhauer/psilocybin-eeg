@@ -5,6 +5,7 @@ This module contains functionalities for preprocessing EEG datasets.
 import re
 from pathlib import Path
 
+import pandas as pd
 import numpy as np
 import mne
 from mne.preprocessing import ICA
@@ -23,8 +24,14 @@ from src.utils.logging_config import LoggerMixin
 
 class DatasetPreprocessor(LoggerMixin):
 
-    def __init__(self, coordinates_file_path: Path):
+    def __init__(self, coordinates_file_path: Path, excluded_coordinates_path: Path):
         self.montage = DatasetPreprocessor._load_coordinates_file(coordinates_file_path)
+        # List of all electrodes that we want to exclude.
+        self.electrodes_to_exclude: list[str] = (
+            pd.read_csv(excluded_coordinates_path)["electrode_name"]
+            .str.strip()
+            .tolist()
+        )
 
     @staticmethod
     def _load_coordinates_file(coordinates_file_path: Path) -> mne.channels.DigMontage:
@@ -104,7 +111,7 @@ class DatasetPreprocessor(LoggerMixin):
         self, data: mne.io.Raw, montage: mne.channels.DigMontage
     ) -> mne.io.Raw:
         """
-        Add channel coordinates montage to the raw data.
+        Add channel coordinates montage to the raw data and rename channel based on the template.
 
         :param raw_data: MNE-Python Raw object containing the EEG data.
         :param montage: MNE-Python DigMontage object containing the channel coordinates.
@@ -117,6 +124,39 @@ class DatasetPreprocessor(LoggerMixin):
         self.logger.info("Montage added successfully.")
 
         return data
+
+    def _exclude_selected_channels(self, data: mne.io.Raw) -> mne.io.Raw:
+        """
+        Exclude the selected channels from the raw data.
+
+        We want to exclude the selected electrodes with the problematic placement
+        (the electrodes are typically located at the cheeks or other problematic
+        positions in the head.)
+
+        :param data: Data from which we want to exclude the electrodes.
+        :return: Returns provided data without the selected electrodes.
+        """
+        self.logger.info("Dropping the selected channels (from problematic positions).")
+        return data.drop_channels(self.electrodes_to_exclude)
+
+    def _crop_start_and_end_of_dataseries(
+        self, data: mne.io.Raw, start_offset: float = 10.0, end_offset: float = 10.0
+    ) -> mne.io.Raw:
+        """
+        Crops start and end time blocks from the data (they are always noisy).
+
+        :param data: Data to be cropped.
+        :param start_offset: Start offset in seconds.
+        :param end_offset: End offset in seconds.
+        :return: Returns cropped raw data series.
+        """
+        self.logger.info(
+            f"Cropping the first {start_offset} and last {end_offset} seconds from the dataseries."
+        )
+        start_time = data.times[0]
+        end_time = data.times[-1]
+
+        return data.crop(tmin=start_time + start_offset, tmax=end_time - end_offset)
 
     def _apply_filters_to_data(
         self,
@@ -132,6 +172,7 @@ class DatasetPreprocessor(LoggerMixin):
         :param filter_boundaries: Boundaries to aply FIR filter on.
         :return: Returns filtered data.
         """
+        self.logger.info("Applying notch filter and FIR filter to remove line noise.")
         freqs = np.arange(*notch_frequencies)
         data = data.notch_filter(freqs=freqs)  # Filter 50 Hz line noise and harmonics
         return data.filter(
@@ -153,6 +194,8 @@ class DatasetPreprocessor(LoggerMixin):
         :param ransac_epochs: Number of epochs in the Ransac processing.
         :return: Returns data labeled as good/bad channels based on the Ransac.
         """
+
+        self.logger.info("Applying Ransac algorithm to detect bad channels.")
         epochs = mne.make_fixed_length_epochs(
             data, duration=epoch_duration, preload=True
         )
@@ -172,15 +215,39 @@ class DatasetPreprocessor(LoggerMixin):
 
         return data
 
+    def _data_preparation(self, data: mne.io.Raw) -> mne.io.Raw:
+        """
+        Do first preprocessing and preparation of the raw data.
+
+        Namely it adds the electrode coordinates, excludes the electrodes
+        that has problematic placement, crops first and last 10 seconds of
+        the data series (typically noisy), applies notch and FIR filters to
+        remove the line noise, and applies Ransac algorithm to detect bad
+        channels.
+
+        :param data: Data to be processed.
+        :return: Returns processed data (modified original raw data).
+        """
+        return self._apply_ransac_filter(
+            self._apply_filters_to_data(
+                self._crop_start_and_end_of_dataseries(
+                    self._exclude_selected_channels(
+                        self._add_coordinates_montage(data, self.montage)
+                    )
+                )
+            )
+        )
+
     def _interpolate_bad_channels(self, data: mne.io.Raw) -> mne.io.Raw:
         """
-        Interpolates the channels that are marked as bad using average.
+        Interpolates the channels that are marked as bad using average reference.
 
         :param data: Data to be interpolated (the bad channels needs to be alredy labeled).
         :return: Returns copy of the original data with interpolated bad channels.
         """
-        data = data.copy().interpolate_bads(reset_bads=True)
-        return data.set_eeg_reference("average", ch_type="eeg")
+        self.logger.info("Interpolating bad channels using average reference.")
+        interpolated_data = data.copy().interpolate_bads(reset_bads=True)
+        return interpolated_data.set_eeg_reference("average", ch_type="eeg")
 
     @staticmethod
     def _get_ic_labeling_selected_probabilities(
@@ -281,9 +348,29 @@ class DatasetPreprocessor(LoggerMixin):
 
         return ica
 
-    def _apply_ica_component_filtering(
-        self, filtered_data: mne.io.Raw, interpolated_data: mne.io.Raw
+    def initial_preprocessing_and_bad_channel_interpolation(
+        self, data: mne.io.Raw
     ) -> mne.io.Raw:
+        """
+        Run initial preprocessing steps (electrode naming,
+        time trimming, electrodes exclusion, line noise filtering, bad
+        channel interpolation).
+
+        :param data: Raw EEG data series from one measurement.
+        :return: Preprocessed data with interpolated bad channels.
+        """
+        # Apply all the filters and label the bad channels.
+        self.logger.info(
+            "Starting initial data preprocessing and interpolation of the bad channels."
+        )
+        data = self._data_preparation(data)
+        # Interpolate the bad channels by using average reference.
+        return self._interpolate_bad_channels(data)
+
+    def apply_ica_component_filtering(
+        self,
+        interpolated_data: mne.io.Raw,
+    ) -> tuple[mne.io.Raw, ICA, np.ndarray]:
 
         self.logger.info("Starting ICA decomposition.")
         # Run ICA on the interpolated data.
@@ -308,16 +395,6 @@ class DatasetPreprocessor(LoggerMixin):
             ica,
         )
 
-        # Apply ICA to the ORIGINAL raw (often you fit on filtered, apply to unfiltered)
-        # TODO: Not sure if use raw_data or raw_interp
-        return ica.apply(filtered_data.copy())
-
-    def preprocess_one_raw_data(self, data: mne.io.Raw) -> mne.io.Raw:
-        # Apply all the filters and label the bad channels.
-        data = self._apply_ransac_filter(
-            self._apply_filters_to_data(
-                self._add_coordinates_montage(data, self.montage)
-            )
-        )
-        # Interpolate the bad channels.
-        interpolated_data = self._interpolate_bad_channels(data)
+        # Apply ICA to interpolated data (however, mne might be able to
+        # work with the Raw data before interpolation).
+        return ica.apply(interpolated_data), ica, component_probabilities

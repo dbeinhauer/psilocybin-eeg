@@ -18,10 +18,11 @@ class ProjectPaths:
     PARTICIPANT_MAPPING_DIR = (
         DATA_DIR / "participant_mappings"
     )  # Directory for participant mapping csv files.
+    EXCLUDED_ELECTRODES_DIR = DATA_DIR / "excluded_electrodes"
 
     @staticmethod
     def get_experiment_data_dir(
-        experiment_name: ExperimentNames, raw: bool = True
+        experiment_name: ExperimentNames, is_processed: bool = True
     ) -> tuple[Path, Path]:
         """
         Get path to directory containing dataset and to a CSV file containing mapping of
@@ -29,13 +30,15 @@ class ProjectPaths:
 
         :param experiment_name: Value of the `ExperimentNames` field equals to experiment
         data directory name.
-        :param raw: If `True`, get path to raw data directory, else to processed data.
+        :param is_processed: If `True`, get path to processed data directory, else to unprocessed data (raw dataset).
         :return: Returns tuple containing path to data directory and path to participant
         mapping CSV file.
         """
 
         root_data_dir = (
-            ProjectPaths.RAW_DATA_DIR if raw else ProjectPaths.PROCESSED_DATA_DIR
+            ProjectPaths.PROCESSED_DATA_DIR
+            if is_processed
+            else ProjectPaths.RAW_DATA_DIR
         )
         experiment_name_str = experiment_name.value
         data_dir = root_data_dir / experiment_name_str
@@ -46,12 +49,18 @@ class ProjectPaths:
         return data_dir, participant_mapping_path
 
     @staticmethod
-    def get_coordinates_file_path(coordinate_system: CoordinateSystems) -> Path:
+    def get_coordinates_file_path(
+        coordinate_system: CoordinateSystems,
+    ) -> tuple[Path, Path]:
         """
         Get path to coordinate file based on the coordinate system.
 
         :param coordinate_system: Value of the `CoordinateSystems` enum.
-        :return: Path to the coordinate file.
+        :return: Tuple of the path to the coordinate file and path to excluded electrodes for the analysis.
         """
-        filename = f"{coordinate_system.value}.sfp"
-        return ProjectPaths.COORDINATES_DIR / filename
+        coordinates_filename = f"{coordinate_system.value}.sfp"
+        excluded_electrodes_filename = f"{coordinate_system.value}.csv"
+        return (
+            ProjectPaths.COORDINATES_DIR / coordinates_filename,
+            ProjectPaths.EXCLUDED_ELECTRODES_DIR / excluded_electrodes_filename,
+        )

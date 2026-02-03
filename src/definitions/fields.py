@@ -91,3 +91,23 @@ class ICLabelComponentsClasses(Enum):
     LINE = "line noise"
     CHANNEL = "channel noise"
     OTHER = "other"
+
+
+class PreprocessedDataVariants(Enum):
+    """
+    All variants of possible data stored during preprocessing (for quality of the preprocessing analysis).
+    """
+
+    RAW_BEFORE_ICA = "before_ica"  # Raw dataseries before ICA component reduction.
+    RAW_AFTER_ICA = (
+        "after_ica"  # Raw dataseries after the application of ICA component reduction.
+    )
+    ICA_COMPONENTS = "ica_components"  # All found ICA components
+    IC_PROBABILITIES = "ic_probabilities"  # Probability distribution of the ICA components across different component classes (muscle, eye, brain etc.)
+
+
+# All data variants that are `mne.io.Raw` types.
+RAW_DATA_VARIANTS = {
+    PreprocessedDataVariants.RAW_BEFORE_ICA,
+    PreprocessedDataVariants.RAW_AFTER_ICA,
+}

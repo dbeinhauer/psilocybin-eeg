@@ -42,7 +42,7 @@ class DatasetParser(LoggerMixin):
     Format: PSI{participant_id}_EEG{condition_id}_MUSIC_{music_type}_EC_{rest_of_filename_date}.edf
     """
 
-    def __init__(self, participant_map_path: Path, coordinates_file_path: Path):
+    def __init__(self, participant_map_path: Path):
         """
         :param participant_map_path: Path to CSV file containing participant mapping information.
         """
