@@ -1,7 +1,6 @@
-data/coordinates
-data/participant_keys
+data/participant_mappings
 data/raw
-data/raw_mock
+data/processed
 
 logs/
 *__pycache__*

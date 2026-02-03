@@ -1,3 +1,33 @@
+# 2026-02-02
+- First the data needs to be preprocessed:
+    - trim 10s window from start and from end\
+        - there is typically a movement and noise
+    - exclude electrodes that are from the boundaries of the cap
+        - typically cheeks etc. (the noisy ones)
+        - approx 150 electrodes
+        - ATiN has set of the excluded electrodes
+    - log number of selected ICA components (and which components are excluded)
+    - store Raw data series before ICA and after ICA
+    - store IC component probabilities (muscle, eye, heart, brain)
+        - check whether the components are assigned correctly
+    - store ICs from ICA in time 
+        - we can examine the muscle activity from there (if correctly filtered)
+    - plot average power spectrums in pre-, post-, and ICA
+        - should be alpha peek
+        - should reasonably decline
+        - we are mostly interested in the spectrum 0Hz to approx. 50 Hz
+    - plot topomaps for Alpha, excluded, and through all included exponents
+        - ideally alpha power - should be occipital (back)
+        - muscles - typically circular
+            - or very centralized
+        - maybe only through components
+            - excluded vs. filtered data
+- check participants
+    - if not all conditions - exclude
+    - do stats of the dataset
+- check seed in ICA in MNE
+    - if it makes the same things in different runs
+
 # 2026-01-30
 - I use coordinates transformation defined in the MNE library
     - if I understand it correctly it converts the SFP file into the correct coordinate system that is used in MNE 
