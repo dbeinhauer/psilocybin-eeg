@@ -72,21 +72,64 @@ class DatasetHandler(LoggerMixin):
         )
 
     def load_data_file(
-        self, data_filename: str, is_unprocessed: bool = False
-    ) -> mne.io.Raw:
+        self,
+        data_filename: str,
+        is_processed: bool = False,
+        processed_data_type: PreprocessedDataVariants = PreprocessedDataVariants.RAW_AFTER_ICA,
+    ) -> mne.io.Raw | np.ndarray:
         """
         Loads one EEG sequence (one data example).
 
         :param data_filename: Name of the file containing the wanted data.
-        :param is_unprocessed: Flag whether the data to load is already processed or not
+        :param is_processed: Flag whether the data to load is already processed or not
         (from where we want to load the data).
+        :param processed_data_type: Type of the processed file to load
         :return: Returns loaded data in the Raw data type.
         """
-        base_dir = self.raw_data_dir if is_unprocessed else self.processed_data_dir
+        data_path = self.raw_data_dir / data_filename
+        if is_processed:
+            # Load processed data file
+            data_path = self.get_preprocessing_results_path(
+                data_filename.split(".")[0], data_type=processed_data_type
+            )
+            if processed_data_type == PreprocessedDataVariants.IC_PROBABILITIES:
+                # Load IC Probabilities
+                return np.load(data_path)
+            elif processed_data_type == PreprocessedDataVariants.ICA_COMPONENTS:
+                # Load ICA components
+                return mne.preprocessing.read_ica(
+                    data_path,
+                )
+            else:
+                # We need this else for Raw dataseries are in '.fif' format.
+                return mne.io.read_raw_fif(
+                    data_path,
+                    preload=True,
+                )
+
+        # Load unprocessed raw data are in '.edf' format.
         return mne.io.read_raw_edf(
-            base_dir / data_filename,
+            data_path,
             preload=True,
         )
+
+    def get_preprocessing_results_path(
+        self, filename, data_type: PreprocessedDataVariants
+    ) -> Path:
+        """
+        Gets the path to a specified processing results.
+
+        :param filename: Name of the experiment file.
+        :param data_type: Type of the processed data.
+        :return: Returns path to the specified processing results.
+        """
+        suffix = ""
+        if data_type in RAW_DATA_VARIANTS + [PreprocessedDataVariants.ICA_COMPONENTS]:
+            suffix = ".fif"
+        elif data_type == PreprocessedDataVariants.IC_PROBABILITIES:
+            suffix = ".npy"
+
+        return self.processed_data_dir / data_type.value / (filename + suffix)
 
     def save_data_file(
         self,
@@ -105,16 +148,14 @@ class DatasetHandler(LoggerMixin):
         self.logger.info(
             f"Saving the '{data_type.value}' data into the file {filename}."
         )
-        # Path to the directory where to store the data.
-        data_dir = self.processed_data_dir / data_type.value
-        data_dir.mkdir(parents=True, exist_ok=True)
+        # Path to results file.
+        data_path = self.get_preprocessing_results_path(filename, data_type)
+        data_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if data_type in RAW_DATA_VARIANTS:
-            data.save(data_dir / (filename + ".fif"), overwrite=True)
-        elif data_type == PreprocessedDataVariants.ICA_COMPONENTS:
-            data.save(str(data_dir / (filename + ".fif")), overwrite=True)
+        if data_type in RAW_DATA_VARIANTS + [PreprocessedDataVariants.ICA_COMPONENTS]:
+            data.save(data_path, overwrite=True)
         elif data_type == PreprocessedDataVariants.IC_PROBABILITIES:
-            np.save(data_dir / (filename + ".npy"), data)
+            np.save(data_path, data)
         else:
             self.logger.warning(
                 f"Wrong datatype: '{data_type.value}' to store. Skipping!"
@@ -137,7 +178,7 @@ class DatasetHandler(LoggerMixin):
         self.logger.info(f"Processing file: {filename}")
         # Get preprocessed data with interpolated bad channels.
         interpolated_data = self.dataset_preprocessor.initial_preprocessing_and_bad_channel_interpolation(
-            self.load_data_file(filename, is_unprocessed=True)
+            self.load_data_file(filename, is_processed=False)
         )
 
         # Filename base without the suffix.

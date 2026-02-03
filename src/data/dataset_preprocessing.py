@@ -24,6 +24,18 @@ from src.utils.logging_config import LoggerMixin
 
 class DatasetPreprocessor(LoggerMixin):
 
+    # Order of the classes in ICLabel tool.
+    # Based on https://mne.tools/mne-icalabel/dev/generated/api/mne_icalabel.iclabel.iclabel_label_components.html#mne_icalabel.iclabel.iclabel_label_components
+    ic_label_classes_order = [
+        ICLabelComponentsClasses.BRAIN.value,
+        ICLabelComponentsClasses.MUSCLE.value,
+        ICLabelComponentsClasses.EYE.value,
+        ICLabelComponentsClasses.HEART.value,
+        ICLabelComponentsClasses.LINE.value,
+        ICLabelComponentsClasses.CHANNEL.value,
+        ICLabelComponentsClasses.OTHER.value,
+    ]
+
     def __init__(self, coordinates_file_path: Path, excluded_coordinates_path: Path):
         self.montage = DatasetPreprocessor._load_coordinates_file(coordinates_file_path)
         # List of all electrodes that we want to exclude.
@@ -250,8 +262,14 @@ class DatasetPreprocessor(LoggerMixin):
         return interpolated_data.set_eeg_reference("average", ch_type="eeg")
 
     @staticmethod
-    def _get_ic_labeling_selected_probabilities(
+    def get_ic_labeling_selected_probabilities(
         component_probabilities,
+        selected_classes: list[ICLabelComponentsClasses] = [
+            ICLabelComponentsClasses.EYE,
+            ICLabelComponentsClasses.MUSCLE,
+            ICLabelComponentsClasses.HEART,
+            ICLabelComponentsClasses.BRAIN,
+        ],
     ) -> dict[ICLabelComponentsClasses, np.ndarray]:
         """
         Select proper probability values for selected components from the
@@ -260,27 +278,12 @@ class DatasetPreprocessor(LoggerMixin):
         Note: In our current implementation we select only brain, muscle, eye and heart.
 
         :param component_probabilities: Probabilites of all ICLabel Components.
+        :param selected_classes: List of ICLabel classes that we want to select for analysis.
         :return: Returns dictionary of key ICLabel component and its probabalities in np.ndarray form.
         """
-        classes_order = [
-            ICLabelComponentsClasses.BRAIN.value,
-            ICLabelComponentsClasses.MUSCLE.value,
-            ICLabelComponentsClasses.EYE.value,
-            ICLabelComponentsClasses.HEART.value,
-            ICLabelComponentsClasses.LINE.value,
-            ICLabelComponentsClasses.CHANNEL.value,
-            ICLabelComponentsClasses.OTHER.value,
-        ]
-
-        selected_classes = [
-            ICLabelComponentsClasses.EYE,
-            ICLabelComponentsClasses.MUSCLE,
-            ICLabelComponentsClasses.HEART,
-            ICLabelComponentsClasses.BRAIN,
-        ]
 
         selected_idxs = {
-            component: classes_order.index(component.value)
+            component: DatasetPreprocessor.ic_label_classes_order.index(component.value)
             for component in selected_classes
         }
         return {
@@ -299,9 +302,23 @@ class DatasetPreprocessor(LoggerMixin):
             ICLabelComponentsClasses.BRAIN: 0.30,
         },
     ):
+        """
+        Based on the provided predicted probabilities of the ICA classes, mark
+        putative artifact components for exclusion.
+
+        We want to exclude muscle, eye and heartbeat .
+
+        :param component_probabilities: Probability of each ICLabel class for each IC.
+        :param ica: ICA decomposition results.
+        :param component_thresholds: Dictionary of applied threshold for selected subset of ICLabel
+        classes that we want to use in our IC exclusion. NOTE: The threshold for 'brain` signal
+        defines the lowest value it is considered to be partially brain signal (will be kept). For
+        other classes if the thresholds is surpasses -> it belongs to this class.
+        :return: Returns ICA decomposition with ICs marked for exclusion (if classified as artifact components).
+        """
         self.logger.info("Getting probabilites of selected IC components.")
         selected_component_probabilites = (
-            DatasetPreprocessor._get_ic_labeling_selected_probabilities(
+            DatasetPreprocessor.get_ic_labeling_selected_probabilities(
                 component_probabilities
             )
         )
@@ -313,6 +330,7 @@ class DatasetPreprocessor(LoggerMixin):
         self.logger.info(
             "Starting exclusion of the components passing selected threshold."
         )
+
         for i in range(len(component_probabilities)):
             # Exclude strong eye components
             if (
@@ -371,6 +389,15 @@ class DatasetPreprocessor(LoggerMixin):
         self,
         interpolated_data: mne.io.Raw,
     ) -> tuple[mne.io.Raw, ICA, np.ndarray]:
+        """
+        Runs ICA and then executes ICLabel tool to predict probabilities
+        of the several artifacts in each component, excludes the artifact
+        components and returns the filtered signal.
+
+        :param interpolated_data: Already preprocessed and interpolated data without artifacts.
+        :return: Returns tuple of processed data series by applying ICLabeling, ICAs with
+        marked artifact ICs and array of probabilities of each IC artifact class.
+        """
 
         self.logger.info("Starting ICA decomposition.")
         # Run ICA on the interpolated data.

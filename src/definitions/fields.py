@@ -107,7 +107,7 @@ class PreprocessedDataVariants(Enum):
 
 
 # All data variants that are `mne.io.Raw` types.
-RAW_DATA_VARIANTS = {
+RAW_DATA_VARIANTS = [
     PreprocessedDataVariants.RAW_BEFORE_ICA,
     PreprocessedDataVariants.RAW_AFTER_ICA,
-}
+]
