@@ -1,0 +1,64 @@
+#!/bin/bash
+#PBS -N PSILO_EEF_DATASET_PREPROCESSING
+#PBS -l walltime=14:00:00
+#PBS -l select=1:ncpus=64:mem=100gb:scratch_local=100gb
+
+#PBS -m ae
+#PBS -j oe
+
+set -e
+
+# Ensure clean_scratch runs on exit, even on error
+cleanup() {
+echo "Running clean_scratch at $(date)"
+clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/psilo_music.sif"  # or .sandbox
+
+export TMPDIR=$SCRATCHDIR
+
+test -n "$SCRATCHDIR" || {
+echo >&2 "SCRATCHDIR is not set!"
+exit 1
+}
+
+cd "$DATADIR" || {
+echo >&2 "Failed to enter DATADIR"
+exit 1
+}
+
+cd "$SCRATCHDIR"
+
+# Create the runner script for inside container
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+export PATH=/root/.local/bin:\$PATH
+cd /opt/myproject 
+uv run python scripts/run_dataset_preprocessing.py ||
+    {
+echo >&2 "Python script failed"
+exit 1
+}
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+# Bind your project directory as /mnt inside container
+singularity exec \
+    --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch
