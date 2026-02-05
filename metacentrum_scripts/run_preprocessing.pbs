@@ -39,9 +39,8 @@ cd "$SCRATCHDIR"
 # Create the runner script for inside container
 cat << 'EOF' > run_inside.sh
 #!/bin/bash
-export PATH=/root/.local/bin:\$PATH
 cd /opt/myproject 
-uv run python scripts/run_dataset_preprocessing.py ||
+uv run python /mnt/scripts/run_dataset_preprocessing.py ||
     {
 echo >&2 "Python script failed"
 exit 1
