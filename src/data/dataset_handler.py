@@ -2,9 +2,11 @@
 This module contains implementation of the main dataset handler class.
 """
 
+from typing import Any
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import mne
 
 from src.definitions.constants import ProjectPaths
@@ -14,6 +16,8 @@ from src.definitions.fields import (
     SingleDataMetadata,
     PreprocessedDataVariants,
     RAW_DATA_VARIANTS,
+    ICLabelComponentsClasses,
+    ExcludedICsMetadata,
 )
 from src.data.dataset_parsing import DatasetParser
 from src.data.dataset_preprocessing import DatasetPreprocessor
@@ -39,6 +43,7 @@ class DatasetHandler(LoggerMixin):
         self.dataset_preprocessor = DatasetPreprocessor(
             self.coordinates_path, self.excluded_electrodes_path
         )
+        self.dataset_excluded_ics_metadata = self._init_excluded_ics_metadata()
 
     def _init_dataset_paths(
         self, experiment_name: ExperimentNames, coordinate_system: CoordinateSystems
@@ -70,6 +75,50 @@ class DatasetHandler(LoggerMixin):
             coordinates_path,
             excluded_electrodes_path,
         )
+
+    def _get_excluded_ics_mapping_path(self) -> Path:
+        """
+        :return: Returns path to excluded ICs mapping CSV file.
+        """
+        return (
+            self.processed_data_dir
+            / PreprocessedDataVariants.RAW_EXCLUDED_IC.value
+            / ProjectPaths.EXCLUDED_ICS_FILENAME_MAPPING
+        )
+
+    def _init_excluded_ics_metadata(self) -> pd.Dataframe:
+        """
+        Initializes metadata dataframe where info about the excluded ICs should be stored.
+
+        :return: Returns already extracted ICs metadata dataframe from csv file (if already processed.),
+        otherwise prepared dataframe for filling in the information.
+        """
+        excluded_ics_path = self._get_excluded_ics_mapping_path()
+        if excluded_ics_path.exists():
+            return pd.read_csv(excluded_ics_path)
+        return pd.DataFrame(
+            columns=[column_name.value for column_name in ExcludedICsMetadata]
+        )
+
+    @staticmethod
+    def get_excluded_ic_filename(
+        filename: str, ic_id: int, ic_category: ICLabelComponentsClasses
+    ) -> str:
+        """
+        Creates filename for excluded ICs. New filename is in format:
+            `{old_filename_prefix}_IC-{ic_id}_{ic_category.value()}.{old_suffix}`
+
+        NOTE: The suffix stays the same as original due to compatibility reasons.
+        The suffix will be appropriately changed while storing the object.
+
+        :param filename: Filename of original data file (original raw data filename from metadata).
+        :param ic_id: ID of the IC.
+        :param ic_category: Category where the IC was put after IC labelling.
+        :return: Returns new prepared filename.
+        """
+        filename_parts = filename.split(".")
+        ic_postfix = f"_IC-{ic_id}_{ic_category.value}"
+        return filename_parts[0] + ic_postfix
 
     def load_data_file(
         self,
@@ -111,6 +160,39 @@ class DatasetHandler(LoggerMixin):
         return mne.io.read_raw_edf(
             data_path,
             preload=True,
+        )
+
+    def load_excluded_ic_dataseries(
+        self, original_filename: str, ic_id: int
+    ) -> mne.io.Raw:
+        """
+        Loads selected excluded IC dataseries from selected original file.
+
+        :param original_filename: File of the original dataseries.
+        :param ic_id: ID of the excluded IC.
+        :return: Returns dataseries of the excluded IC.
+        """
+        excluded_filename = self.dataset_excluded_ics_metadata[
+            (
+                self.dataset_excluded_ics_metadata[
+                    ExcludedICsMetadata.ORIGINAL_FILENAME.value
+                ]
+                == original_filename
+            )
+            & (
+                self.dataset_excluded_ics_metadata[ExcludedICsMetadata.IC_ID.value]
+                == ic_id
+            )
+        ][ExcludedICsMetadata.TIMESERIES_FILENAME.value][0]
+        if not excluded_filename:
+            self.logger.error(
+                f"Cannot load dataseries. Possibly wrong filename: {original_filename}, IC ID: {ic_id} or extracted IC does not exist."
+            )
+            return None
+        return self.load_data_file(
+            excluded_filename,
+            is_processed=True,
+            processed_data_type=PreprocessedDataVariants.RAW_EXCLUDED_IC,
         )
 
     def get_preprocessing_results_path(
@@ -214,6 +296,98 @@ class DatasetHandler(LoggerMixin):
             )
 
     def preprocess_all_dataset(self, save_processing_info: bool = True):
-        for i, row in self.dataset_metadata.iterrows():
+        """
+        Runs preprocessing steps for all edf files in dataset.
+
+        :param save_processing_info: Flag whether we want to store intermediate processing results
+        (for analysis of the preprocessing performance).
+        """
+        for _, row in self.dataset_metadata.iterrows():
             filename = row[SingleDataMetadata.FILENAME]
             self.process_one_file(filename, save_processing_info)
+
+    def generate_one_original_data_excluded_ic_timeseries(
+        self, filename: str
+    ) -> list[dict[str, Any]]:
+        """
+        From the ICAs generates time series that belong to excluded ICs for dataset preprocessing
+        analysis. It stores the extracted data timeseries with only excluded component included
+        in the appropriate path (preprocessing results).
+
+        :param filename: Filename of the original raw data we are interested in excluded ICs.
+        :return: Returns list of rows containing
+        """
+        self.logger.info(
+            f"Start generating time series of excluded ICs from file: {filename}"
+        )
+
+        # Data Series of data before IC exclusion
+        data_before_ica_exclusion = self.load_data_file(
+            filename,
+            is_processed=True,
+            processed_data_type=PreprocessedDataVariants.RAW_BEFORE_ICA,
+        )
+        # ICAs of the dataseries.
+        data_icas = self.load_data_file(
+            filename,
+            is_processed=True,
+            processed_data_type=PreprocessedDataVariants.ICA_COMPONENTS,
+        )
+
+        # List of rows for excluded ICs metadata pd.Dataframe.
+        excluded_ics_per_data = []
+
+        # Get ID of the IC and its category, exclude all ICs from the signal and store the series.
+        ic_exclusion_map = self.dataset_parser.get_ic_exclusion_map(data_icas)
+        for ic_id, ic_category in ic_exclusion_map.items():
+            self.logger.info(
+                f"Exclusion of IC with ID: {ic_id} from category: {ic_category}"
+            )
+            # Exclude all ICs with exception of `ic_id`.
+            excluded_timeseries = data_icas.apply(
+                data_before_ica_exclusion.copy(), include=ic_id
+            )
+
+            # Save the excluded timeseries and append its metadata for Dataframe.
+            excluded_timeseries_filename = DatasetHandler.get_excluded_ic_filename(
+                filename, ic_id, ic_category
+            )
+            self.logger.info("Saving excluded dataseries")
+            self.save_data_file(
+                excluded_timeseries,
+                excluded_timeseries_filename,
+                data_type=PreprocessedDataVariants.RAW_EXCLUDED_IC,
+            )
+            excluded_ics_per_data.append(
+                {
+                    ExcludedICsMetadata.ORIGINAL_FILENAME.value: filename,
+                    ExcludedICsMetadata.TIMESERIES_FILENAME.value: excluded_timeseries_filename,
+                    ExcludedICsMetadata.IC_ID.value: ic_id,
+                    ExcludedICsMetadata.IC_CATEGORY.value: ic_category,
+                }
+            )
+
+        return excluded_ics_per_data
+
+    def generate_all_excluded_ic_timeseries(
+        self,
+    ):
+        """
+        Generates data timeseries of signal of all dataset that includes only the
+        IC component selected for exclusion (to check IC exclusion works as expected), and
+        Stores all connected metadata to `self.dataset_excluded_ics_metadata` DataFrame.
+        """
+        self.logger.info("Generating excluded ICs time series.")
+        excluded_ics_rows = []
+        for i, row in self.dataset_metadata.iterrows():
+            if i > 1:
+                break
+            excluded_ics_rows += self.generate_one_original_data_excluded_ic_timeseries(
+                row[SingleDataMetadata.FILENAME]
+            )
+        self.logger.info("All excluded ICs time series generated.")
+
+        # Create excluded ICs metadata pandas dataframe and store them into CSV file.
+        self.logger.info("Storing excluded ICs metadata to CSV file")
+        self.dataset_excluded_ics_metadata = pd.DataFrame(excluded_ics_rows)
+        self.dataset_excluded_ics_metadata.to_csv(self._get_excluded_ics_mapping_path())

@@ -37,6 +37,21 @@ class SingleDataMetadata(Enum):
     FILENAME = "filename"  # Exact filename of the data file (to know which file contains the data).
 
 
+class ExcludedICsMetadata(Enum):
+    """
+    All metadata of the excluded ICs.
+    """
+
+    ORIGINAL_FILENAME = (
+        "original_filename"  # Filename of the original Raw data (for mapping).
+    )
+    TIMESERIES_FILENAME = (
+        "timeseries_filename"  # Filename where the timeseries of the IC is stored.
+    )
+    IC_ID = "ic_id"  # ID of the excluded IC
+    IC_CATEGORY = "ic_category"  # Category where the IC was put after IC labelling.
+
+
 class EEGConditions(Enum):
     """
     All EEG condition ids from filenames.
@@ -85,11 +100,11 @@ class ICLabelComponentsClasses(Enum):
     """
 
     BRAIN = "brain"
-    MUSCLE = "muscle artifact"
-    EYE = "eye blink"
-    HEART = "heart beat"
-    LINE = "line noise"
-    CHANNEL = "channel noise"
+    MUSCLE = "muscle"
+    EYE = "eog"
+    HEART = "ecg"
+    LINE = "line_noise"
+    CHANNEL = "ch_noise"
     OTHER = "other"
 
 
@@ -105,9 +120,14 @@ class PreprocessedDataVariants(Enum):
     ICA_COMPONENTS = "ica_components"  # All found ICA components
     IC_PROBABILITIES = "ic_probabilities"  # Probability distribution of the ICA components across different component classes (muscle, eye, brain etc.)
 
+    RAW_EXCLUDED_IC = (
+        "raw_excluded_ic"  # Raw dataseries of excluded component selected by ICA.
+    )
+
 
 # All data variants that are `mne.io.Raw` types.
 RAW_DATA_VARIANTS = [
     PreprocessedDataVariants.RAW_BEFORE_ICA,
     PreprocessedDataVariants.RAW_AFTER_ICA,
+    PreprocessedDataVariants.RAW_EXCLUDED_IC,
 ]

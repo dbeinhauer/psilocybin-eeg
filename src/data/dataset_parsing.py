@@ -16,8 +16,8 @@ from src.definitions.fields import (
     ConditionVariants,
     MusicTypeVariants,
     SingleDataMetadataTypes,
-    ChannelTypes,
     EEGConditions,
+    ICLabelComponentsClasses,
 )
 
 
@@ -161,3 +161,25 @@ class DatasetParser(LoggerMixin):
         # Convert list of metadata dicts to DataFrame
         metadata_df = pd.DataFrame(metadata_records)
         return metadata_df
+
+    @staticmethod
+    def get_ic_exclusion_map(
+        ica_components: mne.preprocessing.ICA,
+    ) -> dict[int, ICLabelComponentsClasses]:
+        """
+        Retrieves all excluded channels and marks them with their components.
+
+        :param ica_components: ICA components with marked channels to exclude.
+        :return: Returns dictionary of channel to exclude and its labeled reason for exclusion.
+        """
+        # Get all ICs to excludes and IC labels to all ICA components.
+        ic_ids_exclude = ica_components.exclude
+        ic_labels = ica_components.labels_
+
+        # Mark each IC index for exclusion to its label.
+        return {
+            int(idx): check_enum_value_in_variants(ICLabelComponentsClasses, label)
+            for idx in ic_ids_exclude
+            for label, ids_list in ic_labels.items()
+            if idx in ids_list
+        }

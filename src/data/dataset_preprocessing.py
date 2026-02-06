@@ -277,9 +277,9 @@ class DatasetPreprocessor(LoggerMixin):
 
         Note: In our current implementation we select only brain, muscle, eye and heart.
 
-        :param component_probabilities: Probabilites of all ICLabel Components.
+        :param component_probabilities: Probabilities of all ICLabel Components.
         :param selected_classes: List of ICLabel classes that we want to select for analysis.
-        :return: Returns dictionary of key ICLabel component and its probabalities in np.ndarray form.
+        :return: Returns dictionary of key ICLabel component and its probabilities in np.ndarray form.
         """
 
         selected_idxs = {

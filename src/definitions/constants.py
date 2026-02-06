@@ -18,7 +18,10 @@ class ProjectPaths:
     PARTICIPANT_MAPPING_DIR = (
         DATA_DIR / "participant_mappings"
     )  # Directory for participant mapping csv files.
-    EXCLUDED_ELECTRODES_DIR = DATA_DIR / "excluded_electrodes"
+    EXCLUDED_ELECTRODES_DIR = (
+        DATA_DIR / "excluded_electrodes"
+    )  # Directory where excluded electrodes from processing are stored (we want to typically omit the boundary electrodes).
+    EXCLUDED_ICS_FILENAME_MAPPING = "excluded_ics_mapping.csv"  # Filename where the mapping of all ICs selected for exclusion are stored alongside with their category.
 
     @staticmethod
     def get_experiment_data_dir(
