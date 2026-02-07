@@ -87,7 +87,7 @@ class DatasetHandler(LoggerMixin):
             / ProjectPaths.EXCLUDED_ICS_FILENAME_MAPPING
         )
 
-    def _init_excluded_ics_metadata(self) -> pd.Dataframe:
+    def _init_excluded_ics_metadata(self) -> pd.DataFrame:
         """
         Initializes metadata dataframe where info about the excluded ICs should be stored.
 
