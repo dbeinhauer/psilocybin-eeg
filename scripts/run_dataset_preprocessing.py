@@ -18,18 +18,21 @@ if __name__ == "__main__":
     parser.set_defaults(raw_processing=False)
     parser.add_argument(
         "--raw_processing",
+        action="store_true",
         type=bool,
         help="Whether we want to process the raw unfiltered data.",
     )
     parser.set_defaults(process_excluded_ic=False)
     parser.add_argument(
         "--process_excluded_ic",
+        action="store_true",
         type=bool,
         help="Whether we want to generated dataseries from excluded ICs.",
     )
     parser.set_defaults(plot_results=False)
     parser.add_argument(
         "--plot_results",
+        action="store_true",
         type=bool,
         help="Flag whether we want to plot the results.",
     )
