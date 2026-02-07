@@ -4,7 +4,7 @@ import mne
 
 from src.definitions.constants import ProjectPaths
 from src.definitions.fields import PreprocessedDataVariants, RAW_DATA_VARIANTS
-from utils.logging_config import LoggerMixin
+from src.utils.logging_config import LoggerMixin
 
 
 class DatasetPlotter(LoggerMixin):
