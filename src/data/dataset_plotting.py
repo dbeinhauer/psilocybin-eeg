@@ -2,8 +2,8 @@ from pathlib import Path
 
 import mne
 
-from definitions.constants import ProjectPaths
-from definitions.fields import PreprocessedDataVariants, RAW_DATA_VARIANTS
+from src.definitions.constants import ProjectPaths
+from src.definitions.fields import PreprocessedDataVariants, RAW_DATA_VARIANTS
 from utils.logging_config import LoggerMixin
 
 
