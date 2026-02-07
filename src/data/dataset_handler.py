@@ -21,6 +21,7 @@ from src.definitions.fields import (
 )
 from src.data.dataset_parsing import DatasetParser
 from src.data.dataset_preprocessing import DatasetPreprocessor
+from src.data.dataset_plotting import DatasetPlotter
 from src.utils.logging_config import LoggerMixin
 
 
@@ -183,7 +184,7 @@ class DatasetHandler(LoggerMixin):
                 self.dataset_excluded_ics_metadata[ExcludedICsMetadata.IC_ID.value]
                 == ic_id
             )
-        ][ExcludedICsMetadata.TIMESERIES_FILENAME.value][0]
+        ][ExcludedICsMetadata.TIMESERIES_FILENAME.value].iloc[0]
         if not excluded_filename:
             self.logger.error(
                 f"Cannot load dataseries. Possibly wrong filename: {original_filename}, IC ID: {ic_id} or extracted IC does not exist."
@@ -380,8 +381,6 @@ class DatasetHandler(LoggerMixin):
         self.logger.info("Generating excluded ICs time series.")
         excluded_ics_rows = []
         for i, row in self.dataset_metadata.iterrows():
-            if i > 1:
-                break
             excluded_ics_rows += self.generate_one_original_data_excluded_ic_timeseries(
                 row[SingleDataMetadata.FILENAME]
             )
@@ -391,3 +390,59 @@ class DatasetHandler(LoggerMixin):
         self.logger.info("Storing excluded ICs metadata to CSV file")
         self.dataset_excluded_ics_metadata = pd.DataFrame(excluded_ics_rows)
         self.dataset_excluded_ics_metadata.to_csv(self._get_excluded_ics_mapping_path())
+
+    def plot_all_one_variant(self, plot_variant: str = "power_spectrum"):
+        """
+        Plot all dataset Raw dataseries object using MNE plotting functionalities from `compute_psd` base.
+
+        :param plot_variant: Which plot we want to create. Either "power_spectrum", or "topomap".
+        """
+        self.logger.info(f"Plotting {plot_variant} for all dataset.")
+        for i, row in self.dataset_metadata.iterrows():
+            # Iterate through all data from the provided dataset.
+            original_filename = row[SingleDataMetadata.FILENAME]
+            self.logger.info(f"Plotting original file: {original_filename}")
+
+            for data_variant in RAW_DATA_VARIANTS:
+                # Plot all Raw data variants.
+                self.logger.info(f"Plotting variant: {data_variant.value}")
+                if data_variant != PreprocessedDataVariants.RAW_EXCLUDED_IC:
+                    # Plot Raw data that are not belonging to excluded ICs.
+                    raw_data = self.load_data_file(
+                        original_filename,
+                        is_processed=True,
+                        processed_data_type=data_variant,
+                    )
+                    DatasetPlotter.plot_raw_dataseries(
+                        raw_data,
+                        save_fig=original_filename.split(".")[0],
+                        plot_variant=plot_variant,
+                        variant_name=data_variant,
+                    )
+                else:
+                    # Plot all excluded ICs raw data.
+                    excluded_metadata = self.dataset_excluded_ics_metadata[
+                        self.dataset_excluded_ics_metadata[
+                            ExcludedICsMetadata.ORIGINAL_FILENAME.value
+                        ]
+                        == original_filename
+                    ]
+                    for j, excluded_row in excluded_metadata.iterrows():
+                        # Plot each excluded IC dataseries.
+                        self.logger.info(
+                            f"Plotting IC excluded component: {excluded_row[ExcludedICsMetadata.IC_ID.value]}"
+                        )
+                        raw_data = self.load_excluded_ic_dataseries(
+                            original_filename,
+                            excluded_row[ExcludedICsMetadata.IC_ID.value],
+                        )
+                        DatasetPlotter.plot_raw_dataseries(
+                            raw_data,
+                            save_fig=excluded_row[
+                                ExcludedICsMetadata.TIMESERIES_FILENAME.value
+                            ].split(".")[0],
+                            plot_variant=plot_variant,
+                            variant_name=data_variant,
+                        )
+
+        self.logger.info("Plotting successfully finished")

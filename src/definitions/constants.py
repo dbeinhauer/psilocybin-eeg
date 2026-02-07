@@ -22,6 +22,7 @@ class ProjectPaths:
         DATA_DIR / "excluded_electrodes"
     )  # Directory where excluded electrodes from processing are stored (we want to typically omit the boundary electrodes).
     EXCLUDED_ICS_FILENAME_MAPPING = "excluded_ics_mapping.csv"  # Filename where the mapping of all ICs selected for exclusion are stored alongside with their category.
+    PLOTS_PATH = PROJECT_ROOT / "plots"  # Path to all project plots.
 
     @staticmethod
     def get_experiment_data_dir(

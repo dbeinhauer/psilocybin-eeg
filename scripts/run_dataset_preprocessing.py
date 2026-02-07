@@ -1,6 +1,5 @@
 """
-Script to run all dataset preprocessing pipeline. Typically used on the
-computational cluster Umbriel.
+Script to run all dataset preprocessing pipeline.
 """
 
 import argparse
@@ -16,11 +15,23 @@ from src.definitions.fields import ExperimentNames, CoordinateSystems
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Model Preprocessing.")
     # Paths and directories:
-    parser.set_defaults(only_excluded_ic=False)
+    parser.set_defaults(raw_processing=False)
     parser.add_argument(
-        "--only_excluded_ic",
+        "--raw_processing",
         type=bool,
-        help="Whether we just want to generated dataseries from excluded ICs.",
+        help="Whether we want to process the raw unfiltered data.",
+    )
+    parser.set_defaults(process_excluded_ic=False)
+    parser.add_argument(
+        "--process_excluded_ic",
+        type=bool,
+        help="Whether we want to generated dataseries from excluded ICs.",
+    )
+    parser.set_defaults(plot_results=False)
+    parser.add_argument(
+        "--plot_results",
+        type=bool,
+        help="Flag whether we want to plot the results.",
     )
 
     args = parser.parse_args()
@@ -29,9 +40,14 @@ if __name__ == "__main__":
         ExperimentNames.PSILO_MUSIC, CoordinateSystems.HYDROGEL_257_NO_FIDUCIALS
     )
 
-    if not args.only_excluded_ic:
+    if args.raw_processing:
         # We want to preprocess raw dataset with all steps.
         data_handler.preprocess_all_dataset(save_processing_info=True)
 
-    # Exclusion of the IC components and creation of their timeseries.
-    data_handler.generate_all_excluded_ic_timeseries()
+    if args.process_excluded_ic:
+        # Exclusion of the IC components and creation of their timeseries.
+        data_handler.generate_all_excluded_ic_timeseries()
+
+    if args.plot_results:
+        data_handler.plot_all_one_variant(plot_variant="power_spectrum")
+        data_handler.plot_all_one_variant(plot_variant="topomap")
