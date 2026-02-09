@@ -61,7 +61,7 @@ class DatasetPlotter(LoggerMixin):
             )
         elif plot_variant == "topomap":
             # Topomap plotting.
-            fig = spectrum.plot_topomap(normalize=True, show=show)
+            fig = spectrum.plot_topomap(normalize=False, show=show)
         else:
             return
 
