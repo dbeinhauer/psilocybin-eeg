@@ -95,6 +95,6 @@ else
     exit 1
 fi
 
-mv $OUTPUT_ZIP "$DATADIR/zip_files"
+mv $OUTPUT_ZIP "$DATADIR/zip_files/$OUTPUT_ZIP"
 
 clean_scratch
