@@ -50,6 +50,8 @@ class ExcludedICsMetadata(Enum):
     )
     IC_ID = "ic_id"  # ID of the excluded IC
     IC_CATEGORY = "ic_category"  # Category where the IC was put after IC labelling.
+    TOTAL_ICS = "total_ics"  # Total number of ICs for the give data.
+    MAIN_PROBABILITY = "main_probability"  # Probability of the selected class
 
 
 class EEGConditions(Enum):

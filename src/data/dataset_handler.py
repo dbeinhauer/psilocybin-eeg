@@ -260,8 +260,10 @@ class DatasetHandler(LoggerMixin):
 
         self.logger.info(f"Processing file: {filename}")
         # Get preprocessed data with interpolated bad channels.
-        interpolated_data = self.dataset_preprocessor.initial_preprocessing_and_bad_channel_interpolation(
-            self.load_data_file(filename, is_processed=False)
+        interpolated_data, aux_data = (
+            self.dataset_preprocessor.initial_preprocessing_and_bad_channel_interpolation(
+                self.load_data_file(filename, is_processed=False)
+            )
         )
 
         # Filename base without the suffix.
@@ -269,7 +271,9 @@ class DatasetHandler(LoggerMixin):
         if save_processing_info:
             # Save data before running IC labeling.
             self.save_data_file(
-                interpolated_data,
+                interpolated_data.copy().add_channels(
+                    [aux_data.copy()], force_update_info=True
+                ),
                 filename_base,
                 data_type=PreprocessedDataVariants.RAW_BEFORE_ICA,
             )
@@ -278,6 +282,8 @@ class DatasetHandler(LoggerMixin):
         ic_reduced_data, ica_components, ic_probabilites = (
             self.dataset_preprocessor.apply_ica_component_filtering(interpolated_data)
         )
+
+        ic_reduced_data.add_channels([aux_data], force_update_info=True)
 
         # Store final processed data.
         self.save_data_file(
@@ -303,36 +309,37 @@ class DatasetHandler(LoggerMixin):
         :param save_processing_info: Flag whether we want to store intermediate processing results
         (for analysis of the preprocessing performance).
         """
-        for _, row in self.dataset_metadata.iterrows():
+        for i, row in self.dataset_metadata.iterrows():
+            # if i > 0:
+            #     continue
             filename = row[SingleDataMetadata.FILENAME]
             self.process_one_file(filename, save_processing_info)
 
-    def generate_one_original_data_excluded_ic_timeseries(
+    def get_one_original_filename_ic_metadata(
         self, filename: str
     ) -> list[dict[str, Any]]:
         """
-        From the ICAs generates time series that belong to excluded ICs for dataset preprocessing
-        analysis. It stores the extracted data timeseries with only excluded component included
-        in the appropriate path (preprocessing results).
+        From the ICAs retrieves all excluded ICs, its labels and component numbers.
 
         :param filename: Filename of the original raw data we are interested in excluded ICs.
-        :return: Returns list of rows containing
+        :return: Returns list of rows containing metadata regarding ICs for one original data file.
         """
         self.logger.info(
             f"Start generating time series of excluded ICs from file: {filename}"
         )
 
-        # Data Series of data before IC exclusion
-        data_before_ica_exclusion = self.load_data_file(
-            filename,
-            is_processed=True,
-            processed_data_type=PreprocessedDataVariants.RAW_BEFORE_ICA,
-        )
         # ICAs of the dataseries.
         data_icas = self.load_data_file(
             filename,
             is_processed=True,
             processed_data_type=PreprocessedDataVariants.ICA_COMPONENTS,
+        )
+        ics_probabilities = DatasetPreprocessor.get_ic_labeling_probabilities(
+            self.load_data_file(
+                filename,
+                is_processed=True,
+                processed_data_type=PreprocessedDataVariants.IC_PROBABILITIES,
+            )
         )
 
         # List of rows for excluded ICs metadata pd.Dataframe.
@@ -341,47 +348,34 @@ class DatasetHandler(LoggerMixin):
         # Get ID of the IC and its category, exclude all ICs from the signal and store the series.
         ic_exclusion_map = self.dataset_parser.get_ic_exclusion_map(data_icas)
         for ic_id, ic_category in ic_exclusion_map.items():
-            self.logger.info(
-                f"Exclusion of IC with ID: {ic_id} from category: {ic_category}"
-            )
             # Exclude all ICs with exception of `ic_id`.
-            excluded_timeseries = data_icas.apply(
-                data_before_ica_exclusion.copy(), include=ic_id
-            )
-
-            # Save the excluded timeseries and append its metadata for Dataframe.
-            excluded_timeseries_filename = DatasetHandler.get_excluded_ic_filename(
-                filename, ic_id, ic_category
-            )
-            self.logger.info("Saving excluded dataseries")
-            self.save_data_file(
-                excluded_timeseries,
-                excluded_timeseries_filename,
-                data_type=PreprocessedDataVariants.RAW_EXCLUDED_IC,
-            )
             excluded_ics_per_data.append(
                 {
                     ExcludedICsMetadata.ORIGINAL_FILENAME.value: filename,
-                    ExcludedICsMetadata.TIMESERIES_FILENAME.value: excluded_timeseries_filename,
                     ExcludedICsMetadata.IC_ID.value: ic_id,
-                    ExcludedICsMetadata.IC_CATEGORY.value: ic_category,
+                    ExcludedICsMetadata.IC_CATEGORY.value: ic_category.value,
+                    ExcludedICsMetadata.TOTAL_ICS.value: data_icas.n_components_,
+                    ExcludedICsMetadata.MAIN_PROBABILITY.value: ics_probabilities[
+                        ic_category
+                    ][ic_id],
                 }
             )
 
         return excluded_ics_per_data
 
-    def generate_all_excluded_ic_timeseries(
+    def extract_all_excluded_ic_metadata(
         self,
     ):
         """
-        Generates data timeseries of signal of all dataset that includes only the
-        IC component selected for exclusion (to check IC exclusion works as expected), and
-        Stores all connected metadata to `self.dataset_excluded_ics_metadata` DataFrame.
+        Extracts all metadata for extracted ICs and stores them
+        to `self.dataset_excluded_ics_metadata` DataFrame.
         """
         self.logger.info("Generating excluded ICs time series.")
         excluded_ics_rows = []
         for i, row in self.dataset_metadata.iterrows():
-            excluded_ics_rows += self.generate_one_original_data_excluded_ic_timeseries(
+            # if i > 0:
+            #     continue
+            excluded_ics_rows += self.get_one_original_filename_ic_metadata(
                 row[SingleDataMetadata.FILENAME]
             )
         self.logger.info("All excluded ICs time series generated.")
@@ -399,6 +393,8 @@ class DatasetHandler(LoggerMixin):
         """
         self.logger.info(f"Plotting {plot_variant} for all dataset.")
         for i, row in self.dataset_metadata.iterrows():
+            # if i > 0:
+            #     continue
             # Iterate through all data from the provided dataset.
             original_filename = row[SingleDataMetadata.FILENAME]
             self.logger.info(f"Plotting original file: {original_filename}")
@@ -420,6 +416,8 @@ class DatasetHandler(LoggerMixin):
                         variant_name=data_variant,
                     )
                 else:
+                    if plot_variant == "power_spectrum":
+                        continue
                     # Plot all excluded ICs raw data.
                     excluded_metadata = self.dataset_excluded_ics_metadata[
                         self.dataset_excluded_ics_metadata[
@@ -427,22 +425,30 @@ class DatasetHandler(LoggerMixin):
                         ]
                         == original_filename
                     ]
+                    raw_data = self.load_data_file(
+                        original_filename,
+                        is_processed=True,
+                        processed_data_type=PreprocessedDataVariants.ICA_COMPONENTS,
+                    )
                     for j, excluded_row in excluded_metadata.iterrows():
                         # Plot each excluded IC dataseries.
                         self.logger.info(
                             f"Plotting IC excluded component: {excluded_row[ExcludedICsMetadata.IC_ID.value]}"
                         )
-                        raw_data = self.load_excluded_ic_dataseries(
-                            original_filename,
-                            excluded_row[ExcludedICsMetadata.IC_ID.value],
-                        )
+                        # raw_data = self.load_excluded_ic_dataseries(
+                        #     original_filename,
+                        #     excluded_row[ExcludedICsMetadata.IC_ID.value],
+                        # )
                         DatasetPlotter.plot_raw_dataseries(
                             raw_data,
                             save_fig=excluded_row[
-                                ExcludedICsMetadata.TIMESERIES_FILENAME.value
+                                ExcludedICsMetadata.ORIGINAL_FILENAME.value
                             ].split(".")[0],
+                            is_excluded=True,
+                            excluded_ic_id=j,
                             plot_variant=plot_variant,
                             variant_name=data_variant,
+                            title=f"IC - {excluded_row[ExcludedICsMetadata.IC_ID.value]}, {excluded_row[ExcludedICsMetadata.IC_CATEGORY.value]}, p: {excluded_row[ExcludedICsMetadata.MAIN_PROBABILITY.value]:.2f}",
                         )
 
         self.logger.info("Plotting successfully finished")

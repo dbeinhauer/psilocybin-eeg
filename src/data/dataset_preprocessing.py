@@ -10,7 +10,7 @@ import numpy as np
 import mne
 from mne.preprocessing import ICA
 from mne_icalabel.iclabel import iclabel_label_components
-from autoreject import Ransac
+from autoreject import Ransac, AutoReject
 
 
 from src.definitions.fields import ChannelTypes, ICLabelComponentsClasses
@@ -219,6 +219,7 @@ class DatasetPreprocessor(LoggerMixin):
             min_corr=0.7,
             unbroken_time=0.2,
             random_state=97,
+            n_jobs=-1,
         )
         ransac.fit(epochs)
 
@@ -227,28 +228,86 @@ class DatasetPreprocessor(LoggerMixin):
 
         return data
 
-    def _data_preparation(self, data: mne.io.Raw) -> mne.io.Raw:
+    def remove_bad_epoch_annotations(self, data: mne.io.Raw) -> mne.io.Raw:
         """
-        Do first preprocessing and preparation of the raw data.
+        Removes bad epoch annotations from the data.
+
+        :param data: Data to be processed.
+        :return: _description_
+        """
+        old_annotations = data.annotations
+        keep_annotations = [
+            i
+            for i, desc in enumerate(old_annotations.description)
+            if desc != "BAD_epoch"
+        ]
+
+        new_annotations = mne.Annotations(
+            onset=old_annotations.onset[keep_annotations],
+            duration=old_annotations.duration[keep_annotations],
+            description=old_annotations.description[keep_annotations],
+        )
+        return data.set_annotations(new_annotations)
+
+    def _detect_bad_epochs(self, data: mne.io.Raw, epoch_len: float = 2.0):
+        """
+        Runs Autoreject bad epochs detection and annotates putatively bad epochs in the raw data.
+
+        :param data: Data to be analyzed.
+        :param epoch_len: Length of the epochs.
+        :return: Returns annotated data with bad epochs.
+        """
+        epochs = mne.make_fixed_length_epochs(data, duration=epoch_len, preload=True)
+
+        # Bad epochs detection
+        ar = AutoReject(n_jobs=-1, random_state=42, verbose=True)
+        ar.fit(epochs)
+        reject_log = ar.get_reject_log(epochs)
+
+        bad_epoch_indices = np.where(reject_log.bad_epochs)[0]
+        print(f"Found {len(bad_epoch_indices)} bad epochs out of {len(epochs)}")
+
+        # This marks bad segments WITHOUT removing them
+        bad_annotations = mne.Annotations(
+            onset=[epochs.events[i, 0] / data.info["sfreq"] for i in bad_epoch_indices],
+            duration=[epoch_len] * len(bad_epoch_indices),  # duration of each epoch
+            description=["BAD_epoch"] * len(bad_epoch_indices),
+        )
+
+        # Add annotations to raw data
+        return data.set_annotations(data.annotations + bad_annotations)
+
+    def _data_preparation(self, data: mne.io.Raw) -> tuple[mne.io.Raw, mne.io.Raw]:
+        """
+        Do first preparation of the raw data.
 
         Namely it adds the electrode coordinates, excludes the electrodes
         that has problematic placement, crops first and last 10 seconds of
-        the data series (typically noisy), applies notch and FIR filters to
-        remove the line noise, and applies Ransac algorithm to detect bad
-        channels.
+        the data series (typically noisy).
 
         :param data: Data to be processed.
-        :return: Returns processed data (modified original raw data).
+        :return: Returns tuple of prepared data splitted on EEG and rest of channels.
         """
-        return self._apply_ransac_filter(
-            self._apply_filters_to_data(
-                self._crop_start_and_end_of_dataseries(
-                    self._exclude_selected_channels(
-                        self._add_coordinates_montage(data, self.montage)
-                    )
-                )
+        prepared_data = self._crop_start_and_end_of_dataseries(
+            self._exclude_selected_channels(
+                self._add_coordinates_montage(data, self.montage)
             )
         )
+
+        eeg_data = prepared_data.copy().pick_types(eeg=True)
+        aux_data = prepared_data.copy().pick_types(eeg=False, ecg=True, stim=True)
+
+        return eeg_data, aux_data
+
+    def _filter_data(self, eeg_data: mne.io.Raw) -> mne.io.Raw:
+        """
+        Applies notch and FIR filters to remove the line noise, and
+        applies Ransac algorithm to detect badchannels.
+
+        :param eeg_data: EEG data to do the preprocessing on.
+        :return: Returns filtered EEG data.
+        """
+        return self._apply_ransac_filter(self._apply_filters_to_data(eeg_data))
 
     def _interpolate_bad_channels(self, data: mne.io.Raw) -> mne.io.Raw:
         """
@@ -258,48 +317,53 @@ class DatasetPreprocessor(LoggerMixin):
         :return: Returns copy of the original data with interpolated bad channels.
         """
         self.logger.info("Interpolating bad channels using average reference.")
-        interpolated_data = data.copy().interpolate_bads(reset_bads=True)
+        interpolated_data = data.interpolate_bads(reset_bads=True)
         return interpolated_data.set_eeg_reference("average", ch_type="eeg")
 
     @staticmethod
-    def get_ic_labeling_selected_probabilities(
+    def get_ic_labeling_probabilities(
         component_probabilities,
-        selected_classes: list[ICLabelComponentsClasses] = [
-            ICLabelComponentsClasses.EYE,
-            ICLabelComponentsClasses.MUSCLE,
-            ICLabelComponentsClasses.HEART,
-            ICLabelComponentsClasses.BRAIN,
-        ],
     ) -> dict[ICLabelComponentsClasses, np.ndarray]:
         """
-        Select proper probability values for selected components from the
-        ICLabel tool.
-
-        Note: In our current implementation we select only brain, muscle, eye and heart.
+        Links each IC label to its probability.
 
         :param component_probabilities: Probabilities of all ICLabel Components.
-        :param selected_classes: List of ICLabel classes that we want to select for analysis.
         :return: Returns dictionary of key ICLabel component and its probabilities in np.ndarray form.
         """
 
         selected_idxs = {
             component: DatasetPreprocessor.ic_label_classes_order.index(component.value)
-            for component in selected_classes
+            for component in ICLabelComponentsClasses
         }
         return {
             component: component_probabilities[:, selected_idxs[component]]
             for component in selected_idxs
         }
 
+    @staticmethod
+    def _check_ic_component_probability(
+        all_probabilities: dict[ICLabelComponentsClasses, np.ndarray],
+        ic_idx: int,
+        tested_component: ICLabelComponentsClasses,
+        tested_threshold: float = 0.6,
+        brain_threshold: float = 0.3,
+    ) -> bool:
+        return (
+            all_probabilities[tested_component][ic_idx] >= tested_threshold
+            and all_probabilities[ICLabelComponentsClasses.BRAIN][ic_idx]
+            < brain_threshold
+        )
+
     def _mark_ic_for_exclusion(
         self,
         component_probabilities,
         ica: ICA,
+        brain_threshold=0.3,
         component_thresholds: dict[ICLabelComponentsClasses, float] = {
             ICLabelComponentsClasses.EYE: 0.40,
             ICLabelComponentsClasses.MUSCLE: 0.60,
             ICLabelComponentsClasses.HEART: 0.40,
-            ICLabelComponentsClasses.BRAIN: 0.30,
+            ICLabelComponentsClasses.CHANNEL: 0.5,
         },
     ):
         """
@@ -316,11 +380,9 @@ class DatasetPreprocessor(LoggerMixin):
         other classes if the thresholds is surpasses -> it belongs to this class.
         :return: Returns ICA decomposition with ICs marked for exclusion (if classified as artifact components).
         """
-        self.logger.info("Getting probabilites of selected IC components.")
-        selected_component_probabilites = (
-            DatasetPreprocessor.get_ic_labeling_selected_probabilities(
-                component_probabilities
-            )
+        self.logger.info("Getting probabilites of IC components.")
+        labeled_probabilities = DatasetPreprocessor.get_ic_labeling_probabilities(
+            component_probabilities
         )
         # --- Auto-exclusion rule (tune thresholds to taste) ---
         # Conservative defaults: remove clear artifacts, keep 'brain' and usually keep 'other'
@@ -331,33 +393,16 @@ class DatasetPreprocessor(LoggerMixin):
             "Starting exclusion of the components passing selected threshold."
         )
 
-        for i in range(len(component_probabilities)):
-            # Exclude strong eye components
-            if (
-                selected_component_probabilites[ICLabelComponentsClasses.EYE][i]
-                >= component_thresholds[ICLabelComponentsClasses.EYE]
-                and selected_component_probabilites[ICLabelComponentsClasses.BRAIN][i]
-                < component_thresholds[ICLabelComponentsClasses.BRAIN]
-            ):
-                exclude.append(i)
-
-            # Exclude strong muscle components
-            if (
-                selected_component_probabilites[ICLabelComponentsClasses.MUSCLE][i]
-                >= component_thresholds[ICLabelComponentsClasses.MUSCLE]
-                and selected_component_probabilites[ICLabelComponentsClasses.BRAIN][i]
-                < component_thresholds[ICLabelComponentsClasses.BRAIN]
-            ):
-                exclude.append(i)
-
-            # Exclude heart artifacts if present
-            if (
-                selected_component_probabilites[ICLabelComponentsClasses.HEART][i]
-                >= component_thresholds[ICLabelComponentsClasses.HEART]
-                and selected_component_probabilites[ICLabelComponentsClasses.BRAIN][i]
-                < component_thresholds[ICLabelComponentsClasses.BRAIN]
-            ):
-                exclude.append(i)
+        for ic_idx in range(len(component_probabilities)):
+            for component, threshold in component_thresholds.items():
+                if DatasetPreprocessor._check_ic_component_probability(
+                    labeled_probabilities,
+                    ic_idx,
+                    component,
+                    tested_threshold=threshold,
+                    brain_threshold=brain_threshold,
+                ):
+                    exclude.append(ic_idx)
 
         ica.exclude = sorted(set(exclude))
 
@@ -368,22 +413,25 @@ class DatasetPreprocessor(LoggerMixin):
 
     def initial_preprocessing_and_bad_channel_interpolation(
         self, data: mne.io.Raw
-    ) -> mne.io.Raw:
+    ) -> tuple[mne.io.Raw, mne.io.Raw]:
         """
         Run initial preprocessing steps (electrode naming,
         time trimming, electrodes exclusion, line noise filtering, bad
         channel interpolation).
 
         :param data: Raw EEG data series from one measurement.
-        :return: Preprocessed data with interpolated bad channels.
+        :return: Tuple of preprocessed data with interpolated bad channels and rest of channels (other than EEG).
         """
-        # Apply all the filters and label the bad channels.
         self.logger.info(
             "Starting initial data preprocessing and interpolation of the bad channels."
         )
-        data = self._data_preparation(data)
-        # Interpolate the bad channels by using average reference.
-        return self._interpolate_bad_channels(data)
+        # Prepare the data for preprocessing.
+        eeg_data, aux_data = self._data_preparation(data)
+        # Filter, interpolate the bad channels by using average reference and annotate bad epochs.
+        eeg_data = self._detect_bad_epochs(
+            self._interpolate_bad_channels(self._apply_filters_to_data(eeg_data))
+        )
+        return eeg_data, aux_data
 
     def apply_ica_component_filtering(
         self,

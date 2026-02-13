@@ -25,7 +25,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--process_excluded_ic",
         action="store_true",
-        help="Whether we want to generated dataseries from excluded ICs.",
+        help="Whether we want to process metadata from excluded ICs.",
     )
     parser.set_defaults(plot_results=False)
     parser.add_argument(
@@ -46,7 +46,7 @@ if __name__ == "__main__":
 
     if args.process_excluded_ic:
         # Exclusion of the IC components and creation of their timeseries.
-        data_handler.generate_all_excluded_ic_timeseries()
+        data_handler.extract_all_excluded_ic_metadata()
 
     if args.plot_results:
         data_handler.plot_all_one_variant(plot_variant="power_spectrum")
