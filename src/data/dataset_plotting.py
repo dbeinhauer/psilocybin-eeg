@@ -134,7 +134,11 @@ class DatasetPlotter(LoggerMixin):
         elif plot_variant == "topomap":
             # Topomap plotting.
             if is_excluded:
-                fig = data.plot_components(data.exclude[excluded_ic_id])
+                fig = (
+                    data.plot_components(excluded_ic_id),
+                )  # data.exclude[excluded_ic_id])
+                if isinstance(fig, tuple):
+                    fig = fig[0]
                 fig.suptitle(title)
             else:
                 fig = DatasetPlotter.plot_topomap_combined(data, title=title)

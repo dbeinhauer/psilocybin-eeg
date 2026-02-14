@@ -425,11 +425,11 @@ class DatasetHandler(LoggerMixin):
                         ]
                         == original_filename
                     ]
-                    raw_data = self.load_data_file(
-                        original_filename,
-                        is_processed=True,
-                        processed_data_type=PreprocessedDataVariants.ICA_COMPONENTS,
-                    )
+                    # raw_data = self.load_data_file(
+                    #     original_filename,
+                    #     is_processed=True,
+                    #     processed_data_type=PreprocessedDataVariants.ICA_COMPONENTS,
+                    # )
                     for j, excluded_row in excluded_metadata.iterrows():
                         # Plot each excluded IC dataseries.
                         self.logger.info(
@@ -439,13 +439,21 @@ class DatasetHandler(LoggerMixin):
                         #     original_filename,
                         #     excluded_row[ExcludedICsMetadata.IC_ID.value],
                         # )
+                        raw_data = self.load_data_file(
+                            original_filename,
+                            is_processed=True,
+                            processed_data_type=PreprocessedDataVariants.ICA_COMPONENTS,
+                        )
+                        print(excluded_row[ExcludedICsMetadata.IC_ID.value])
                         DatasetPlotter.plot_raw_dataseries(
                             raw_data,
-                            save_fig=excluded_row[
+                            save_fig=f"{excluded_row[
                                 ExcludedICsMetadata.ORIGINAL_FILENAME.value
-                            ].split(".")[0],
+                            ].split(".")[0]}-{excluded_row[ExcludedICsMetadata.IC_ID.value]}-{excluded_row[ExcludedICsMetadata.IC_CATEGORY.value]}",
                             is_excluded=True,
-                            excluded_ic_id=j,
+                            excluded_ic_id=excluded_row[
+                                ExcludedICsMetadata.IC_ID.value
+                            ],  # j,
                             plot_variant=plot_variant,
                             variant_name=data_variant,
                             title=f"IC - {excluded_row[ExcludedICsMetadata.IC_ID.value]}, {excluded_row[ExcludedICsMetadata.IC_CATEGORY.value]}, p: {excluded_row[ExcludedICsMetadata.MAIN_PROBABILITY.value]:.2f}",
