@@ -219,7 +219,7 @@ class DatasetPreprocessor(LoggerMixin):
             min_corr=0.7,
             unbroken_time=0.2,
             random_state=97,
-            n_jobs=-1,
+            n_jobs=4,
         )
         ransac.fit(epochs)
 
@@ -260,7 +260,7 @@ class DatasetPreprocessor(LoggerMixin):
         epochs = mne.make_fixed_length_epochs(data, duration=epoch_len, preload=True)
 
         # Bad epochs detection
-        ar = AutoReject(n_jobs=-1, random_state=42, verbose=True)
+        ar = AutoReject(n_jobs=4, random_state=42, verbose=True)
         ar.fit(epochs)
         reject_log = ar.get_reject_log(epochs)
 
