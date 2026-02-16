@@ -49,5 +49,5 @@ if __name__ == "__main__":
         data_handler.extract_all_excluded_ic_metadata()
 
     if args.plot_results:
-        # data_handler.plot_all_one_variant(plot_variant="power_spectrum")
+        data_handler.plot_all_one_variant(plot_variant="power_spectrum")
         data_handler.plot_all_one_variant(plot_variant="topomap")

@@ -429,7 +429,7 @@ class DatasetPreprocessor(LoggerMixin):
         eeg_data, aux_data = self._data_preparation(data)
         # Filter, interpolate the bad channels by using average reference and annotate bad epochs.
         eeg_data = self._detect_bad_epochs(
-            self._interpolate_bad_channels(self._apply_filters_to_data(eeg_data))
+            self._interpolate_bad_channels(self._filter_data(eeg_data))
         )
         return eeg_data, aux_data
 

@@ -279,7 +279,7 @@ class DatasetHandler(LoggerMixin):
             )
 
         # ICA component labeling and filtering.
-        ic_reduced_data, ica_components, ic_probabilites = (
+        ic_reduced_data, ica_components, ic_probabilities = (
             self.dataset_preprocessor.apply_ica_component_filtering(interpolated_data)
         )
 
@@ -290,14 +290,14 @@ class DatasetHandler(LoggerMixin):
             ic_reduced_data, filename_base, PreprocessedDataVariants.RAW_AFTER_ICA
         )
         if save_processing_info:
-            # Save found ICA components and its probabilites to belong to selected classes.
+            # Save found ICA components and its probabilities to belong to selected classes.
             self.save_data_file(
                 ica_components,
                 filename_base,
                 data_type=PreprocessedDataVariants.ICA_COMPONENTS,
             )
             self.save_data_file(
-                ic_probabilites,
+                ic_probabilities,
                 filename_base,
                 data_type=PreprocessedDataVariants.IC_PROBABILITIES,
             )
@@ -310,8 +310,6 @@ class DatasetHandler(LoggerMixin):
         (for analysis of the preprocessing performance).
         """
         for i, row in self.dataset_metadata.iterrows():
-            # if i > 0:
-            #     continue
             filename = row[SingleDataMetadata.FILENAME]
             self.process_one_file(filename, save_processing_info)
 
@@ -373,8 +371,6 @@ class DatasetHandler(LoggerMixin):
         self.logger.info("Generating excluded ICs time series.")
         excluded_ics_rows = []
         for i, row in self.dataset_metadata.iterrows():
-            # if i > 0:
-            #     continue
             excluded_ics_rows += self.get_one_original_filename_ic_metadata(
                 row[SingleDataMetadata.FILENAME]
             )
@@ -425,20 +421,11 @@ class DatasetHandler(LoggerMixin):
                         ]
                         == original_filename
                     ]
-                    # raw_data = self.load_data_file(
-                    #     original_filename,
-                    #     is_processed=True,
-                    #     processed_data_type=PreprocessedDataVariants.ICA_COMPONENTS,
-                    # )
                     for j, excluded_row in excluded_metadata.iterrows():
                         # Plot each excluded IC dataseries.
                         self.logger.info(
                             f"Plotting IC excluded component: {excluded_row[ExcludedICsMetadata.IC_ID.value]}"
                         )
-                        # raw_data = self.load_excluded_ic_dataseries(
-                        #     original_filename,
-                        #     excluded_row[ExcludedICsMetadata.IC_ID.value],
-                        # )
                         raw_data = self.load_data_file(
                             original_filename,
                             is_processed=True,

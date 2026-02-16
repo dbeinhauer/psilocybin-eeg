@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -N PSILO_EEF_DATASET_PREPROCESSING
-#PBS -l walltime=8:00:00
-#PBS -l select=1:ncpus=1:mem=100gb:scratch_local=100gb
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=4:mem=100gb:scratch_local=100gb
 
 #PBS -m ae
 #PBS -j oe
@@ -41,6 +41,8 @@ cat << 'EOF' > run_inside.sh
 #!/bin/bash
 source /opt/myproject/.venv/bin/activate
 python /mnt/scripts/run_dataset_preprocessing.py \
+--raw_processing \
+--process_excluded_ic \
 --plot_results \
 EOF
 

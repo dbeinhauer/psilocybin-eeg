@@ -117,6 +117,8 @@ class DatasetPlotter(LoggerMixin):
         :param data: Raw data to be plotted.
         :param save_fig: Whether save figure or not, if "" just show it and do not save.
         :param plot_variant: Which plot we want to create. Either "power_spectrum", or "topomap".
+        :param is_excluded: Flag whether we are plotting excluded ICs.
+        :param excluded_ic_id: ID of the excluded IC to plot (if we plot it).
         :param variant_name: Name of the data variant (plot will be stored in appropriate subdirectory).
         :param custom_full_path: In case one wants to store the plot in custom path.
         :param title: Title of the plot.
