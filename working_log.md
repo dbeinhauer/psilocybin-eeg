@@ -1,3 +1,15 @@
+# 2026-02-16
+- starting to work on the data alignment using music (stimulus) channel
+- second stricter preprocessing pipeline
+    - be aware of the `bad epochs detection`
+        - it may not work well (but it is cleaner for the paper)
+    - majority of notes in shared Google document
+
+# 2026-02-09
+- 2 Participants did not participate in all experimental conditions:
+    -  `PSI032` (2 conditions finished - only PLACEBO) - `PSI034` (3 conditions finished - missing PSYTRANCE under PSILOCYBIN)
+    - probably excluded them from analysis?
+
 # 2026-02-02
 - First the data needs to be preprocessed:
     - trim 10s window from start and from end\

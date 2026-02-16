@@ -3,7 +3,11 @@ data/raw
 data/processed
 plots/
 src/psilocybin_eeg.egg-info/
+notebooks/preprocessing_jan.ipynb
+
 
 logs/
 *__pycache__*
+*.ipynb_checkpoints*
 .vscode/
+.python-version
