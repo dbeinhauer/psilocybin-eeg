@@ -11,16 +11,23 @@ import mne
 
 from src.definitions.constants import ProjectPaths
 from src.definitions.fields import (
+    ChannelTypes,
+    ConditionVariants,
     ExperimentNames,
     CoordinateSystems,
+    MusicTypeVariants,
     SingleDataMetadata,
     PreprocessedDataVariants,
     RAW_DATA_VARIANTS,
     ICLabelComponentsClasses,
     ExcludedICsMetadata,
+    ExclusionCategories,
 )
+from src.definitions.mappings import RAW_CHANNEL_NAMES
 from src.data.dataset_parsing import DatasetParser
 from src.data.dataset_preprocessing import DatasetPreprocessor
+from src.data.dataset_filtering import DatasetFilter
+from src.data.time_aligner import TimeAligner, TAGObject
 from src.data.dataset_plotting import DatasetPlotter
 from src.utils.logging_config import LoggerMixin
 
@@ -35,6 +42,7 @@ class DatasetHandler(LoggerMixin):
             self.processed_data_dir,  # Output directory for the processed data
             self.coordinates_path,  # Path to electrode coordinates file
             self.excluded_electrodes_path,  # Path to CSV list of excluded electrodes.
+            self.excluded_participants_path,  # Path to CSV list of excluded participants.
         ) = self._init_dataset_paths(experiment_name, coordinate_system)
 
         self.dataset_parser = DatasetParser(self.participant_map_path)
@@ -45,10 +53,15 @@ class DatasetHandler(LoggerMixin):
             self.coordinates_path, self.excluded_electrodes_path
         )
         self.dataset_excluded_ics_metadata = self._init_excluded_ics_metadata()
+        self.excluded_participants_metadata = pd.read_csv(
+            self.excluded_participants_path,
+            sep=";",
+            dtype=str,
+        )
 
     def _init_dataset_paths(
         self, experiment_name: ExperimentNames, coordinate_system: CoordinateSystems
-    ) -> tuple[Path, Path, Path, Path, Path]:
+    ) -> tuple[Path, Path, Path, Path, Path, Path]:
         """
         Initializes paths to working dataset.
 
@@ -68,6 +81,9 @@ class DatasetHandler(LoggerMixin):
         coordinates_path, excluded_electrodes_path = (
             ProjectPaths.get_coordinates_file_path(coordinate_system)
         )
+        excluded_participants_path = (
+            ProjectPaths.EXCLUDED_PARTICIPANTS_DIR / f"{experiment_name.value}.csv"
+        )
 
         return (
             raw_data_dir,
@@ -75,6 +91,7 @@ class DatasetHandler(LoggerMixin):
             processed_data_dir,
             coordinates_path,
             excluded_electrodes_path,
+            excluded_participants_path,
         )
 
     def _get_excluded_ics_mapping_path(self) -> Path:
@@ -126,6 +143,7 @@ class DatasetHandler(LoggerMixin):
         data_filename: str,
         is_processed: bool = False,
         processed_data_type: PreprocessedDataVariants = PreprocessedDataVariants.RAW_AFTER_ICA,
+        preload=True,
     ) -> mne.io.Raw | np.ndarray:
         """
         Loads one EEG sequence (one data example).
@@ -154,46 +172,13 @@ class DatasetHandler(LoggerMixin):
                 # We need this else for Raw dataseries are in '.fif' format.
                 return mne.io.read_raw_fif(
                     data_path,
-                    preload=True,
+                    preload=preload,
                 )
 
         # Load unprocessed raw data are in '.edf' format.
         return mne.io.read_raw_edf(
             data_path,
-            preload=True,
-        )
-
-    def load_excluded_ic_dataseries(
-        self, original_filename: str, ic_id: int
-    ) -> mne.io.Raw:
-        """
-        Loads selected excluded IC dataseries from selected original file.
-
-        :param original_filename: File of the original dataseries.
-        :param ic_id: ID of the excluded IC.
-        :return: Returns dataseries of the excluded IC.
-        """
-        excluded_filename = self.dataset_excluded_ics_metadata[
-            (
-                self.dataset_excluded_ics_metadata[
-                    ExcludedICsMetadata.ORIGINAL_FILENAME.value
-                ]
-                == original_filename
-            )
-            & (
-                self.dataset_excluded_ics_metadata[ExcludedICsMetadata.IC_ID.value]
-                == ic_id
-            )
-        ][ExcludedICsMetadata.TIMESERIES_FILENAME.value].iloc[0]
-        if not excluded_filename:
-            self.logger.error(
-                f"Cannot load dataseries. Possibly wrong filename: {original_filename}, IC ID: {ic_id} or extracted IC does not exist."
-            )
-            return None
-        return self.load_data_file(
-            excluded_filename,
-            is_processed=True,
-            processed_data_type=PreprocessedDataVariants.RAW_EXCLUDED_IC,
+            preload=preload,
         )
 
     def get_preprocessing_results_path(
@@ -389,8 +374,6 @@ class DatasetHandler(LoggerMixin):
         """
         self.logger.info(f"Plotting {plot_variant} for all dataset.")
         for i, row in self.dataset_metadata.iterrows():
-            # if i > 0:
-            #     continue
             # Iterate through all data from the provided dataset.
             original_filename = row[SingleDataMetadata.FILENAME]
             self.logger.info(f"Plotting original file: {original_filename}")
@@ -447,3 +430,102 @@ class DatasetHandler(LoggerMixin):
                         )
 
         self.logger.info("Plotting successfully finished")
+
+    def _load_all_tags(
+        self, filtered_df: pd.DataFrame
+    ) -> tuple[list[TAGObject], float]:
+        """
+        Loads all TAG signals from the dataset based on the provided filtered metadata DataFrame.
+
+        :param filtered_df: The filtered metadata DataFrame containing the files to load TAG signals from
+        :return: A tuple containing a list of TAGObject instances and the sample frequency of the TAG signals.
+        """
+        all_tags = []
+        sfreqs = []
+
+        for i, row in filtered_df.iterrows():
+            filename = row[SingleDataMetadata.FILENAME]
+            raw = self.load_data_file(
+                filename,
+                is_processed=True,
+                processed_data_type=PreprocessedDataVariants.RAW_AFTER_ICA,
+                preload=False,
+            )
+            # Pick only the TAG channel — cheap to load
+            raw.pick([RAW_CHANNEL_NAMES[ChannelTypes.TAG]])
+            raw.load_data()
+            tag_signal = raw.get_data(picks=RAW_CHANNEL_NAMES[ChannelTypes.TAG])[0]
+            all_tags.append(TAGObject(filename, tag_signal))
+            sfreqs.append(raw.info["sfreq"])
+
+        assert len(set(sfreqs)) == 1, "Sample rates differ across files!"
+        sfreq = sfreqs[0]
+
+        return all_tags, sfreq
+
+    def plot_aligned_tags(
+        self,
+        aligned_tags,
+        time_aligner: TimeAligner,
+        t_start: float = 50.0,
+        time_duration: float = 50.0,
+    ):
+        """
+        Plots the aligned TAG signals.
+
+        :param aligned_tags: List of aligned TAG signals to plot.
+        :param time_aligner: TimeAligner object containing all alignment info.
+        :param t_start: Start time in seconds for the signal overlap plot.
+        :param time_duration: Duration in seconds for the signal overlap plot and cross-correlation plot.
+        """
+        DatasetPlotter.print_correlation_statistics(aligned_tags)
+        DatasetPlotter.plot_alignment_correlation_heatmap(aligned_tags)
+        DatasetPlotter.plot_signal_overlap(
+            aligned_tags,
+            time_aligner.sfreq,
+            t_start=t_start,
+            time_duration=time_duration,
+        )
+        ref = aligned_tags[time_aligner.reference_idx]
+        for i, (sig, tag) in enumerate(zip(aligned_tags, time_aligner.all_tags)):
+            if i == time_aligner.reference_idx:
+                continue
+            DatasetPlotter.plot_crosscorr_vs_shift(
+                ref,
+                sig,
+                time_aligner.sfreq,
+                max_lag_sec=time_duration,
+                label1=time_aligner.all_tags[time_aligner.reference_idx].filename,
+                label2=tag.filename,
+            )
+
+    def align_time_series(
+        self,
+        music_type: MusicTypeVariants,
+        condition_type: ConditionVariants,
+        exclusion_categories: list[ExclusionCategories],
+        plot_alignment_results: bool = False,
+    ) -> tuple[list[np.ndarray], TimeAligner]:
+        """
+        Aligns the signals of the participants based on the TAG signal in time.
+
+        :param music_type: Music type to include.
+        :param condition_type: Condition type to include (placebo, psilocybin).
+        :param exclusion_categories: Which categories of participants to exclude.
+        :param plot_alignment_results: Whether to plot the alignment statistics.
+        :return: Returns list of aligned TAG signals and the TimeAligner object
+        containing all alignment info (useful for future signal alignment of the EEG data).
+        """
+        filtered_df = DatasetFilter.filter_dataset_by_all_categories(
+            self.dataset_metadata,
+            self.excluded_participants_metadata,
+            [music_type],
+            [condition_type],
+            exclusion_categories,
+        )
+        all_tag_signals, sfreq = self._load_all_tags(filtered_df)
+        time_aligner = TimeAligner(all_tag_signals, sfreq)
+        aligned_tags = time_aligner.crop_to_overlap()
+        if plot_alignment_results:
+            self.plot_aligned_tags(aligned_tags, time_aligner)
+        return aligned_tags, time_aligner

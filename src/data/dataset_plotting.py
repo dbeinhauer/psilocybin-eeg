@@ -1,11 +1,17 @@
+"""
+This source serves to plot the dataset in various ways, such as topomaps,
+power spectra, and correlation heatmaps for aligned signals.
+"""
+
 from pathlib import Path
 from typing import Literal
 
 import mne
-
+from scipy.signal import correlate, correlation_lags
 import matplotlib.pyplot as plt
 import numpy as np
 from mne.viz import plot_topomap
+import seaborn as sns
 
 from src.definitions.constants import ProjectPaths
 from src.definitions.fields import PreprocessedDataVariants, RAW_DATA_VARIANTS
@@ -155,3 +161,213 @@ class DatasetPlotter(LoggerMixin):
             # If the path does not exist. Create the parents.
             plot_path.parent.mkdir(parents=True, exist_ok=True)
             fig.savefig(plot_path)
+
+    @staticmethod
+    def compute_tag_signal_correlation_matrix(signals: list[np.ndarray]) -> np.ndarray:
+        """
+        Compute pairwise correlations between aligned signals and return the correlation matrix.
+        :param signals: List of aligned TAG signals to compare.
+        :return: Correlation matrix for all pairs of signals.
+        """
+        n = len(signals)
+        labels = [f"Signal {i}" for i in range(n)]
+
+        corr_matrix = np.zeros((n, n))
+
+        for i in range(n):
+            for j in range(n):
+                if i == j:
+                    corr_matrix[i, j] = 1.0
+                elif i < j:
+                    # Simple Pearson correlation — signals are already aligned and same length
+                    corr = np.corrcoef(signals[i], signals[j])[0, 1]
+                    corr_matrix[i, j] = corr
+                    corr_matrix[j, i] = corr
+        return corr_matrix
+
+    @staticmethod
+    def print_correlation_statistics(signals: list[np.ndarray]):
+        """
+        Print statistics about the correlation matrix,
+        such as mean, median, and distribution of correlations.
+        :param signals: List of aligned TAG signals to compute correlation statistics for.
+        """
+        corr_matrix = DatasetPlotter.compute_tag_signal_correlation_matrix(signals)
+        n = corr_matrix.shape[0]
+        upper = corr_matrix[
+            np.triu_indices(n, k=1)
+        ]  # Get upper triangle without diagonal
+
+        print(f"Mean pairwise correlation: {upper.mean():.4f}")
+        print(f"Median pairwise correlation: {np.median(upper):.4f}")
+        print(f"Min pairwise correlation: {upper.min():.4f}")
+        print(f"Max pairwise correlation: {upper.max():.4f}")
+
+    @staticmethod
+    def plot_alignment_correlation_heatmap(
+        signals: list[np.ndarray], save_fig: str = ""
+    ):
+        """
+        Compute pairwise correlations between aligned signals and plot as heatmap.
+        :param signals: List of aligned TAG signals to compare.
+        :param save_fig: Whether save figure or not (to provided_path), if "" just show it and do not save.
+        """
+
+        corr_matrix = DatasetPlotter.compute_tag_signal_correlation_matrix(signals)
+        n = corr_matrix.shape[0]
+        upper = corr_matrix[
+            np.triu_indices(n, k=1)
+        ]  # Get upper triangle without diagonal
+
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        # Full correlation matrix
+        sns.heatmap(
+            corr_matrix,
+            ax=axes[0],
+            annot=True,
+            fmt=".2f",
+            vmin=-1,
+            vmax=1,
+            center=0,
+            cmap="RdBu_r",
+        )
+        axes[0].set_title("Pairwise Correlation Matrix")
+
+        # Distribution of pairwise correlations
+        axes[1].hist(upper, bins=20, edgecolor="black")
+        axes[1].axvline(
+            upper.mean(), color="red", linestyle="--", label=f"Mean: {upper.mean():.3f}"
+        )
+        axes[1].axvline(
+            np.median(upper),
+            color="orange",
+            linestyle="--",
+            label=f"Median: {np.median(upper):.3f}",
+        )
+        axes[1].set_xlabel("Pearson Correlation")
+        axes[1].set_ylabel("Count")
+        axes[1].set_title("Distribution of Pairwise Correlations")
+        axes[1].legend()
+
+        plt.tight_layout()
+        if save_fig:
+            fig.savefig(save_fig)
+        else:
+            plt.show()
+
+    @staticmethod
+    def plot_signal_overlap(
+        signals: list[np.ndarray],
+        sfreq: float,
+        t_start: float = 0,
+        time_duration: float = 10,
+        save_fig: str = "",
+    ):
+        """
+        Plot all aligned signals overlaid on the same axis.
+        :param signals: List of aligned TAG signals to plot.
+        :param sfreq: Sampling frequency of the signals (to convert time to samples).
+        :param t_start: Start time in seconds for the plot.
+        :param time_duration: Duration in seconds to plot from the start time.
+        :param save_fig: Whether save figure or not (to provided_path), if "" just show it and do not save.
+        """
+
+        labels = [f"Signal {i}" for i in range(len(signals))]
+
+        time = np.arange(signals[0].shape[0]) / sfreq
+
+        t_end = t_start + time_duration  # seconds
+
+        sample_start = int(t_start * sfreq)
+        sample_end = int(t_end * sfreq)
+
+        time = np.arange(sample_start, sample_end) / sfreq
+
+        fig, ax = plt.subplots(figsize=(14, 4))
+
+        for sig, label in zip(signals, labels):
+            ax.plot(
+                time,
+                sig[sample_start:sample_end],
+                alpha=0.6,
+                linewidth=0.8,
+                label=label,
+            )
+
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("Amplitude")
+        ax.set_title("Aligned Signal Overlap")
+
+        plt.tight_layout()
+        if save_fig:
+            fig.savefig(save_fig)
+        else:
+            plt.show()
+
+    @staticmethod
+    def plot_crosscorr_vs_shift(
+        s1,
+        s2,
+        sfreq,
+        max_lag_sec=5.0,
+        label1="Signal 1",
+        label2="Signal 2",
+        save_fig: str = "",
+    ):
+        """
+        Plot normalized cross-correlation as a function of lag.
+        :param s1: First signal (e.g. reference).
+        :param s2: Second signal to compare.
+        :param sfreq: Sampling frequency of the signals (to convert lag to seconds).
+        :param max_lag_sec: Maximum lag in seconds to display on the plot.
+        :param label1: Label for the first signal (for legend).
+        :param label2: Label for the second signal (for legend).
+        :param save_fig: Whether save figure or not (to provided_path), if "" just show it and do not save.
+        """
+        s1_norm = (s1 - s1.mean()) / s1.std()
+        s2_norm = (s2 - s2.mean()) / s2.std()
+
+        corr = correlate(s1_norm, s2_norm, mode="full")
+        lags = correlation_lags(len(s1_norm), len(s2_norm), mode="full")
+
+        # Overlap at each lag for normalization
+        overlap = np.array(
+            [
+                min(i + 1, len(s1), len(s2), len(s1) + len(s2) - 1 - i)
+                for i in range(len(corr))
+            ]
+        )
+        corr_normalized = corr / overlap
+
+        # Restrict to ±max_lag_sec
+        max_lag_samples = int(max_lag_sec * sfreq)
+        valid = np.abs(lags) <= max_lag_samples
+        lags_sec = lags[valid] / sfreq
+        corr_valid = corr_normalized[valid]
+
+        best_idx = np.argmax(corr_valid)
+        best_lag = lags_sec[best_idx]
+        best_corr = corr_valid[best_idx]
+
+        fig, ax = plt.subplots(figsize=(14, 4))
+
+        ax.plot(lags_sec, corr_valid, linewidth=0.9, color="steelblue")
+        ax.axvline(0, color="gray", linestyle="--", linewidth=0.8, label="Zero lag")
+        ax.axvline(
+            best_lag,
+            color="red",
+            linestyle="--",
+            linewidth=1.0,
+            label=f"Best lag: {best_lag:.3f} s (corr={best_corr:.4f})",
+        )
+
+        ax.set_xlabel("Lag (s)")
+        ax.set_ylabel("Normalized Correlation")
+        ax.set_title(f"Cross-Correlation: {label1} vs {label2}")
+        ax.legend()
+
+        plt.tight_layout()
+        if save_fig:
+            fig.savefig(save_fig)
+        else:
+            plt.show()

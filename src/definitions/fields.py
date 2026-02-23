@@ -35,6 +35,9 @@ class SingleDataMetadata(Enum):
     CONDITION = "condition"  # Placebo or Psilocybin
     MUSIC_TYPE = "music_type"
     FILENAME = "filename"  # Exact filename of the data file (to know which file contains the data).
+    EXCLUSION_EXPLANATION = (
+        "explanation"  # Explanation for exclusion of the data (if applicable).
+    )
 
 
 class ExcludedICsMetadata(Enum):
@@ -108,6 +111,20 @@ class ICLabelComponentsClasses(Enum):
     LINE = "line_noise"
     CHANNEL = "ch_noise"
     OTHER = "other"
+
+
+class ExclusionCategories(Enum):
+    """
+    All reasons for exclusion of the experiment series from the data.
+    """
+
+    BAD_MUSIC = "bad_music"  # Wrong TAG channel signal
+    BAD_POWER_SPECTRUM = (
+        "bad_power_spectrum"  # Abnormal power spectrum (bad data quality).
+    )
+    MISSING_TRIALS = (
+        "missing_trials"  # Some of the trials are missing for the participant
+    )
 
 
 class PreprocessedDataVariants(Enum):
