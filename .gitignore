@@ -1,6 +1,7 @@
 data/participant_mappings
 data/raw
 data/processed
+data/excluded_participants
 plots/
 src/psilocybin_eeg.egg-info/
 notebooks/preprocessing_jan.ipynb

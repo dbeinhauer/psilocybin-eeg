@@ -432,12 +432,15 @@ class DatasetHandler(LoggerMixin):
         self.logger.info("Plotting successfully finished")
 
     def _load_all_tags(
-        self, filtered_df: pd.DataFrame
+        self,
+        filtered_df: pd.DataFrame,
+        data_type_to_load: PreprocessedDataVariants,
     ) -> tuple[list[TAGObject], float]:
         """
         Loads all TAG signals from the dataset based on the provided filtered metadata DataFrame.
 
-        :param filtered_df: The filtered metadata DataFrame containing the files to load TAG signals from
+        :param filtered_df: The filtered metadata DataFrame containing the files to load TAG signals from.
+        :param data_type_to_load: The type of the processed data to load for extracting the TAG signal.
         :return: A tuple containing a list of TAGObject instances and the sample frequency of the TAG signals.
         """
         all_tags = []
@@ -448,7 +451,7 @@ class DatasetHandler(LoggerMixin):
             raw = self.load_data_file(
                 filename,
                 is_processed=True,
-                processed_data_type=PreprocessedDataVariants.RAW_AFTER_ICA,
+                processed_data_type=data_type_to_load,
                 preload=False,
             )
             # Pick only the TAG channel — cheap to load
@@ -505,6 +508,7 @@ class DatasetHandler(LoggerMixin):
         condition_type: ConditionVariants,
         exclusion_categories: list[ExclusionCategories],
         plot_alignment_results: bool = False,
+        data_type_to_load: PreprocessedDataVariants = PreprocessedDataVariants.RAW_AFTER_ICA,
     ) -> tuple[list[np.ndarray], TimeAligner]:
         """
         Aligns the signals of the participants based on the TAG signal in time.
@@ -513,6 +517,7 @@ class DatasetHandler(LoggerMixin):
         :param condition_type: Condition type to include (placebo, psilocybin).
         :param exclusion_categories: Which categories of participants to exclude.
         :param plot_alignment_results: Whether to plot the alignment statistics.
+        :param data_type_to_load: The type of the processed data to load for extracting the TAG signal.
         :return: Returns list of aligned TAG signals and the TimeAligner object
         containing all alignment info (useful for future signal alignment of the EEG data).
         """
@@ -523,9 +528,36 @@ class DatasetHandler(LoggerMixin):
             [condition_type],
             exclusion_categories,
         )
-        all_tag_signals, sfreq = self._load_all_tags(filtered_df)
+        all_tag_signals, sfreq = self._load_all_tags(filtered_df, data_type_to_load)
         time_aligner = TimeAligner(all_tag_signals, sfreq)
         aligned_tags = time_aligner.crop_to_overlap()
         if plot_alignment_results:
             self.plot_aligned_tags(aligned_tags, time_aligner)
         return aligned_tags, time_aligner
+
+    def crop_all_raw_to_alignment(self, time_aligner: TimeAligner):
+        """
+        Crops all raw dataseries to the precomputed alignment.
+
+        :param time_aligner: TimeAligner object containing all alignment info (shifts and common time window).
+        """
+        shifts = time_aligner.shifts
+        for tag_object, shift in zip(time_aligner.all_tags, shifts):
+            filename = tag_object.filename
+            raw = self.load_data_file(
+                filename,
+                is_processed=True,
+                processed_data_type=PreprocessedDataVariants.RAW_AFTER_ICA,
+                preload=True,
+            )
+            crop_start, crop_end = time_aligner.get_crop_indices_for_signal(shift)
+            cropped = raw.crop(
+                tmin=crop_start / time_aligner.sfreq, tmax=crop_end / time_aligner.sfreq
+            )
+            assert (
+                cropped.n_times == time_aligner.end - time_aligner.start + 1
+            ), f"Cropped signal of file {filename} has length {cropped.n_times}, expected {time_aligner.end - time_aligner.start + 1}!"
+
+            self.save_data_file(
+                cropped, filename.split(".")[0], PreprocessedDataVariants.RAW_CROPPED
+            )

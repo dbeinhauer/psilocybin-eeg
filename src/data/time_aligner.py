@@ -49,12 +49,21 @@ class TimeAligner(LoggerMixin):
     """
 
     def __init__(self, all_tags: list[TAGObject], sfreq: float):
+        # All TAG signals to be aligned, along with their filenames for reference and sampling frequency.
         self.all_tags = all_tags
         self.sfreq = sfreq
+
+        # Correlation matrix and lag matrix (for highest correlation) between all pairs of the TAG signals.
         self.corr_matrix, self.lag_matrix = (
             self._compute_all_signal_cross_correlations()
         )
+
+        # Reference signal index (the one with the highest average correlation to all others),
+        # and the shifts needed to align all signals to this reference.
         self.reference_idx, self.shifts = self._find_reference_signal()
+
+        # Common overlapping region across all signals after applying the shifts to the reference signal.
+        self.start, self.end = self._find_latest_start_and_earliest_end_of_signals()
 
     def _compute_all_signal_cross_correlations(
         self,
@@ -107,26 +116,56 @@ class TimeAligner(LoggerMixin):
         self.logger.info(f"Average correlations: {np.round(avg_correlation, 4)}")
         return int(reference_idx), shifts
 
-    def crop_to_overlap(self) -> list[np.ndarray]:
+    def _find_latest_start_and_earliest_end_of_signals(
+        self,
+    ) -> tuple[int, int]:
+        """
+        Find the latest start and earliest end of all signals after applying the shifts
+        to reference signal. This determines the common overlapping region across all signals.
+
+        :return: Tuple of (latest start index, earliest end index) in the reference signal's time frame.
+        """
+        start = max(
+            self.shifts
+        )  # latest start across all signals (just the highest shift).
+
+        # Earliest end across signals is determined by the lowest index of the ends after shifts are applied.
+        signals = [tag.tag_signal for tag in self.all_tags]
+        ends = [start + len(sig) - shift for sig, shift in zip(signals, self.shifts)]
+        end = min(ends)
+
+        return start, end
+
+    def get_crop_indices_for_signal(self, shift: int) -> tuple[int, int]:
+        """
+        Calculates start and end index for the signal cropping based on
+        the shift to reference.
+
+        :param shift: Shift of the signal relative to reference (in samples).
+        :return: Tuple of (crop_start, crop_end) indices in the reference signal's time frame (in samples).
+        """
+        crop_start = self.start - shift
+        crop_end = crop_start + (self.end - self.start)
+        return crop_start, crop_end
+
+    def crop_to_overlap(
+        self,
+    ) -> list[np.ndarray]:
         """
         Crop all signals to their common overlapping region given the shifts.
         `shifts[i]` = how many samples signal i is shifted relative to the reference.
 
-        :return: List of cropped signals aligned to the reference.
+        :return: List of cropped signals.
         """
-        # The overlap starts at the latest start and ends at the earliest end
-        start = max(self.shifts)  # latest start across all signals
         signals = [tag.tag_signal for tag in self.all_tags]
-        ends = [start + len(sig) - shift for sig, shift in zip(signals, self.shifts)]
-        end = min(ends)  # earliest end across all signals
+        expected_length = self.end - self.start
 
         cropped = []
         for sig, shift in zip(signals, self.shifts):
-            crop_start = start - shift
-            crop_end = crop_start + (end - start)
+            crop_start, crop_end = self.get_crop_indices_for_signal(shift)
             cropped.append(sig[crop_start:crop_end])
 
         assert all(
-            len(sig) == len(cropped[0]) for sig in cropped
-        ), "All cropped signals should have the same length"
+            len(sig) == expected_length for sig in cropped
+        ), f"All cropped signals should have the same length ({expected_length}), got signals with lengths {[len(sig) for sig in cropped]}."
         return cropped
