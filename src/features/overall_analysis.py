@@ -27,7 +27,7 @@ from src.definitions.fields import (
 from src.utils.logging_config import LoggerMixin
 
 
-class EEGAnalysis(LoggerMixin):
+class EEGSummarizedAnalyzer(LoggerMixin):
     """
     Manages loading, persisting, and analysing preprocessed EEG data.
 
@@ -58,17 +58,36 @@ class EEGAnalysis(LoggerMixin):
         self,
         experiment_name: ExperimentNames,
         coordinate_system: CoordinateSystems,
+        music_types: List[MusicTypeVariants],
+        conditions: List[ConditionVariants],
+        exclusion_categories: List[ExclusionCategories],
     ) -> None:
         """
         :param experiment_name: Which experiment dataset to use.
         :param coordinate_system: Electrode coordinate system to use for loading.
+        :param music_types: Music types to include (e.g. Classical).
+        :param conditions: Experimental conditions to include (e.g. Placebo).
+        :param exclusion_categories: Exclusion categories to filter out bad recordings.
         """
         self.dataset_handler = DatasetHandler(experiment_name, coordinate_system)
         self._experiment_name = experiment_name
 
+        # Assign the filter parameters to instance variables for potential later use (e.g. in default save path generation).
+        self.music_types = music_types
+        self.conditions = conditions
+        self.exclusion_categories = exclusion_categories
+
+        self.filtered_df = DatasetFilter.filter_dataset_by_all_categories(
+            self.dataset_handler.dataset_metadata,
+            self.dataset_handler.excluded_participants_metadata,
+            self.music_types,
+            self.conditions,
+            self.exclusion_categories,
+        )
+
         self.data: Optional[np.ndarray] = None
         self.info: Optional[mne.Info] = None
-        self.filtered_df = None
+        self.resample_freq: Optional[float] = None
 
     # ------------------------------------------------------------------ #
     #  Data loading                                                         #
@@ -76,40 +95,24 @@ class EEGAnalysis(LoggerMixin):
 
     def load_and_prepare_data(
         self,
-        conditions: List[ConditionVariants],
-        music_types: List[MusicTypeVariants],
-        exclusion_categories: List[ExclusionCategories],
         resample_freq: float = 250.0,
         n_jobs: int = -1,
-        normalize: bool = True,
-    ) -> None:
+    ) -> tuple[np.ndarray, mne.Info]:
         """
-        Filter the dataset, load EEG files, resample, stack into a numpy array, and
-        optionally z-score normalise along the time axis.
+        Filter the dataset, load EEG files, resample, stack into a numpy array.
 
         Results are stored in :attr:`data` (``n_subjects × n_channels × n_times``)
         and :attr:`info`.
 
-        :param conditions: Experimental conditions to include (e.g. Placebo).
-        :param music_types: Music types to include (e.g. Classical).
-        :param exclusion_categories: Exclusion categories to filter out bad recordings.
         :param resample_freq: Target sampling frequency in Hz (default 250).
         :param n_jobs: Number of parallel jobs for resampling (-1 = all CPUs).
-        :param normalize: If ``True``, apply per-subject per-channel z-score
-            normalisation along the time axis after loading.
+        :return: Tuple ``(data, info)`` where *data* is the loaded EEG array and *info* is the MNE Info object.
         """
-        self.filtered_df = DatasetFilter.filter_dataset_by_all_categories(
-            self.dataset_handler.dataset_metadata,
-            self.dataset_handler.excluded_participants_metadata,
-            music_types,
-            conditions,
-            exclusion_categories,
-        )
 
         self.logger.info(
             f"Loading {len(self.filtered_df)} recording(s) "
-            f"(condition={[c.value for c in conditions]}, "
-            f"music={[m.value for m in music_types]})."
+            f"(condition={[c.value for c in self.conditions]}, "
+            f"music={[m.value for m in self.music_types]})."
         )
 
         raws: list[mne.io.Raw] = []
@@ -125,12 +128,12 @@ class EEGAnalysis(LoggerMixin):
 
         # Store MNE Info from first file (before any resampling changes it)
         self._refresh_info(raws[0].info)
+        self.resample_freq = resample_freq
 
         self.data = np.array([r.get_data() for r in raws])  # (n_subj, n_ch, n_times)
         self.logger.info(f"Data array shape: {self.data.shape}")
 
-        if normalize:
-            self.normalize()
+        return self.data, self.info
 
     def _refresh_info(self, info: mne.Info) -> None:
         """Store an mne.Info copy taken from the first loaded raw object."""
@@ -174,9 +177,10 @@ class EEGAnalysis(LoggerMixin):
 
     def load_data(
         self,
-        load_path: Path,
+        load_path: Optional[Path] = None,
         info_filename: Optional[str] = None,
-    ) -> None:
+        resample_freq: float = 250.0,
+    ) -> tuple[np.ndarray, mne.Info]:
         """
         Load a previously saved ``.npy`` data array from disk.
 
@@ -184,8 +188,13 @@ class EEGAnalysis(LoggerMixin):
         :param info_filename: Optional filename from the dataset metadata to use for
             loading ``mne.Info``. When provided, the Info object is populated from
             the corresponding processed file.
+        :param resample_freq: Resampling frequency of the stored data.
+        :return: Tuple ``(data, info)`` where *data* is the loaded EEG array and *info* is the MNE Info object.
         :raises FileNotFoundError: If *load_path* does not exist.
         """
+        if load_path is None:
+            load_path = self._default_save_path()
+
         load_path = Path(load_path)
         if not load_path.exists():
             raise FileNotFoundError(f"Data file not found: {load_path}")
@@ -202,20 +211,24 @@ class EEGAnalysis(LoggerMixin):
             )
             self._refresh_info(raw.info)
 
+        # Store the resampling frequency.
+        self.resample_freq = resample_freq
+
+        return self.data, self.info
+
     def _default_save_path(self) -> Path:
         """Build a default save path from the current filtered DataFrame."""
         if self.filtered_df is None or self.filtered_df.empty:
             return (
                 ProjectPaths.PROCESSED_DATA_DIR
                 / self._experiment_name.value
-                / "concatenated"
+                / PreprocessedDataVariants.CONCATENATED.value
                 / "eeg_data.npy"
             )
 
         # Try to derive a meaningful name from the first row.
-        first = self.filtered_df.iloc[0]
-        condition = first.get(SingleDataMetadata.CONDITION, "unknown")
-        music = first.get(SingleDataMetadata.MUSIC_TYPE, "unknown")
+        condition = self.conditions[0] if self.conditions else "unknown"
+        music = self.music_types[0] if self.music_types else "unknown"
         if hasattr(condition, "value"):
             condition = condition.value
         if hasattr(music, "value"):
@@ -224,7 +237,7 @@ class EEGAnalysis(LoggerMixin):
         return (
             ProjectPaths.PROCESSED_DATA_DIR
             / self._experiment_name.value
-            / "concatenated"
+            / PreprocessedDataVariants.CONCATENATED.value
             / name
         )
 
@@ -282,3 +295,142 @@ class EEGAnalysis(LoggerMixin):
         mean_loo_isc = loo_isc.mean(axis=0)  # (n_channels,)
         self.logger.info("LOO-ISC computation complete.")
         return loo_isc, mean_loo_isc
+
+    def compute_pairwise_isc(self) -> np.ndarray:
+        """
+        Compute pairwise Inter-Subject Correlation averaged across all channels.
+
+        For every pair of subjects (i, j) the Pearson correlation is computed
+        per channel and then averaged, yielding a single scalar per pair.
+
+        :return: Symmetric matrix of shape ``(n_subjects, n_subjects)`` where
+            entry ``[i, j]`` is the mean-across-channels Pearson *r* between
+            subject *i* and subject *j*.  Diagonal is 1.0.
+        :raises RuntimeError: If no data has been loaded yet.
+        """
+        if self.data is None:
+            raise RuntimeError("No data loaded. Call load_and_prepare_data() first.")
+
+        n_subjects, n_channels, _ = self.data.shape
+        pairwise = np.eye(n_subjects)
+
+        self.logger.info(
+            f"Computing pairwise ISC for {n_subjects} subject(s), "
+            f"{n_channels} channel(s)."
+        )
+
+        for i in range(n_subjects):
+            for j in range(i + 1, n_subjects):
+                rs = np.array(
+                    [
+                        pearsonr(self.data[i, ch], self.data[j, ch])[0]
+                        for ch in range(n_channels)
+                    ]
+                )
+                mean_r = np.nanmean(rs)
+                pairwise[i, j] = mean_r
+                pairwise[j, i] = mean_r
+
+        self.logger.info("Pairwise ISC computation complete.")
+        return pairwise
+
+    def compute_pairwise_isc_per_channel(self) -> np.ndarray:
+        """
+        Compute pairwise Inter-Subject Correlation for every channel separately.
+
+        :return: Array of shape ``(n_channels, n_subjects, n_subjects)``.
+            For each channel *c*, entry ``[c, i, j]`` is the Pearson *r* between
+            subject *i* and subject *j* on that channel.  Diagonal is 1.0.
+        :raises RuntimeError: If no data has been loaded yet.
+        """
+        if self.data is None:
+            raise RuntimeError("No data loaded. Call load_and_prepare_data() first.")
+
+        n_subjects, n_channels, _ = self.data.shape
+        pairwise = np.zeros((n_channels, n_subjects, n_subjects))
+
+        self.logger.info(
+            f"Computing per-channel pairwise ISC "
+            f"({n_subjects} subjects × {n_channels} channels)."
+        )
+
+        for ch in range(n_channels):
+            for i in range(n_subjects):
+                pairwise[ch, i, i] = 1.0
+                for j in range(i + 1, n_subjects):
+                    r, _ = pearsonr(self.data[i, ch], self.data[j, ch])
+                    pairwise[ch, i, j] = r
+                    pairwise[ch, j, i] = r
+
+        self.logger.info("Per-channel pairwise ISC computation complete.")
+        return pairwise
+
+    def compute_sliding_window_isc(
+        self,
+        window_sec: float = 5.0,
+        step_sec: float = 2.5,
+        sfreq: Optional[float] = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Compute time-resolved leave-one-out ISC using a sliding window.
+
+        For each window position, the LOO-ISC is computed identically to
+        :meth:`compute_loo_isc` but restricted to the samples within that
+        window.  Results are averaged across subjects to yield a time course
+        of ISC per channel.
+
+        :param window_sec: Window length in seconds.
+        :param step_sec: Step size (hop) in seconds.
+        :param sfreq: Sampling frequency.  If ``None``, taken from
+            ``self.info['sfreq']``.
+        :return: Tuple ``(isc_timecourse, window_times)`` where
+
+            * ``isc_timecourse`` has shape ``(n_windows, n_channels)`` —
+              mean LOO-ISC in each window.
+            * ``window_times`` has shape ``(n_windows,)`` — centre time (in
+              seconds) of each window.
+
+        :raises RuntimeError: If no data has been loaded yet.
+        """
+        if self.data is None:
+            raise RuntimeError("No data loaded. Call load_and_prepare_data() first.")
+
+        if sfreq is None:
+            if self.info is None:
+                raise RuntimeError("No MNE Info available; pass sfreq explicitly.")
+            sfreq = self.info["sfreq"]
+
+        n_subjects, n_channels, n_times = self.data.shape
+        win_samples = int(round(window_sec * sfreq))
+        step_samples = int(round(step_sec * sfreq))
+
+        # Build window start indices
+        starts = np.arange(0, n_times - win_samples + 1, step_samples)
+        n_windows = len(starts)
+
+        self.logger.info(
+            f"Sliding-window ISC: {n_windows} windows "
+            f"(win={window_sec}s, step={step_sec}s, sfreq={sfreq} Hz)."
+        )
+
+        isc_timecourse = np.zeros((n_windows, n_channels))
+
+        for w_idx, start in enumerate(starts):
+            end = start + win_samples
+            window_data = self.data[:, :, start:end]  # (n_subj, n_ch, win_samples)
+
+            # LOO-ISC inside this window, averaged across subjects
+            window_isc = np.zeros((n_subjects, n_channels))
+            for s in range(n_subjects):
+                others_mean = np.delete(window_data, s, axis=0).mean(axis=0)
+                for ch in range(n_channels):
+                    r, _ = pearsonr(window_data[s, ch], others_mean[ch])
+                    window_isc[s, ch] = r
+
+            isc_timecourse[w_idx] = window_isc.mean(axis=0)  # average over subjects
+
+        # Centre time of each window in seconds
+        window_times = (starts + win_samples / 2) / sfreq
+
+        self.logger.info("Sliding-window ISC computation complete.")
+        return isc_timecourse, window_times

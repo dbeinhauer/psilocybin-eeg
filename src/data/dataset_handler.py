@@ -417,13 +417,11 @@ class DatasetHandler(LoggerMixin):
                         print(excluded_row[ExcludedICsMetadata.IC_ID.value])
                         DatasetPlotter.plot_raw_dataseries(
                             raw_data,
-                            save_fig=f"{excluded_row[
-                                ExcludedICsMetadata.ORIGINAL_FILENAME.value
-                            ].split(".")[0]}-{excluded_row[ExcludedICsMetadata.IC_ID.value]}-{excluded_row[ExcludedICsMetadata.IC_CATEGORY.value]}",
+                            save_fig=f"{excluded_row[ExcludedICsMetadata.ORIGINAL_FILENAME.value].split('.')[0]}-{excluded_row[ExcludedICsMetadata.IC_ID.value]}-{excluded_row[ExcludedICsMetadata.IC_CATEGORY.value]}",
                             is_excluded=True,
                             excluded_ic_id=excluded_row[
                                 ExcludedICsMetadata.IC_ID.value
-                            ],  # j,
+                            ],
                             plot_variant=plot_variant,
                             variant_name=data_variant,
                             title=f"IC - {excluded_row[ExcludedICsMetadata.IC_ID.value]}, {excluded_row[ExcludedICsMetadata.IC_CATEGORY.value]}, p: {excluded_row[ExcludedICsMetadata.MAIN_PROBABILITY.value]:.2f}",
