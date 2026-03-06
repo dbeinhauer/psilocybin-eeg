@@ -27,6 +27,21 @@ from src.definitions.fields import (
 from src.utils.logging_config import LoggerMixin
 
 
+# ---------------------------------------------------------------------------
+# Module-level constants
+# ---------------------------------------------------------------------------
+
+#: Standard EEG frequency bands used for band-specific ISC analysis.
+#: Each entry maps a band name to ``(l_freq, h_freq)`` in Hz.
+FREQUENCY_BANDS: dict[str, tuple[float, float]] = {
+    "delta": (1.0, 4.0),
+    "theta": (4.0, 8.0),
+    "alpha": (8.0, 13.0),
+    "beta": (13.0, 30.0),
+    "gamma": (30.0, 70.0),
+}
+
+
 class EEGSummarizedAnalyzer(LoggerMixin):
     """
     Manages loading, persisting, and analysing preprocessed EEG data.
@@ -258,7 +273,69 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         self.logger.info(f"Z-score normalisation applied along axis={axis}.")
 
     # ------------------------------------------------------------------ #
-    #  Analysis                                                             #
+    #  Analysis — internal helpers                                          #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _compute_loo_isc_from_data(
+        data: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Core LOO-ISC computation on an arbitrary EEG data array.
+
+        :param data: Array of shape ``(n_subjects, n_channels, n_times)``.
+        :return: ``(loo_isc, mean_loo_isc)`` with shapes
+            ``(n_subjects, n_channels)`` and ``(n_channels,)``.
+        """
+        n_subjects, n_channels, _ = data.shape
+        loo_isc = np.zeros((n_subjects, n_channels))
+        for s in range(n_subjects):
+            others_mean = np.delete(data, s, axis=0).mean(axis=0)  # (n_ch, n_t)
+            for ch in range(n_channels):
+                r, _ = pearsonr(data[s, ch], others_mean[ch])
+                loo_isc[s, ch] = r
+        return loo_isc, loo_isc.mean(axis=0)
+
+    @staticmethod
+    def _compute_sliding_window_isc_from_data(
+        data: np.ndarray,
+        window_sec: float,
+        step_sec: float,
+        sfreq: float,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Core sliding-window LOO-ISC computation on an arbitrary EEG data array.
+
+        :param data: Array of shape ``(n_subjects, n_channels, n_times)``.
+        :param window_sec: Window length in seconds.
+        :param step_sec: Step size in seconds.
+        :param sfreq: Sampling frequency in Hz.
+        :return: ``(isc_timecourse, window_times)`` with shapes
+            ``(n_windows, n_channels)`` and ``(n_windows,)``.
+        """
+        n_subjects, n_channels, n_times = data.shape
+        win_samples = int(round(window_sec * sfreq))
+        step_samples = int(round(step_sec * sfreq))
+        starts = np.arange(0, n_times - win_samples + 1, step_samples)
+        n_windows = len(starts)
+
+        isc_timecourse = np.zeros((n_windows, n_channels))
+        for w_idx, start in enumerate(starts):
+            end = start + win_samples
+            window_data = data[:, :, start:end]
+            window_isc = np.zeros((n_subjects, n_channels))
+            for s in range(n_subjects):
+                others_mean = np.delete(window_data, s, axis=0).mean(axis=0)
+                for ch in range(n_channels):
+                    r, _ = pearsonr(window_data[s, ch], others_mean[ch])
+                    window_isc[s, ch] = r
+            isc_timecourse[w_idx] = window_isc.mean(axis=0)
+
+        window_times = (starts + win_samples / 2) / sfreq
+        return isc_timecourse, window_times
+
+    # ------------------------------------------------------------------ #
+    #  Analysis — public methods                                            #
     # ------------------------------------------------------------------ #
 
     def compute_loo_isc(self) -> tuple[np.ndarray, np.ndarray]:
@@ -280,19 +357,10 @@ class EEGSummarizedAnalyzer(LoggerMixin):
             raise RuntimeError("No data loaded. Call load_and_prepare_data() first.")
 
         n_subjects, n_channels, _ = self.data.shape
-        loo_isc = np.zeros((n_subjects, n_channels))
-
         self.logger.info(
             f"Computing LOO-ISC for {n_subjects} subject(s), {n_channels} channel(s)."
         )
-
-        for s in range(n_subjects):
-            others_mean = np.delete(self.data, s, axis=0).mean(axis=0)  # (n_ch, n_t)
-            for ch in range(n_channels):
-                r, _ = pearsonr(self.data[s, ch], others_mean[ch])
-                loo_isc[s, ch] = r
-
-        mean_loo_isc = loo_isc.mean(axis=0)  # (n_channels,)
+        loo_isc, mean_loo_isc = self._compute_loo_isc_from_data(self.data)
         self.logger.info("LOO-ISC computation complete.")
         return loo_isc, mean_loo_isc
 
@@ -400,37 +468,149 @@ class EEGSummarizedAnalyzer(LoggerMixin):
                 raise RuntimeError("No MNE Info available; pass sfreq explicitly.")
             sfreq = self.info["sfreq"]
 
-        n_subjects, n_channels, n_times = self.data.shape
-        win_samples = int(round(window_sec * sfreq))
-        step_samples = int(round(step_sec * sfreq))
-
-        # Build window start indices
-        starts = np.arange(0, n_times - win_samples + 1, step_samples)
-        n_windows = len(starts)
-
+        n_windows = len(
+            np.arange(
+                0,
+                self.data.shape[2] - int(round(window_sec * sfreq)) + 1,
+                int(round(step_sec * sfreq)),
+            )
+        )
         self.logger.info(
             f"Sliding-window ISC: {n_windows} windows "
             f"(win={window_sec}s, step={step_sec}s, sfreq={sfreq} Hz)."
         )
-
-        isc_timecourse = np.zeros((n_windows, n_channels))
-
-        for w_idx, start in enumerate(starts):
-            end = start + win_samples
-            window_data = self.data[:, :, start:end]  # (n_subj, n_ch, win_samples)
-
-            # LOO-ISC inside this window, averaged across subjects
-            window_isc = np.zeros((n_subjects, n_channels))
-            for s in range(n_subjects):
-                others_mean = np.delete(window_data, s, axis=0).mean(axis=0)
-                for ch in range(n_channels):
-                    r, _ = pearsonr(window_data[s, ch], others_mean[ch])
-                    window_isc[s, ch] = r
-
-            isc_timecourse[w_idx] = window_isc.mean(axis=0)  # average over subjects
-
-        # Centre time of each window in seconds
-        window_times = (starts + win_samples / 2) / sfreq
-
+        isc_timecourse, window_times = self._compute_sliding_window_isc_from_data(
+            self.data, window_sec=window_sec, step_sec=step_sec, sfreq=sfreq
+        )
         self.logger.info("Sliding-window ISC computation complete.")
         return isc_timecourse, window_times
+
+    # ------------------------------------------------------------------ #
+    #  Analysis — frequency-band helpers                                    #
+    # ------------------------------------------------------------------ #
+
+    def filter_to_band(
+        self,
+        l_freq: float,
+        h_freq: float,
+        sfreq: Optional[float] = None,
+    ) -> np.ndarray:
+        """
+        Band-pass filter :attr:`data` and return the filtered copy.
+
+        Uses MNE's FIR filter (Hamming window) applied independently to each
+        subject's data matrix.
+
+        :param l_freq: Low cutoff frequency in Hz.
+        :param h_freq: High cutoff frequency in Hz.
+        :param sfreq: Sampling frequency.  Falls back to :attr:`resample_freq`
+            or ``self.info['sfreq']`` when ``None``.
+        :return: Filtered copy of :attr:`data`, same shape
+            ``(n_subjects, n_channels, n_times)``.
+        :raises RuntimeError: If no data has been loaded yet.
+        """
+        if self.data is None:
+            raise RuntimeError("No data loaded.")
+        if sfreq is None:
+            sfreq = (
+                self.resample_freq
+                if self.resample_freq is not None
+                else self.info["sfreq"]
+            )
+
+        filtered = np.empty_like(self.data, dtype=float)
+        for s in range(self.data.shape[0]):
+            filtered[s] = mne.filter.filter_data(
+                self.data[s].astype(float),
+                sfreq=sfreq,
+                l_freq=l_freq,
+                h_freq=h_freq,
+                method="fir",
+                fir_window="hamming",
+                verbose=False,
+            )
+        return filtered
+
+    def compute_band_isc(
+        self,
+        bands: Optional[dict[str, tuple[float, float]]] = None,
+        sfreq: Optional[float] = None,
+    ) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+        """
+        Compute LOO-ISC separately for each frequency band.
+
+        For each band the data is band-pass filtered first, then LOO-ISC is
+        computed identically to :meth:`compute_loo_isc`.
+
+        :param bands: Mapping of band name to ``(l_freq, h_freq)`` in Hz.
+            Defaults to :data:`FREQUENCY_BANDS`
+            (delta / theta / alpha / beta / gamma).
+        :param sfreq: Sampling frequency override.  Falls back to
+            :attr:`resample_freq` or ``self.info['sfreq']``.
+        :return: Dict mapping each band name to
+            ``(loo_isc, mean_loo_isc)`` with shapes
+            ``(n_subjects, n_channels)`` and ``(n_channels,)``.
+        :raises RuntimeError: If no data has been loaded yet.
+        """
+        if self.data is None:
+            raise RuntimeError("No data loaded.")
+        if bands is None:
+            bands = FREQUENCY_BANDS
+
+        results: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        for name, (l_freq, h_freq) in bands.items():
+            self.logger.info(f"Band ISC — {name} [{l_freq}–{h_freq} Hz].")
+            filtered = self.filter_to_band(l_freq, h_freq, sfreq)
+            results[name] = self._compute_loo_isc_from_data(filtered)
+        self.logger.info("Band ISC computation complete.")
+        return results
+
+    def compute_band_sliding_window_isc(
+        self,
+        bands: Optional[dict[str, tuple[float, float]]] = None,
+        window_sec: float = 5.0,
+        step_sec: float = 2.5,
+        sfreq: Optional[float] = None,
+    ) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+        """
+        Compute time-resolved LOO-ISC via a sliding window, separated by
+        frequency band.
+
+        Each band is band-pass filtered first; then :meth:`compute_sliding_window_isc`
+        logic is applied inside each window.
+
+        :param bands: Mapping of band name to ``(l_freq, h_freq)`` in Hz.
+            Defaults to :data:`FREQUENCY_BANDS`.
+        :param window_sec: Window length in seconds.
+        :param step_sec: Step size (hop) in seconds.
+        :param sfreq: Sampling frequency override.  Falls back to
+            :attr:`resample_freq` or ``self.info['sfreq']``.
+        :return: Dict mapping each band name to
+            ``(isc_timecourse, window_times)`` with shapes
+            ``(n_windows, n_channels)`` and ``(n_windows,)``.
+        :raises RuntimeError: If no data has been loaded yet.
+        """
+        if self.data is None:
+            raise RuntimeError("No data loaded.")
+        if bands is None:
+            bands = FREQUENCY_BANDS
+        if sfreq is None:
+            sfreq = (
+                self.resample_freq
+                if self.resample_freq is not None
+                else self.info["sfreq"]
+            )
+
+        results: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        for name, (l_freq, h_freq) in bands.items():
+            self.logger.info(
+                f"Band sliding-window ISC — {name} [{l_freq}–{h_freq} Hz], "
+                f"win={window_sec}s, step={step_sec}s."
+            )
+            filtered = self.filter_to_band(l_freq, h_freq, sfreq)
+            isc_tc, times = self._compute_sliding_window_isc_from_data(
+                filtered, window_sec=window_sec, step_sec=step_sec, sfreq=sfreq
+            )
+            results[name] = (isc_tc, times)
+        self.logger.info("Band sliding-window ISC computation complete.")
+        return results
