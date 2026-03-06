@@ -143,6 +143,7 @@ class PreprocessedDataVariants(Enum):
         "raw_excluded_ic"  # Raw dataseries of excluded component selected by ICA.
     )
     RAW_CROPPED = "cropped"  # Raw dataseries after cropping to the common time window across all participants (after time alignment).
+    CONCATENATED = "concatenated"  # Concatenated data across all participants (after stacking into one array).
 
 
 # All data variants that are `mne.io.Raw` types.
