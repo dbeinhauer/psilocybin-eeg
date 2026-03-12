@@ -4,6 +4,7 @@ Tests for src/utils/logging_config.py — Logging setup and helpers.
 
 import pytest
 import logging
+import logging.handlers
 from pathlib import Path
 
 from src.utils.logging_config import (
