@@ -17,7 +17,7 @@ from typing import List, Optional
 
 import numpy as np
 import mne
-from scipy.stats import zscore, pearsonr
+from scipy.stats import zscore
 
 from src.preprocessing.pipeline import DatasetHandler
 from src.filtering.dataset_filter import DatasetFilter
@@ -38,7 +38,6 @@ from src.analysis.isc import (
     compute_sliding_window_isc as _compute_sliding_window_isc,
 )
 from src.utils.logging_config import LoggerMixin
-
 
 # ---------------------------------------------------------------------------
 # Module-level constants
@@ -289,9 +288,7 @@ class EEGSummarizedAnalyzer(LoggerMixin):
     #  Conversion to AnalysisData                                           #
     # ------------------------------------------------------------------ #
 
-    def to_analysis_data(
-        self, label: Optional[str] = None
-    ) -> "AnalysisData":  # noqa: F821
+    def to_analysis_data(self, label: Optional[str] = None) -> "AnalysisData":  # noqa: F821
         """
         Wrap the loaded data in an :class:`~src.analysis.data_representations.AnalysisData`
         container for use with the generic analysis and visualisation pipeline.

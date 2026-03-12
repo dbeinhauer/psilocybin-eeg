@@ -10,7 +10,7 @@ from typing import Type
 import mne
 import pandas as pd
 
-from src.utils.logging_config import LoggerMixin, LogLevel
+from src.utils.logging_config import LoggerMixin
 from src.definitions.fields import (
     SingleDataMetadata,
     ConditionVariants,

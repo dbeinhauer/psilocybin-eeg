@@ -163,7 +163,7 @@ class TimeAligner(LoggerMixin):
             crop_start, crop_end = self.get_crop_indices_for_signal(shift)
             cropped.append(sig[crop_start:crop_end])
 
-        assert all(
-            len(sig) == expected_length for sig in cropped
-        ), f"All cropped signals should have the same length ({expected_length}), got signals with lengths {[len(sig) for sig in cropped]}."
+        assert all(len(sig) == expected_length for sig in cropped), (
+            f"All cropped signals should have the same length ({expected_length}), got signals with lengths {[len(sig) for sig in cropped]}."
+        )
         return cropped
