@@ -24,8 +24,8 @@ from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 from matplotlib.patches import Patch, Rectangle
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-from src.features.isc import FREQUENCY_BANDS
-from src.features.data_representations import AnalysisData
+from src.analysis.isc import FREQUENCY_BANDS
+from src.analysis.data_representations import AnalysisData
 
 
 # ---------------------------------------------------------------------------

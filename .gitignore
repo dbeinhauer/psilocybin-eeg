@@ -1,6 +1,6 @@
-data/participant_mappings
 data/raw
 data/processed
+data/interim
 data/excluded_participants
 plots/
 src/psilocybin_eeg.egg-info/

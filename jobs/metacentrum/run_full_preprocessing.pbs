@@ -40,7 +40,7 @@ cd "$SCRATCHDIR"
 cat << 'EOF' > run_inside.sh
 #!/bin/bash
 source /opt/myproject/.venv/bin/activate
-python /mnt/scripts/run_dataset_preprocessing.py \
+python /mnt/scripts/run_preprocessing.py \
 --raw_processing \
 --process_excluded_ic \
 --plot_results \

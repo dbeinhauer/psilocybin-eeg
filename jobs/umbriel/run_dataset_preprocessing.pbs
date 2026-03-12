@@ -11,4 +11,4 @@
 
 cd $PBS_O_WORKDIR
 
-singularity exec /home/dbeinhauer/psilocybin-eeg python scripts/run_dataset_preprocessing.py
+singularity exec /home/dbeinhauer/psilocybin-eeg python scripts/run_preprocessing.py

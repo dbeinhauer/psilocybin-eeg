@@ -3,9 +3,9 @@ This module contains the EEGSummarizedAnalyzer class which encapsulates
 data loading, persistence and high-level analysis of preprocessed EEG data
 across subjects.
 
-Computation helpers delegate to :mod:`src.features.isc` (pure numpy
+Computation helpers delegate to :mod:`src.analysis.isc` (pure numpy
 functions) and adapter helpers delegate to
-:mod:`src.features.data_representations` so that the same analysis routines
+:mod:`src.analysis.data_representations` so that the same analysis routines
 work on any data representation (raw channels, ICA activations, wavelet
 amplitudes, mean responses, …).
 """
@@ -19,8 +19,8 @@ import numpy as np
 import mne
 from scipy.stats import zscore, pearsonr
 
-from src.data.dataset_handler import DatasetHandler
-from src.data.dataset_filtering import DatasetFilter
+from src.preprocessing.pipeline import DatasetHandler
+from src.filtering.dataset_filter import DatasetFilter
 from src.definitions.constants import ProjectPaths
 from src.definitions.fields import (
     CoordinateSystems,
@@ -31,7 +31,7 @@ from src.definitions.fields import (
     PreprocessedDataVariants,
     SingleDataMetadata,
 )
-from src.features.isc import (
+from src.analysis.isc import (
     compute_loo_isc as _compute_loo_isc,
     compute_pairwise_isc as _compute_pairwise_isc,
     compute_pairwise_isc_per_feature as _compute_pairwise_isc_per_feature,

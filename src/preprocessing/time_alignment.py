@@ -11,32 +11,10 @@ Key classes:
       and crops raw EEG data to the common overlapping time window.
 """
 
-from pathlib import Path
-import pandas as pd
 import numpy as np
-import mne
-from mne_icalabel.iclabel import iclabel_label_components
 from scipy.signal import correlate, correlation_lags
-import seaborn as sns
-import matplotlib.pyplot as plt
 
-# from src.data.dataset_handler import DatasetHandler
-from src.data.dataset_preprocessing import DatasetPreprocessor
-from src.data.dataset_filtering import DatasetFilter
-from src.definitions.fields import (
-    SingleDataMetadata,
-    ChannelTypes,
-    ExperimentNames,
-    CoordinateSystems,
-    PreprocessedDataVariants,
-    ICLabelComponentsClasses,
-    ExcludedICsMetadata,
-    MusicTypeVariants,
-    ConditionVariants,
-    ExclusionCategories,
-)
 from src.utils.logging_config import LoggerMixin
-from src.definitions.constants import ProjectPaths
 
 
 class TAGObject:

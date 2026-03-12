@@ -1,5 +1,6 @@
 """
-This module contains implementation of the main dataset handler class.
+This module contains the top-level orchestration for the EEG preprocessing
+pipeline (current DatasetHandler preprocessing).
 """
 
 from typing import Any
@@ -24,12 +25,128 @@ from src.definitions.fields import (
     ExclusionCategories,
 )
 from src.definitions.mappings import RAW_CHANNEL_NAMES
-from src.data.dataset_parsing import DatasetParser
-from src.data.dataset_preprocessing import DatasetPreprocessor
-from src.data.dataset_filtering import DatasetFilter
-from src.data.time_aligner import TimeAligner, TAGObject
-from src.data.dataset_plotting import DatasetPlotter
+from src.io.parsing import DatasetParser
+from src.io.loading import load_data_file, get_preprocessing_results_path
+from src.io.saving import save_data_file
+from src.preprocessing.channel_prep import (
+    load_coordinates_file,
+    add_coordinates_montage,
+    exclude_selected_channels,
+    crop_start_and_end_of_dataseries,
+)
+from src.preprocessing.filtering import (
+    apply_filters_to_data,
+    apply_ransac_filter,
+    interpolate_bad_channels,
+    detect_bad_epochs,
+)
+from src.preprocessing.ica import (
+    get_ic_labeling_probabilities,
+    apply_ica_component_filtering,
+)
+from src.preprocessing.time_alignment import TimeAligner, TAGObject
+from src.filtering.dataset_filter import DatasetFilter
+from src.visualization.preprocessing_plots import DatasetPlotter
 from src.utils.logging_config import LoggerMixin
+
+
+class DatasetPreprocessor(LoggerMixin):
+    """
+    Handles EEG data preprocessing including channel renaming, montage application,
+    filtering, bad channel interpolation, ICA decomposition, and artifact component removal.
+
+    Delegates to focused modules in src.preprocessing (channel_prep, filtering, ica).
+    """
+
+    def __init__(self, coordinates_file_path: Path, excluded_coordinates_path: Path):
+        """
+        Initialize the preprocessor with electrode coordinate and exclusion information.
+
+        :param coordinates_file_path: Path to the SFP montage file with electrode positions.
+        :param excluded_coordinates_path: Path to CSV listing electrodes to exclude (e.g. boundary electrodes).
+        """
+        self.montage = load_coordinates_file(coordinates_file_path)
+        # List of all electrodes that we want to exclude.
+        self.electrodes_to_exclude: list[str] = (
+            pd.read_csv(excluded_coordinates_path)["electrode_name"]
+            .str.strip()
+            .tolist()
+        )
+
+    def _data_preparation(self, data: mne.io.Raw) -> tuple[mne.io.Raw, mne.io.Raw]:
+        """
+        Do first preparation of the raw data.
+
+        Namely it adds the electrode coordinates, excludes the electrodes
+        that has problematic placement, crops first and last 10 seconds of
+        the data series (typically noisy).
+
+        :param data: Data to be processed.
+        :return: Returns tuple of prepared data splitted on EEG and rest of channels.
+        """
+        prepared_data = crop_start_and_end_of_dataseries(
+            exclude_selected_channels(
+                add_coordinates_montage(data, self.montage, logger=self.logger),
+                self.electrodes_to_exclude,
+                logger=self.logger,
+            ),
+            logger=self.logger,
+        )
+
+        eeg_data = prepared_data.copy().pick_types(eeg=True)
+        aux_data = prepared_data.copy().pick_types(eeg=False, ecg=True, stim=True)
+
+        return eeg_data, aux_data
+
+    def _filter_data(self, eeg_data: mne.io.Raw) -> mne.io.Raw:
+        """
+        Applies notch and FIR filters to remove the line noise, and
+        applies Ransac algorithm to detect badchannels.
+
+        :param eeg_data: EEG data to do the preprocessing on.
+        :return: Returns filtered EEG data.
+        """
+        return apply_ransac_filter(
+            apply_filters_to_data(eeg_data, logger=self.logger),
+            logger=self.logger,
+        )
+
+    def initial_preprocessing_and_bad_channel_interpolation(
+        self, data: mne.io.Raw
+    ) -> tuple[mne.io.Raw, mne.io.Raw]:
+        """
+        Run initial preprocessing steps (electrode naming,
+        time trimming, electrodes exclusion, line noise filtering, bad
+        channel interpolation).
+
+        :param data: Raw EEG data series from one measurement.
+        :return: Tuple of preprocessed data with interpolated bad channels and rest of channels (other than EEG).
+        """
+        self.logger.info(
+            "Starting initial data preprocessing and interpolation of the bad channels."
+        )
+        # Prepare the data for preprocessing.
+        eeg_data, aux_data = self._data_preparation(data)
+        # Filter, interpolate the bad channels by using average reference and annotate bad epochs.
+        eeg_data = detect_bad_epochs(
+            interpolate_bad_channels(self._filter_data(eeg_data), logger=self.logger)
+        )
+        return eeg_data, aux_data
+
+    def apply_ica_component_filtering(
+        self,
+        interpolated_data: mne.io.Raw,
+    ) -> tuple[mne.io.Raw, mne.preprocessing.ICA, np.ndarray]:
+        """
+        Runs ICA and then executes ICLabel tool to predict probabilities
+        of the several artifacts in each component, excludes the artifact
+        components and returns the filtered signal.
+
+        :param interpolated_data: Already preprocessed and interpolated data without artifacts.
+        :return: Returns tuple of processed data series by applying ICLabeling, ICAs with
+        marked artifact ICs and array of probabilities of each IC artifact class.
+        """
+        return apply_ica_component_filtering(interpolated_data, logger=self.logger)
 
 
 class DatasetHandler(LoggerMixin):
@@ -167,32 +284,15 @@ class DatasetHandler(LoggerMixin):
         :param is_processed: Flag whether the data to load is already processed or not
         (from where we want to load the data).
         :param processed_data_type: Type of the processed file to load
+        :param preload: Whether to preload data into memory.
         :return: Returns loaded data in the Raw data type.
         """
-        data_path = self.raw_data_dir / data_filename
-        if is_processed:
-            # Load processed data file
-            data_path = self.get_preprocessing_results_path(
-                data_filename.split(".")[0], data_type=processed_data_type
-            )
-            if processed_data_type == PreprocessedDataVariants.IC_PROBABILITIES:
-                # Load IC Probabilities
-                return np.load(data_path)
-            elif processed_data_type == PreprocessedDataVariants.ICA_COMPONENTS:
-                # Load ICA components
-                return mne.preprocessing.read_ica(
-                    data_path,
-                )
-            else:
-                # We need this else for Raw dataseries are in '.fif' format.
-                return mne.io.read_raw_fif(
-                    data_path,
-                    preload=preload,
-                )
-
-        # Load unprocessed raw data are in '.edf' format.
-        return mne.io.read_raw_edf(
-            data_path,
+        return load_data_file(
+            self.raw_data_dir,
+            self.processed_data_dir,
+            data_filename,
+            is_processed=is_processed,
+            processed_data_type=processed_data_type,
             preload=preload,
         )
 
@@ -206,13 +306,9 @@ class DatasetHandler(LoggerMixin):
         :param data_type: Type of the processed data.
         :return: Returns path to the specified processing results.
         """
-        suffix = ""
-        if data_type in RAW_DATA_VARIANTS + [PreprocessedDataVariants.ICA_COMPONENTS]:
-            suffix = ".fif"
-        elif data_type == PreprocessedDataVariants.IC_PROBABILITIES:
-            suffix = ".npy"
-
-        return self.processed_data_dir / data_type.value / (filename + suffix)
+        return get_preprocessing_results_path(
+            self.processed_data_dir, filename, data_type
+        )
 
     def save_data_file(
         self,
@@ -228,22 +324,9 @@ class DatasetHandler(LoggerMixin):
         based on the data type and default parameters.)
         :param data_type: Type of the data to be processed.
         """
-        self.logger.info(
-            f"Saving the '{data_type.value}' data into the file {filename}."
+        save_data_file(
+            data, self.processed_data_dir, filename, data_type, logger=self.logger
         )
-        # Path to results file.
-        data_path = self.get_preprocessing_results_path(filename, data_type)
-        data_path.parent.mkdir(parents=True, exist_ok=True)
-
-        if data_type in RAW_DATA_VARIANTS + [PreprocessedDataVariants.ICA_COMPONENTS]:
-            data.save(data_path, overwrite=True)
-        elif data_type == PreprocessedDataVariants.IC_PROBABILITIES:
-            np.save(data_path, data)
-        else:
-            self.logger.warning(
-                f"Wrong datatype: '{data_type.value}' to store. Skipping!"
-            )
-        self.logger.info("Data saved successfully!")
 
     def process_one_file(self, filename: str, save_processing_info: bool):
         """
@@ -332,7 +415,7 @@ class DatasetHandler(LoggerMixin):
             is_processed=True,
             processed_data_type=PreprocessedDataVariants.ICA_COMPONENTS,
         )
-        ics_probabilities = DatasetPreprocessor.get_ic_labeling_probabilities(
+        ics_probabilities = get_ic_labeling_probabilities(
             self.load_data_file(
                 filename,
                 is_processed=True,
