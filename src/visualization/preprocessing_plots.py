@@ -46,6 +46,7 @@ class DatasetPlotter(LoggerMixin):
 
         return ProjectPaths.PLOTS_PATH / subdir_name / variant_name / filename
 
+    @staticmethod
     def plot_topomap_combined(data: mne.io.Raw, title: str = ""):
         """
         Plots topomap for all bands separately and combined.

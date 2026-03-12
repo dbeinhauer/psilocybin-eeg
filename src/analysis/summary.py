@@ -275,11 +275,10 @@ class EEGSummarizedAnalyzer(LoggerMixin):
 
     def normalize(self, axis: int = 2) -> None:
         """
-               Apply z-score normalization to :attr:`data` in-place.
-        mean_loo_iscs: dict[str, np.ndarray],
-           *
-               :param axis: Axis along which to compute the z-score (default 2 = time axis).
-               :raises RuntimeError: If no data has been loaded yet.
+        Apply z-score normalization to :attr:`data` in-place.
+
+        :param axis: Axis along which to compute the z-score (default 2 = time axis).
+        :raises RuntimeError: If no data has been loaded yet.
         """
         if self.data is None:
             raise RuntimeError("No data loaded.")
@@ -294,14 +293,14 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         self, label: Optional[str] = None
     ) -> "AnalysisData":  # noqa: F821
         """
-        Wrap the loaded data in an :class:`~src.features.data_representations.AnalysisData`
+        Wrap the loaded data in an :class:`~src.analysis.data_representations.AnalysisData`
         container for use with the generic analysis and visualisation pipeline.
 
         :param label: Human-readable label.  Defaults to the first music type value.
         :return: ``AnalysisData`` with :attr:`DataRepresentation.TIME_DOMAIN`.
         :raises RuntimeError: If no data has been loaded yet.
         """
-        from src.features.data_representations import AnalysisData, DataRepresentation
+        from src.analysis.data_representations import AnalysisData, DataRepresentation
 
         if self.data is None:
             raise RuntimeError("No data loaded. Call load_and_prepare_data() first.")
@@ -329,14 +328,14 @@ class EEGSummarizedAnalyzer(LoggerMixin):
     ) -> "AnalysisData":  # noqa: F821
         """
         Load ICA component activations for all filtered recordings and
-        return as :class:`~src.features.data_representations.AnalysisData`.
+        return as :class:`~src.analysis.data_representations.AnalysisData`.
 
         :param resample_freq: Target sampling frequency in Hz.
         :param n_jobs: Number of parallel jobs for resampling.
         :param label: Human-readable label for plots.
         :return: ``AnalysisData`` with ``DataRepresentation.ICA_ACTIVATIONS``.
         """
-        from src.features.data_representations import (
+        from src.analysis.data_representations import (
             AnalysisData,
             DataRepresentation,
             extract_ica_activations,
@@ -381,14 +380,14 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         )
 
     # ------------------------------------------------------------------ #
-    #  Analysis — internal helpers (delegate to src.features.isc)            #
+    #  Analysis — internal helpers (delegate to src.analysis.isc)            #
     # ------------------------------------------------------------------ #
 
     @staticmethod
     def _compute_loo_isc_from_data(
         data: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Delegate to :func:`src.features.isc.compute_loo_isc`."""
+        """Delegate to :func:`src.analysis.isc.compute_loo_isc`."""
         return _compute_loo_isc(data)
 
     @staticmethod
@@ -398,7 +397,7 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         step_sec: float,
         sfreq: float,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Delegate to :func:`src.features.isc.compute_sliding_window_isc`."""
+        """Delegate to :func:`src.analysis.isc.compute_sliding_window_isc`."""
         return _compute_sliding_window_isc(data, window_sec, step_sec, sfreq)
 
     # ------------------------------------------------------------------ #
