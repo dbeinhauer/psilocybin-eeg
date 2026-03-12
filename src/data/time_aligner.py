@@ -11,10 +11,6 @@ Key classes:
       and crops raw EEG data to the common overlapping time window.
 """
 
-import gc
-import sys
-from typing import Callable
-
 from pathlib import Path
 import pandas as pd
 import numpy as np
