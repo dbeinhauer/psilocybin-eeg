@@ -130,3 +130,71 @@ def compute_sliding_window_isc(
 
     window_times = (starts + win_samples / 2) / sfreq
     return isc_timecourse, window_times
+
+
+# ---------------------------------------------------------------------------
+# Mean & Variance across items (subjects)
+# ---------------------------------------------------------------------------
+
+
+def compute_mean_variance(
+    data: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Compute the global mean and variance of the signal across items (subjects).
+
+    For each feature the signal is first averaged across all items at every
+    time point, then the temporal mean and variance of that average signal
+    are returned.
+
+    :param data: ``(n_items, n_features, n_samples)``
+    :return: ``(mean_per_feature, var_per_feature)`` each of shape
+        ``(n_features,)``.
+    """
+    # mean across items -> (n_features, n_samples)
+    mean_signal = data.mean(axis=0)
+    # temporal mean and variance per feature
+    mean_per_feature = mean_signal.mean(axis=1)
+    var_per_feature = mean_signal.var(axis=1)
+    return mean_per_feature, var_per_feature
+
+
+def compute_sliding_window_mean_variance(
+    data: np.ndarray,
+    window_sec: float,
+    step_sec: float,
+    sfreq: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Time-resolved mean and variance of the signal via a sliding window.
+
+    Inside each window the signal is averaged across items (subjects) to
+    obtain a single time-course per feature, then the temporal mean and
+    variance within the window are computed.
+
+    :param data: ``(n_items, n_features, n_samples)``
+    :param window_sec: Window length in seconds.
+    :param step_sec: Step size in seconds.
+    :param sfreq: Sampling frequency (Hz).
+    :return: ``(mean_timecourse, var_timecourse, window_times)`` with shapes
+        ``(n_windows, n_features)``, ``(n_windows, n_features)`` and
+        ``(n_windows,)``.
+    """
+    n_items, n_features, n_samples = data.shape
+    win_samples = int(round(window_sec * sfreq))
+    step_samples = int(round(step_sec * sfreq))
+    starts = np.arange(0, n_samples - win_samples + 1, step_samples)
+    n_windows = len(starts)
+
+    mean_timecourse = np.zeros((n_windows, n_features))
+    var_timecourse = np.zeros((n_windows, n_features))
+    for w_idx, start in enumerate(starts):
+        end = start + win_samples
+        window_data = data[:, :, start:end]
+        # average across items -> (n_features, win_samples)
+        mean_signal = window_data.mean(axis=0)
+        mean_timecourse[w_idx] = mean_signal.mean(axis=1)
+        var_timecourse[w_idx] = mean_signal.var(axis=1)
+
+    window_times = (starts + win_samples / 2) / sfreq
+    return mean_timecourse, var_timecourse, window_times

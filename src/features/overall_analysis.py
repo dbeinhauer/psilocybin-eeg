@@ -36,6 +36,8 @@ from src.features.isc import (
     compute_pairwise_isc as _compute_pairwise_isc,
     compute_pairwise_isc_per_feature as _compute_pairwise_isc_per_feature,
     compute_sliding_window_isc as _compute_sliding_window_isc,
+    compute_mean_variance as _compute_mean_variance,
+    compute_sliding_window_mean_variance as _compute_sliding_window_mean_variance,
 )
 from src.utils.logging_config import LoggerMixin
 
@@ -657,3 +659,66 @@ class EEGSummarizedAnalyzer(LoggerMixin):
             results[name] = (isc_tc, times)
         self.logger.info("Band sliding-window ISC computation complete.")
         return results
+
+    # ------------------------------------------------------------------ #
+    #  Analysis — mean & variance                                           #
+    # ------------------------------------------------------------------ #
+
+    def compute_mean_variance(self) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Compute per-feature mean and variance of the signal across subjects.
+
+        The signal is first averaged across subjects at every time point,
+        then the temporal mean and variance per feature are returned.
+
+        :return: ``(mean_per_feature, var_per_feature)`` each of shape
+            ``(n_channels,)``.
+        :raises RuntimeError: If no data has been loaded yet.
+        """
+        if self.data is None:
+            raise RuntimeError("No data loaded. Call load_and_prepare_data() first.")
+
+        n_subjects, n_channels, _ = self.data.shape
+        self.logger.info(
+            f"Computing mean & variance for {n_subjects} subject(s), "
+            f"{n_channels} channel(s)."
+        )
+        mean_f, var_f = _compute_mean_variance(self.data)
+        self.logger.info("Mean & variance computation complete.")
+        return mean_f, var_f
+
+    def compute_sliding_window_mean_variance(
+        self,
+        window_sec: float = 5.0,
+        step_sec: float = 2.5,
+        sfreq: Optional[float] = None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Compute time-resolved mean and variance using a sliding window.
+
+        :param window_sec: Window length in seconds.
+        :param step_sec: Step size (hop) in seconds.
+        :param sfreq: Sampling frequency.  If ``None``, taken from
+            ``self.info['sfreq']``.
+        :return: ``(mean_timecourse, var_timecourse, window_times)`` with
+            shapes ``(n_windows, n_channels)``,
+            ``(n_windows, n_channels)`` and ``(n_windows,)``.
+        :raises RuntimeError: If no data has been loaded yet.
+        """
+        if self.data is None:
+            raise RuntimeError("No data loaded. Call load_and_prepare_data() first.")
+
+        if sfreq is None:
+            if self.info is None:
+                raise RuntimeError("No MNE Info available; pass sfreq explicitly.")
+            sfreq = self.info["sfreq"]
+
+        self.logger.info(
+            f"Sliding-window mean & variance: "
+            f"win={window_sec}s, step={step_sec}s, sfreq={sfreq} Hz."
+        )
+        mean_tc, var_tc, times = _compute_sliding_window_mean_variance(
+            self.data, window_sec=window_sec, step_sec=step_sec, sfreq=sfreq
+        )
+        self.logger.info("Sliding-window mean & variance computation complete.")
+        return mean_tc, var_tc, times

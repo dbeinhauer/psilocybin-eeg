@@ -846,3 +846,178 @@ def print_data_overview(
         print(f"  Data dtype   : {ad.data.dtype}")
         print(f"  Data range   : [{ad.data.min():.3f}, {ad.data.max():.3f}]")
         print()
+
+
+# ---------------------------------------------------------------------------
+# 10. Mean & Variance distribution
+# ---------------------------------------------------------------------------
+
+
+def plot_mean_variance_distribution(
+    mean_var_results: dict[str, tuple[np.ndarray, np.ndarray]],
+    *,
+    title: str = "Distribution of signal mean and variance across features",
+    feature_axis_label: str = "Number of features",
+    colors: Optional[dict[str, str]] = None,
+    figsize: tuple[float, float] = (12, 4),
+    save_path: Optional[Path] = None,
+) -> Figure:
+    """
+    Histograms of per-feature mean and variance, overlaid for each condition.
+
+    :param mean_var_results: ``{label: (mean_per_feature, var_per_feature)}``
+        where each array has shape ``(n_features,)``.
+    """
+    labels = list(mean_var_results.keys())
+    colors = _resolve_colors(labels, colors)
+
+    fig, (ax_mean, ax_var) = plt.subplots(1, 2, figsize=figsize)
+
+    for label, (mean_vals, var_vals) in mean_var_results.items():
+        color = colors[label]
+
+        ax_mean.hist(
+            mean_vals,
+            bins=30,
+            alpha=0.55,
+            edgecolor="black",
+            color=color,
+            label=label,
+        )
+        ax_mean.axvline(
+            mean_vals.mean(),
+            color=color,
+            ls="--",
+            lw=1.5,
+            label=f"{label} μ={mean_vals.mean():.4f}",
+        )
+
+        ax_var.hist(
+            var_vals,
+            bins=30,
+            alpha=0.55,
+            edgecolor="black",
+            color=color,
+            label=label,
+        )
+        ax_var.axvline(
+            var_vals.mean(),
+            color=color,
+            ls="--",
+            lw=1.5,
+            label=f"{label} μ={var_vals.mean():.4f}",
+        )
+
+    ax_mean.set_xlabel("Mean of signal (across subjects)")
+    ax_mean.set_ylabel(feature_axis_label)
+    ax_mean.set_title("Signal mean per feature")
+    ax_mean.legend(fontsize=8)
+
+    ax_var.set_xlabel("Variance of signal (across subjects)")
+    ax_var.set_ylabel(feature_axis_label)
+    ax_var.set_title("Signal variance per feature")
+    ax_var.legend(fontsize=8)
+
+    fig.suptitle(title, fontsize=12)
+    plt.tight_layout()
+    _save_fig(fig, save_path)
+    plt.show()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# 11. Sliding-window mean & variance (time-resolved heatmap + mean trace)
+# ---------------------------------------------------------------------------
+
+
+def plot_sliding_window_mean_variance(
+    sw_mv_results: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]],
+    *,
+    feature_axis_label: str = "Channel index",
+    title: str = "Time-resolved sliding-window mean & variance",
+    subtitle_template: str = "{label} — {stat}",
+    colors: Optional[dict[str, str]] = None,
+    figsize: Optional[tuple[float, float]] = None,
+    save_path: Optional[Path] = None,
+) -> Figure:
+    """
+    For each condition: mean + variance time courses (top) and per-feature
+    heatmaps (bottom).
+
+    :param sw_mv_results:
+        ``{label: (mean_timecourse, var_timecourse, window_times)}``
+        where shapes are ``(n_windows, n_features)``,
+        ``(n_windows, n_features)`` and ``(n_windows,)``.
+    """
+    labels = list(sw_mv_results.keys())
+    n_conditions = len(labels)
+    colors = _resolve_colors(labels, colors)
+
+    if figsize is None:
+        figsize = (16, 8 * n_conditions)
+
+    # Two stats (mean, variance) per condition -> 2*n_conditions panels
+    fig = plt.figure(figsize=figsize)
+    outer_gs = GridSpec(n_conditions * 2, 1, figure=fig, hspace=0.45)
+
+    panel_idx = 0
+    for label in labels:
+        mean_tc, var_tc, sw_times = sw_mv_results[label]
+        time_min = sw_times / 60
+        t_start, t_end = time_min[0], time_min[-1]
+        color = colors[label]
+
+        for stat_name, stat_tc in [("Mean", mean_tc), ("Variance", var_tc)]:
+            gs = GridSpecFromSubplotSpec(
+                2,
+                1,
+                subplot_spec=outer_gs[panel_idx],
+                height_ratios=[1, 3],
+                hspace=0.05,
+            )
+            ax_top = fig.add_subplot(gs[0])
+            ax_bot = fig.add_subplot(gs[1])
+
+            # Mean across features trace
+            mean_trace = stat_tc.mean(axis=1)
+
+            ax_top.plot(time_min, mean_trace, color=color, lw=1.2, zorder=3)
+            ax_top.fill_between(
+                time_min, mean_trace, alpha=0.25, color=color, zorder=2
+            )
+            ax_top.axhline(0, color="grey", ls="--", lw=0.6, zorder=1)
+            ax_top.set_xlim(t_start, t_end)
+            ax_top.set_ylabel(f"Mean {stat_name.lower()}")
+            ax_top.set_title(subtitle_template.format(label=label, stat=stat_name))
+            ax_top.tick_params(labelbottom=False)
+            div_top = make_axes_locatable(ax_top)
+            div_top.append_axes("right", size="2%", pad=0.05).set_visible(False)
+
+            # Heatmap
+            vmax = np.nanmax(np.abs(stat_tc))
+            cmap = "RdBu_r" if stat_name == "Mean" else "viridis"
+            vmin = -vmax if stat_name == "Mean" else 0
+
+            im = ax_bot.imshow(
+                stat_tc.T,
+                aspect="auto",
+                origin="lower",
+                cmap=cmap,
+                extent=(t_start, t_end, 0, stat_tc.shape[1]),
+                vmin=vmin,
+                vmax=vmax,
+                zorder=1,
+            )
+            ax_bot.set_xlim(t_start, t_end)
+            ax_bot.set_xlabel("Time (min)")
+            ax_bot.set_ylabel(feature_axis_label)
+            div_bot = make_axes_locatable(ax_bot)
+            cax = div_bot.append_axes("right", size="2%", pad=0.05)
+            plt.colorbar(im, cax=cax, label=stat_name)
+
+            panel_idx += 1
+
+    fig.suptitle(title, y=1.01, fontsize=14)
+    _save_fig(fig, save_path)
+    plt.show()
+    return fig
