@@ -14,7 +14,7 @@ from mne.viz import plot_topomap
 import seaborn as sns
 
 from src.definitions.constants import ProjectPaths
-from src.definitions.fields import PreprocessedDataVariants, RAW_DATA_VARIANTS
+from src.definitions.fields import PreprocessedDataVariants
 from src.utils.logging_config import LoggerMixin
 
 

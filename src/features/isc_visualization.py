@@ -237,7 +237,7 @@ def plot_sliding_window_isc(
         n_sig = sig_mask.sum()
         print(
             f"[{label}] Significant windows (r > {isc_threshold}): "
-            f"{n_sig}/{len(sig_mask)} ({100*n_sig/len(sig_mask):.1f} %)"
+            f"{n_sig}/{len(sig_mask)} ({100 * n_sig / len(sig_mask):.1f} %)"
         )
 
     fig.suptitle(title, y=1.01, fontsize=14)
@@ -290,7 +290,7 @@ def print_significant_intervals(
         print(
             f"Threshold: r > {isc_threshold}   |   "
             f"Significant windows: {n_sig}/{len(sig_mask)} "
-            f"({100*n_sig/len(sig_mask):.1f} %)\n"
+            f"({100 * n_sig / len(sig_mask):.1f} %)\n"
         )
         print(header)
         print(sep)
@@ -570,9 +570,9 @@ def print_band_significant_intervals(
     thresholds = _resolve_band_thresholds(band_names, band_thresholds)
 
     for label in band_sw:
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
         print(f"  {label}")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
         for band in band_names:
             tc, times = band_sw[label][band]
             time_min = times / 60
@@ -594,7 +594,7 @@ def print_band_significant_intervals(
             l_freq, h_freq = bands[band]
             print(
                 f"\n  {band} ({l_freq}\u2013{h_freq} Hz)  |  threshold r > {thr}  |  "
-                f"sig windows: {n_sig}/{n_total} ({100*n_sig/n_total:.1f} %)"
+                f"sig windows: {n_sig}/{n_total} ({100 * n_sig / n_total:.1f} %)"
             )
             if intervals:
                 header = (
@@ -806,7 +806,7 @@ def plot_band_overlap(
         n_all = int(all_sig.sum())
         print(
             f"[{label}] ALL-rows simultaneous windows: "
-            f"{n_all}/{n_windows} ({100*n_all/n_windows:.1f} %)"
+            f"{n_all}/{n_windows} ({100 * n_all / n_windows:.1f} %)"
         )
 
     fig.suptitle(

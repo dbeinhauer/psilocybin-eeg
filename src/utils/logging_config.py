@@ -64,7 +64,9 @@ def setup_logging(
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         main_log_file = log_dir / f"eeg_analysis_{timestamp}.log"
         file_handler = logging.handlers.RotatingFileHandler(
-            main_log_file, maxBytes=10 * 1024 * 1024, backupCount=5  # 10 MB
+            main_log_file,
+            maxBytes=10 * 1024 * 1024,
+            backupCount=5,  # 10 MB
         )
         file_handler.setLevel(log_level)
         file_handler.setFormatter(detailed_formatter)
@@ -73,7 +75,9 @@ def setup_logging(
         # Error log file (errors and critical only)
         error_log_file = log_dir / f"eeg_analysis_errors_{timestamp}.log"
         error_handler = logging.handlers.RotatingFileHandler(
-            error_log_file, maxBytes=10 * 1024 * 1024, backupCount=5  # 10 MB
+            error_log_file,
+            maxBytes=10 * 1024 * 1024,
+            backupCount=5,  # 10 MB
         )
         error_handler.setLevel(logging.ERROR)
         error_handler.setFormatter(detailed_formatter)

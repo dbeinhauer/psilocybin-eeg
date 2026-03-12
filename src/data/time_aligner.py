@@ -11,32 +11,11 @@ Key classes:
       and crops raw EEG data to the common overlapping time window.
 """
 
-from pathlib import Path
-import pandas as pd
 import numpy as np
-import mne
-from mne_icalabel.iclabel import iclabel_label_components
 from scipy.signal import correlate, correlation_lags
-import seaborn as sns
-import matplotlib.pyplot as plt
 
 # from src.data.dataset_handler import DatasetHandler
-from src.data.dataset_preprocessing import DatasetPreprocessor
-from src.data.dataset_filtering import DatasetFilter
-from src.definitions.fields import (
-    SingleDataMetadata,
-    ChannelTypes,
-    ExperimentNames,
-    CoordinateSystems,
-    PreprocessedDataVariants,
-    ICLabelComponentsClasses,
-    ExcludedICsMetadata,
-    MusicTypeVariants,
-    ConditionVariants,
-    ExclusionCategories,
-)
 from src.utils.logging_config import LoggerMixin
-from src.definitions.constants import ProjectPaths
 
 
 class TAGObject:
@@ -185,7 +164,7 @@ class TimeAligner(LoggerMixin):
             crop_start, crop_end = self.get_crop_indices_for_signal(shift)
             cropped.append(sig[crop_start:crop_end])
 
-        assert all(
-            len(sig) == expected_length for sig in cropped
-        ), f"All cropped signals should have the same length ({expected_length}), got signals with lengths {[len(sig) for sig in cropped]}."
+        assert all(len(sig) == expected_length for sig in cropped), (
+            f"All cropped signals should have the same length ({expected_length}), got signals with lengths {[len(sig) for sig in cropped]}."
+        )
         return cropped
