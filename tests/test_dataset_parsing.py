@@ -2,7 +2,6 @@
 This module tests the DatasetParser class functionality.
 """
 
-import pytest
 from pathlib import Path
 from unittest.mock import Mock, patch
 import pandas as pd
