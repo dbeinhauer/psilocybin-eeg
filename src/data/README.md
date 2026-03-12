@@ -93,7 +93,7 @@ data/processed/{experiment_name}/
 ├── after_ica/            # Main preprocessed output (.fif)
 ├── ica_components/       # Saved ICA decomposition objects
 ├── ic_probabilities/     # ICLabel probability arrays (.npy)
-├── raw_excluded_ic/      # Timeseries of excluded ICs
+├── raw_excluded_ic/      # Metadata CSV of excluded ICs (label, ID, probability, etc.)
 ├── cropped/              # Time-aligned, cropped data
 └── excluded_ics_mapping.csv
 ```
