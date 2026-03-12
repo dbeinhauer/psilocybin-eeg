@@ -1,6 +1,13 @@
 """
-This module contains the EEGAnalysis class which encapsulates all functionality for
-loading, storing, and analysing EEG data across subjects (e.g. Inter-Subject Correlation).
+This module contains the EEGSummarizedAnalyzer class which encapsulates
+data loading, persistence and high-level analysis of preprocessed EEG data
+across subjects.
+
+Computation helpers delegate to :mod:`src.features.isc` (pure numpy
+functions) and adapter helpers delegate to
+:mod:`src.features.data_representations` so that the same analysis routines
+work on any data representation (raw channels, ICA activations, wavelet
+amplitudes, mean responses, …).
 """
 
 from __future__ import annotations
@@ -23,6 +30,12 @@ from src.definitions.fields import (
     MusicTypeVariants,
     PreprocessedDataVariants,
     SingleDataMetadata,
+)
+from src.features.isc import (
+    compute_loo_isc as _compute_loo_isc,
+    compute_pairwise_isc as _compute_pairwise_isc,
+    compute_pairwise_isc_per_feature as _compute_pairwise_isc_per_feature,
+    compute_sliding_window_isc as _compute_sliding_window_isc,
 )
 from src.utils.logging_config import LoggerMixin
 
@@ -262,10 +275,11 @@ class EEGSummarizedAnalyzer(LoggerMixin):
 
     def normalize(self, axis: int = 2) -> None:
         """
-        Apply z-score normalization to :attr:`data` in-place.
-
-        :param axis: Axis along which to compute the z-score (default 2 = time axis).
-        :raises RuntimeError: If no data has been loaded yet.
+               Apply z-score normalization to :attr:`data` in-place.
+        mean_loo_iscs: dict[str, np.ndarray],
+           *
+               :param axis: Axis along which to compute the z-score (default 2 = time axis).
+               :raises RuntimeError: If no data has been loaded yet.
         """
         if self.data is None:
             raise RuntimeError("No data loaded.")
@@ -273,28 +287,109 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         self.logger.info(f"Z-score normalisation applied along axis={axis}.")
 
     # ------------------------------------------------------------------ #
-    #  Analysis — internal helpers                                          #
+    #  Conversion to AnalysisData                                           #
+    # ------------------------------------------------------------------ #
+
+    def to_analysis_data(
+        self, label: Optional[str] = None
+    ) -> "AnalysisData":  # noqa: F821
+        """
+        Wrap the loaded data in an :class:`~src.features.data_representations.AnalysisData`
+        container for use with the generic analysis and visualisation pipeline.
+
+        :param label: Human-readable label.  Defaults to the first music type value.
+        :return: ``AnalysisData`` with :attr:`DataRepresentation.TIME_DOMAIN`.
+        :raises RuntimeError: If no data has been loaded yet.
+        """
+        from src.features.data_representations import AnalysisData, DataRepresentation
+
+        if self.data is None:
+            raise RuntimeError("No data loaded. Call load_and_prepare_data() first.")
+        if label is None:
+            music = self.music_types[0].value if self.music_types else "unknown"
+            label = music
+        sfreq = self.resample_freq or (
+            self.info["sfreq"] if self.info is not None else 250.0
+        )
+        ch_names = list(self.info["ch_names"]) if self.info is not None else None
+        return AnalysisData(
+            data=self.data.copy(),
+            sfreq=sfreq,
+            representation=DataRepresentation.TIME_DOMAIN,
+            label=label,
+            feature_names=ch_names,
+            info=self.info,
+        )
+
+    def load_and_prepare_ica_data(
+        self,
+        resample_freq: float = 250.0,
+        n_jobs: int = -1,
+        label: Optional[str] = None,
+    ) -> "AnalysisData":  # noqa: F821
+        """
+        Load ICA component activations for all filtered recordings and
+        return as :class:`~src.features.data_representations.AnalysisData`.
+
+        :param resample_freq: Target sampling frequency in Hz.
+        :param n_jobs: Number of parallel jobs for resampling.
+        :param label: Human-readable label for plots.
+        :return: ``AnalysisData`` with ``DataRepresentation.ICA_ACTIVATIONS``.
+        """
+        from src.features.data_representations import (
+            AnalysisData,
+            DataRepresentation,
+            extract_ica_activations,
+        )
+
+        self.logger.info(
+            f"Loading ICA activations for {len(self.filtered_df)} recording(s)."
+        )
+        raws, icas = [], []
+        for _, row in self.filtered_df.iterrows():
+            filename = row[SingleDataMetadata.FILENAME]
+            raw = (
+                self.dataset_handler.load_data_file(
+                    filename,
+                    is_processed=True,
+                    processed_data_type=PreprocessedDataVariants.RAW_CROPPED,
+                    preload=True,
+                )
+                .pick(["eeg"])
+                .resample(resample_freq, n_jobs=n_jobs)
+            )
+            ica = self.dataset_handler.load_data_file(
+                filename,
+                is_processed=True,
+                processed_data_type=PreprocessedDataVariants.ICA_COMPONENTS,
+            )
+            raws.append(raw)
+            icas.append(ica)
+
+        data = extract_ica_activations(raws, icas, sfreq=resample_freq)
+        n_components = data.shape[1]
+        if label is None:
+            music = self.music_types[0].value if self.music_types else "unknown"
+            label = f"ICA ({music})"
+
+        return AnalysisData(
+            data=data,
+            sfreq=resample_freq,
+            representation=DataRepresentation.ICA_ACTIVATIONS,
+            label=label,
+            feature_names=[f"IC{i}" for i in range(n_components)],
+        )
+
+    # ------------------------------------------------------------------ #
+    #  Analysis — internal helpers (delegate to src.features.isc)            #
     # ------------------------------------------------------------------ #
 
     @staticmethod
     def _compute_loo_isc_from_data(
         data: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Core LOO-ISC computation on an arbitrary EEG data array.
-
-        :param data: Array of shape ``(n_subjects, n_channels, n_times)``.
-        :return: ``(loo_isc, mean_loo_isc)`` with shapes
-            ``(n_subjects, n_channels)`` and ``(n_channels,)``.
-        """
-        n_subjects, n_channels, _ = data.shape
-        loo_isc = np.zeros((n_subjects, n_channels))
-        for s in range(n_subjects):
-            others_mean = np.delete(data, s, axis=0).mean(axis=0)  # (n_ch, n_t)
-            for ch in range(n_channels):
-                r, _ = pearsonr(data[s, ch], others_mean[ch])
-                loo_isc[s, ch] = r
-        return loo_isc, loo_isc.mean(axis=0)
+        """Delegate to :func:`src.features.isc.compute_loo_isc`."""
+        return _compute_loo_isc(data)
 
     @staticmethod
     def _compute_sliding_window_isc_from_data(
@@ -303,36 +398,8 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         step_sec: float,
         sfreq: float,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Core sliding-window LOO-ISC computation on an arbitrary EEG data array.
-
-        :param data: Array of shape ``(n_subjects, n_channels, n_times)``.
-        :param window_sec: Window length in seconds.
-        :param step_sec: Step size in seconds.
-        :param sfreq: Sampling frequency in Hz.
-        :return: ``(isc_timecourse, window_times)`` with shapes
-            ``(n_windows, n_channels)`` and ``(n_windows,)``.
-        """
-        n_subjects, n_channels, n_times = data.shape
-        win_samples = int(round(window_sec * sfreq))
-        step_samples = int(round(step_sec * sfreq))
-        starts = np.arange(0, n_times - win_samples + 1, step_samples)
-        n_windows = len(starts)
-
-        isc_timecourse = np.zeros((n_windows, n_channels))
-        for w_idx, start in enumerate(starts):
-            end = start + win_samples
-            window_data = data[:, :, start:end]
-            window_isc = np.zeros((n_subjects, n_channels))
-            for s in range(n_subjects):
-                others_mean = np.delete(window_data, s, axis=0).mean(axis=0)
-                for ch in range(n_channels):
-                    r, _ = pearsonr(window_data[s, ch], others_mean[ch])
-                    window_isc[s, ch] = r
-            isc_timecourse[w_idx] = window_isc.mean(axis=0)
-
-        window_times = (starts + win_samples / 2) / sfreq
-        return isc_timecourse, window_times
+        """Delegate to :func:`src.features.isc.compute_sliding_window_isc`."""
+        return _compute_sliding_window_isc(data, window_sec, step_sec, sfreq)
 
     # ------------------------------------------------------------------ #
     #  Analysis — public methods                                            #
@@ -380,25 +447,11 @@ class EEGSummarizedAnalyzer(LoggerMixin):
             raise RuntimeError("No data loaded. Call load_and_prepare_data() first.")
 
         n_subjects, n_channels, _ = self.data.shape
-        pairwise = np.eye(n_subjects)
-
         self.logger.info(
             f"Computing pairwise ISC for {n_subjects} subject(s), "
             f"{n_channels} channel(s)."
         )
-
-        for i in range(n_subjects):
-            for j in range(i + 1, n_subjects):
-                rs = np.array(
-                    [
-                        pearsonr(self.data[i, ch], self.data[j, ch])[0]
-                        for ch in range(n_channels)
-                    ]
-                )
-                mean_r = np.nanmean(rs)
-                pairwise[i, j] = mean_r
-                pairwise[j, i] = mean_r
-
+        pairwise = _compute_pairwise_isc(self.data)
         self.logger.info("Pairwise ISC computation complete.")
         return pairwise
 
@@ -415,21 +468,11 @@ class EEGSummarizedAnalyzer(LoggerMixin):
             raise RuntimeError("No data loaded. Call load_and_prepare_data() first.")
 
         n_subjects, n_channels, _ = self.data.shape
-        pairwise = np.zeros((n_channels, n_subjects, n_subjects))
-
         self.logger.info(
             f"Computing per-channel pairwise ISC "
             f"({n_subjects} subjects × {n_channels} channels)."
         )
-
-        for ch in range(n_channels):
-            for i in range(n_subjects):
-                pairwise[ch, i, i] = 1.0
-                for j in range(i + 1, n_subjects):
-                    r, _ = pearsonr(self.data[i, ch], self.data[j, ch])
-                    pairwise[ch, i, j] = r
-                    pairwise[ch, j, i] = r
-
+        pairwise = _compute_pairwise_isc_per_feature(self.data)
         self.logger.info("Per-channel pairwise ISC computation complete.")
         return pairwise
 
