@@ -1,8 +1,9 @@
 """
 Reusable visualisation functions for ISC analysis.
 
-Every function accepts generic dicts of results keyed by condition label
-(e.g. ``{"Classical": …, "Psytrance": …}``) and produces publication-ready
+Every function accepts generic dicts of results keyed by a descriptive label
+such as a music type or experimental condition
+(e.g. ``{"CLASSIC": …, "PSYTRANCE": …}``) and produces publication-ready
 matplotlib figures.  Axis labels, colours, thresholds and save paths are
 fully configurable so that the same functions work for any data
 representation (raw EEG, ICA, wavelet, mean response, …).

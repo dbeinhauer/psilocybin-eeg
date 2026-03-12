@@ -33,9 +33,24 @@ from src.utils.logging_config import LoggerMixin
 
 
 class DatasetHandler(LoggerMixin):
+    """
+    Main orchestrator for EEG dataset operations including parsing, preprocessing,
+    filtering, time alignment, and plotting.
+
+    This class ties together all sub-components (DatasetParser, DatasetPreprocessor,
+    DatasetFilter, TimeAligner, DatasetPlotter) and provides high-level methods
+    for the full preprocessing workflow.
+    """
+
     def __init__(
         self, experiment_name: ExperimentNames, coordinate_system: CoordinateSystems
     ):
+        """
+        Initialize the DatasetHandler with experiment configuration.
+
+        :param experiment_name: Which experiment dataset to use (e.g. ExperimentNames.PSILO_MUSIC).
+        :param coordinate_system: Electrode coordinate system for montage loading.
+        """
         (
             self.raw_data_dir,  # Raw data directory
             self.participant_map_path,  # Path to CSV mapping for each experiment (Placebo/Psilocybin)
@@ -512,7 +527,7 @@ class DatasetHandler(LoggerMixin):
         Aligns the signals of the participants based on the TAG signal in time.
 
         :param music_type: Music type to include.
-        :param condition_type: Condition type to include (placebo, psilocybin).
+        :param condition_type: Condition type to include (ConditionVariants.PLACEBO or ConditionVariants.PSILOCYBIN).
         :param exclusion_categories: Which categories of participants to exclude.
         :param plot_alignment_results: Whether to plot the alignment statistics.
         :param data_type_to_load: The type of the processed data to load for extracting the TAG signal.
