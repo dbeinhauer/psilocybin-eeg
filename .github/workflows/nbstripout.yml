@@ -1,0 +1,39 @@
+name: nbstripout
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  strip-notebooks:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install nbstripout
+        run: pip install nbstripout==0.8.1
+
+      - name: Strip notebook outputs
+        run: find . -name "*.ipynb" -not -path "./.git/*" | xargs nbstripout
+
+      - name: Commit stripped notebooks
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet; then
+            git add -A
+            git commit -m "style: strip notebook outputs via nbstripout"
+            git push
+          fi
