@@ -1,8 +1,19 @@
+"""
+This module implements time alignment of EEG recordings across participants.
+
+It uses the TAG (music/stimulus) channel to cross-correlate signals and determine
+temporal offsets between recordings, enabling consistent time-locked analysis across
+all participants in the experiment.
+
+Key classes:
+    - TAGObject: Container for TAG signal data and metadata.
+    - TimeAligner: Performs cross-correlation-based alignment of TAG signals
+      and crops raw EEG data to the common overlapping time window.
+"""
+
 import gc
 import sys
 from typing import Callable
-
-sys.path.append("/home/david/source/psilocybin-eeg")
 
 from pathlib import Path
 import pandas as pd
@@ -38,6 +49,10 @@ class TAGObject:
     """
 
     def __init__(self, filename: str, tag_signal):
+        """
+        :param filename: Original filename of the recording this TAG signal belongs to.
+        :param tag_signal: The extracted TAG (stimulus/music) channel signal array.
+        """
         self.filename = filename
         self.tag_signal = tag_signal
 
@@ -49,6 +64,15 @@ class TimeAligner(LoggerMixin):
     """
 
     def __init__(self, all_tags: list[TAGObject], sfreq: float):
+        """
+        Initialize the TimeAligner and compute alignment parameters.
+
+        Cross-correlates all TAG signal pairs, identifies the best reference signal,
+        computes per-signal shifts, and determines the common overlapping time window.
+
+        :param all_tags: List of TAGObject instances containing TAG signals to align.
+        :param sfreq: Sampling frequency of the TAG signals in Hz.
+        """
         # All TAG signals to be aligned, along with their filenames for reference and sampling frequency.
         self.all_tags = all_tags
         self.sfreq = sfreq

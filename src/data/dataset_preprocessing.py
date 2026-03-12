@@ -23,6 +23,10 @@ from src.utils.logging_config import LoggerMixin
 
 
 class DatasetPreprocessor(LoggerMixin):
+    """
+    Handles EEG data preprocessing including channel renaming, montage application,
+    filtering, bad channel interpolation, ICA decomposition, and artifact component removal.
+    """
 
     # Order of the classes in ICLabel tool.
     # Based on https://mne.tools/mne-icalabel/dev/generated/api/mne_icalabel.iclabel.iclabel_label_components.html#mne_icalabel.iclabel.iclabel_label_components
@@ -37,6 +41,12 @@ class DatasetPreprocessor(LoggerMixin):
     ]
 
     def __init__(self, coordinates_file_path: Path, excluded_coordinates_path: Path):
+        """
+        Initialize the preprocessor with electrode coordinate and exclusion information.
+
+        :param coordinates_file_path: Path to the SFP montage file with electrode positions.
+        :param excluded_coordinates_path: Path to CSV listing electrodes to exclude (e.g. boundary electrodes).
+        """
         self.montage = DatasetPreprocessor._load_coordinates_file(coordinates_file_path)
         # List of all electrodes that we want to exclude.
         self.electrodes_to_exclude: list[str] = (
@@ -348,6 +358,17 @@ class DatasetPreprocessor(LoggerMixin):
         tested_threshold: float = 0.6,
         brain_threshold: float = 0.3,
     ) -> bool:
+        """
+        Check whether a given IC component exceeds the artifact threshold while
+        remaining below the brain threshold (indicating it is likely an artifact).
+
+        :param all_probabilities: Dictionary mapping ICLabel classes to their probability arrays.
+        :param ic_idx: Index of the IC component to check.
+        :param tested_component: The artifact class to test against.
+        :param tested_threshold: Minimum probability for the tested artifact class.
+        :param brain_threshold: Maximum allowed brain probability (components above this are kept).
+        :return: True if the component should be considered an artifact, False otherwise.
+        """
         return (
             all_probabilities[tested_component][ic_idx] >= tested_threshold
             and all_probabilities[ICLabelComponentsClasses.BRAIN][ic_idx]

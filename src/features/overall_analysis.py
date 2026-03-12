@@ -93,8 +93,8 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         """
         :param experiment_name: Which experiment dataset to use.
         :param coordinate_system: Electrode coordinate system to use for loading.
-        :param music_types: Music types to include (e.g. Classical).
-        :param conditions: Experimental conditions to include (e.g. Placebo).
+        :param music_types: Music types to include (e.g. MusicTypeVariants.CLASSICAL).
+        :param conditions: Experimental conditions to include (e.g. ConditionVariants.PLACEBO).
         :param exclusion_categories: Exclusion categories to filter out bad recordings.
         """
         self.dataset_handler = DatasetHandler(experiment_name, coordinate_system)

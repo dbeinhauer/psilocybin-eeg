@@ -19,6 +19,10 @@ from src.utils.logging_config import LoggerMixin
 
 
 class DatasetPlotter(LoggerMixin):
+    """
+    Utility class for plotting EEG data including topomaps, power spectra,
+    signal overlaps, and cross-correlation heatmaps for alignment analysis.
+    """
 
     @staticmethod
     def get_plot_path(
