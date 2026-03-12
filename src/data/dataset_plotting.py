@@ -174,7 +174,6 @@ class DatasetPlotter(LoggerMixin):
         :return: Correlation matrix for all pairs of signals.
         """
         n = len(signals)
-        labels = [f"Signal {i}" for i in range(n)]
 
         corr_matrix = np.zeros((n, n))
 
