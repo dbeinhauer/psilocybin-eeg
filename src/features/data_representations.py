@@ -21,7 +21,6 @@ from mne.time_frequency import tfr_array_morlet
 from scipy.signal import hilbert
 from scipy.stats import zscore
 
-
 # ---------------------------------------------------------------------------
 # Enum for representation types
 # ---------------------------------------------------------------------------

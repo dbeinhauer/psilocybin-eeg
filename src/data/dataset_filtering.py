@@ -2,7 +2,7 @@
 This module contains functions for filtering dataset metadata based on music types and conditions.
 """
 
-from typing import List, Optional
+from typing import List
 import pandas as pd
 
 from src.definitions.fields import (
