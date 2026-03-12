@@ -2,6 +2,7 @@
 This module tests the DatasetParser class functionality.
 """
 
+import pytest  # noqa: F401  — needed for @pytest.fixture decorators
 from pathlib import Path
 from unittest.mock import Mock, patch
 import pandas as pd

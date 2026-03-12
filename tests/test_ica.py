@@ -76,7 +76,7 @@ class TestCheckICComponentProbability:
         result = check_ic_component_probability(
             self.probs, ic_idx=0, tested_component=ICLabelComponentsClasses.EYE
         )
-        assert result == False
+        assert not result
 
     def test_eye_artifact_excluded(self):
         """IC1 has high eye, low brain — should be flagged."""
@@ -87,7 +87,7 @@ class TestCheckICComponentProbability:
             tested_threshold=0.6,
             brain_threshold=0.3,
         )
-        assert result == True
+        assert result
 
     def test_mixed_component_not_excluded_when_above_brain_threshold(self):
         """IC2 has brain=0.4 which is >= brain_threshold=0.3 → keep."""
@@ -98,7 +98,7 @@ class TestCheckICComponentProbability:
             tested_threshold=0.2,
             brain_threshold=0.3,
         )
-        assert result == False
+        assert not result
 
     def test_below_threshold_not_excluded(self):
         """Component below artifact threshold should not be excluded."""
@@ -108,7 +108,7 @@ class TestCheckICComponentProbability:
             tested_component=ICLabelComponentsClasses.MUSCLE,
             tested_threshold=0.6,
         )
-        assert result == False
+        assert not result
 
 
 class TestMarkICForExclusion:

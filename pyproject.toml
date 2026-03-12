@@ -17,3 +17,10 @@ dependencies = [
     "seaborn>=0.13.2",
     "torch>=2.10.0",
 ]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+# F401: imported but unused — kept for test files where pytest is used via decorators
+per-file-ignores = { "tests/*.py" = ["F401"] }

@@ -68,7 +68,6 @@ class TestInterpolateBadChannels:
         # Create a minimal montage so interpolation works
         montage = mne.channels.make_standard_montage("GSN-HydroCel-256")
         # Rename channels to match the montage
-        mapping = {f"E{i}": f"E{i}" for i in range(1, n_channels + 1)}
         raw.set_montage(montage, on_missing="ignore")
 
         # Mark channel as bad
