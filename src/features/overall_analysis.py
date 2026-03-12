@@ -39,7 +39,6 @@ from src.features.isc import (
 )
 from src.utils.logging_config import LoggerMixin
 
-
 # ---------------------------------------------------------------------------
 # Module-level constants
 # ---------------------------------------------------------------------------

@@ -19,7 +19,6 @@ from src.definitions.fields import (
     ExclusionCategories,
 )
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Align time signals across participants based on the TAG signal."

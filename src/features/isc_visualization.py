@@ -27,7 +27,6 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 from src.features.isc import FREQUENCY_BANDS
 from src.features.data_representations import AnalysisData
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
