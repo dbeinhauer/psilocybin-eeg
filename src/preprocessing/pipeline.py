@@ -312,7 +312,9 @@ class DatasetHandler(LoggerMixin):
         :return: Returns path to the specified processing results.
         """
         return get_preprocessing_results_path(
-            self.processed_data_dir, filename, data_type,
+            self.processed_data_dir,
+            filename,
+            data_type,
             interim_data_dir=self.interim_data_dir,
         )
 
@@ -331,7 +333,10 @@ class DatasetHandler(LoggerMixin):
         :param data_type: Type of the data to be processed.
         """
         save_data_file(
-            data, self.processed_data_dir, filename, data_type,
+            data,
+            self.processed_data_dir,
+            filename,
+            data_type,
             logger=self.logger,
             interim_data_dir=self.interim_data_dir,
         )
@@ -470,7 +475,9 @@ class DatasetHandler(LoggerMixin):
         # Create excluded ICs metadata pandas dataframe and store them into CSV file.
         self.logger.info("Storing excluded ICs metadata to CSV file")
         self.dataset_excluded_ics_metadata = pd.DataFrame(excluded_ics_rows)
-        self.dataset_excluded_ics_metadata.to_csv(self._get_excluded_ics_mapping_path())
+        csv_path = self._get_excluded_ics_mapping_path()
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        self.dataset_excluded_ics_metadata.to_csv(csv_path)
 
     def plot_all_one_variant(self, plot_variant: str = "power_spectrum"):
         """
@@ -485,6 +492,10 @@ class DatasetHandler(LoggerMixin):
             self.logger.info(f"Plotting original file: {original_filename}")
 
             for data_variant in RAW_DATA_VARIANTS:
+                if data_variant == PreprocessedDataVariants.RAW_CROPPED:
+                    # Do not plot cropped raw data, because it usually does not exist
+                    # and does not differ that much from after ICA variant.
+                    continue
                 # Plot all Raw data variants.
                 self.logger.info(f"Plotting variant: {data_variant.value}")
                 if data_variant != PreprocessedDataVariants.RAW_EXCLUDED_IC:

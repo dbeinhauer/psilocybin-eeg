@@ -56,9 +56,7 @@ def apply_ransac_filter(
     log = logger or _logger
 
     log.info("Applying Ransac algorithm to detect bad channels.")
-    epochs = mne.make_fixed_length_epochs(
-        data, duration=epoch_duration, preload=True
-    )
+    epochs = mne.make_fixed_length_epochs(data, duration=epoch_duration, preload=True)
 
     # Automatic detection of bad channels with RANSAC -> interpolation later
     ransac = Ransac(
@@ -86,9 +84,7 @@ def remove_bad_epoch_annotations(data: mne.io.Raw) -> mne.io.Raw:
     """
     old_annotations = data.annotations
     keep_annotations = [
-        i
-        for i, desc in enumerate(old_annotations.description)
-        if desc != "BAD_epoch"
+        i for i, desc in enumerate(old_annotations.description) if desc != "BAD_epoch"
     ]
 
     new_annotations = mne.Annotations(
