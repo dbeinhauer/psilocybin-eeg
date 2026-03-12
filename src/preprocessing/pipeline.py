@@ -172,6 +172,7 @@ class DatasetHandler(LoggerMixin):
             self.raw_data_dir,  # Raw data directory
             self.participant_map_path,  # Path to CSV mapping for each experiment (Placebo/Psilocybin)
             self.processed_data_dir,  # Output directory for the processed data
+            self.interim_data_dir,  # Output directory for intermediate products
             self.coordinates_path,  # Path to electrode coordinates file
             self.excluded_electrodes_path,  # Path to CSV list of excluded electrodes.
             self.excluded_participants_path,  # Path to CSV list of excluded participants.
@@ -193,7 +194,7 @@ class DatasetHandler(LoggerMixin):
 
     def _init_dataset_paths(
         self, experiment_name: ExperimentNames, coordinate_system: CoordinateSystems
-    ) -> tuple[Path, Path, Path, Path, Path, Path]:
+    ) -> tuple[Path, Path, Path, Path, Path, Path, Path]:
         """
         Initializes paths to working dataset.
 
@@ -201,8 +202,9 @@ class DatasetHandler(LoggerMixin):
         :param coordinate_system: Variant of the coordinate system file we want to load.
         :return: Returns tuple of path to raw dataset directory, path to each participant
         experiment CSV mapping, path to directory where the processed results should be stored,
-        path to the file where the coordinates of the electrodes are stored, and path where the
-        electrodes selected for exclusion are stored (due problematic position in head).
+        path to the interim data directory, path to the file where the coordinates of the
+        electrodes are stored, and path where the electrodes selected for exclusion are stored
+        (due problematic position in head).
         """
         raw_data_dir, participant_map_path = ProjectPaths.get_experiment_data_dir(
             experiment_name, is_processed=False
@@ -210,6 +212,7 @@ class DatasetHandler(LoggerMixin):
         processed_data_dir, _ = ProjectPaths.get_experiment_data_dir(
             experiment_name, is_processed=True
         )
+        interim_data_dir = ProjectPaths.get_experiment_interim_dir(experiment_name)
         coordinates_path, excluded_electrodes_path = (
             ProjectPaths.get_coordinates_file_path(coordinate_system)
         )
@@ -221,6 +224,7 @@ class DatasetHandler(LoggerMixin):
             raw_data_dir,
             participant_map_path,
             processed_data_dir,
+            interim_data_dir,
             coordinates_path,
             excluded_electrodes_path,
             excluded_participants_path,
@@ -294,6 +298,7 @@ class DatasetHandler(LoggerMixin):
             is_processed=is_processed,
             processed_data_type=processed_data_type,
             preload=preload,
+            interim_data_dir=self.interim_data_dir,
         )
 
     def get_preprocessing_results_path(
@@ -307,7 +312,8 @@ class DatasetHandler(LoggerMixin):
         :return: Returns path to the specified processing results.
         """
         return get_preprocessing_results_path(
-            self.processed_data_dir, filename, data_type
+            self.processed_data_dir, filename, data_type,
+            interim_data_dir=self.interim_data_dir,
         )
 
     def save_data_file(
@@ -325,7 +331,9 @@ class DatasetHandler(LoggerMixin):
         :param data_type: Type of the data to be processed.
         """
         save_data_file(
-            data, self.processed_data_dir, filename, data_type, logger=self.logger
+            data, self.processed_data_dir, filename, data_type,
+            logger=self.logger,
+            interim_data_dir=self.interim_data_dir,
         )
 
     def process_one_file(self, filename: str, save_processing_info: bool):

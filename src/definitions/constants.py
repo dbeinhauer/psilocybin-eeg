@@ -60,6 +60,20 @@ class ProjectPaths:
         return data_dir, participant_mapping_path
 
     @staticmethod
+    def get_experiment_interim_dir(experiment_name: ExperimentNames) -> Path:
+        """
+        Get path to the interim data directory for the given experiment.
+
+        Interim data includes intermediate products such as data before ICA,
+        ICA components, and IC probabilities.
+
+        :param experiment_name: Value of the `ExperimentNames` field equals to experiment
+        data directory name.
+        :return: Path to interim data directory for the experiment.
+        """
+        return ProjectPaths.INTERIM_DATA_DIR / experiment_name.value
+
+    @staticmethod
     def get_coordinates_file_path(
         coordinate_system: CoordinateSystems,
     ) -> tuple[Path, Path]:

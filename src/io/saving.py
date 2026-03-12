@@ -23,16 +23,19 @@ def save_data_file(
     filename: str,
     data_type: PreprocessedDataVariants,
     logger=None,
+    interim_data_dir: Path | None = None,
 ):
     """
     Stores the selected data after preprocessing.
 
     :param data: Data to be stored.
-    :param processed_data_dir: Root directory for processed data.
+    :param processed_data_dir: Root directory for final processed data.
     :param filename: Name of the file where the data should be stored (the path is computed
     based on the data type and default parameters.)
     :param data_type: Type of the data to be processed.
     :param logger: Optional logger instance. Falls back to module-level logger.
+    :param interim_data_dir: Root directory for intermediate products. If ``None``,
+        falls back to ``processed_data_dir``.
     """
     log = logger or _logger
 
@@ -40,7 +43,9 @@ def save_data_file(
         f"Saving the '{data_type.value}' data into the file {filename}."
     )
     # Path to results file.
-    data_path = get_preprocessing_results_path(processed_data_dir, filename, data_type)
+    data_path = get_preprocessing_results_path(
+        processed_data_dir, filename, data_type, interim_data_dir=interim_data_dir
+    )
     data_path.parent.mkdir(parents=True, exist_ok=True)
 
     if data_type in RAW_DATA_VARIANTS + [PreprocessedDataVariants.ICA_COMPONENTS]:
