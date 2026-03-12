@@ -1,39 +1,15 @@
-name: Black Formatter
+name: Black Formatter (deprecated)
 
+# This workflow has been consolidated into code-quality.yml.
+# It is kept here only to avoid breaking any branch protection rules that
+# reference the "format" job by name; the job is disabled via `if: false`.
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
 jobs:
   format:
+    if: false
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install Black
-        run: pip install black==26.3.1
-
-      - name: Run Black formatter
-        run: black .
-
-      - name: Commit formatted changes
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          if ! git diff --quiet; then
-            git add -A
-            git commit -m "style: apply Black formatting"
-            git push
-          fi
+      - run: echo "Replaced by code-quality.yml"
