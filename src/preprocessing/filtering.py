@@ -95,23 +95,30 @@ def remove_bad_epoch_annotations(data: mne.io.Raw) -> mne.io.Raw:
     return data.set_annotations(new_annotations)
 
 
-def detect_bad_epochs(data: mne.io.Raw, epoch_len: float = 2.0):
+def detect_bad_epochs(
+    data: mne.io.Raw, epoch_len: float = 2.0, n_jobs: int = 1, logger=None
+):
     """
     Runs Autoreject bad epochs detection and annotates putatively bad epochs in the raw data.
 
     :param data: Data to be analyzed.
     :param epoch_len: Length of the epochs.
+    :param n_jobs: Number of parallel jobs for AutoReject. Default is 1 (no parallelism).
+    :param logger: Optional logger instance. Falls back to module-level logger.
     :return: Returns annotated data with bad epochs.
     """
+    log = logger or _logger
+
+    log.info("Running AutoReject to detect bad epochs.")
     epochs = mne.make_fixed_length_epochs(data, duration=epoch_len, preload=True)
 
     # Bad epochs detection
-    ar = AutoReject(n_jobs=4, random_state=42, verbose=True)
+    ar = AutoReject(n_jobs=n_jobs, random_state=42, verbose=False)
     ar.fit(epochs)
     reject_log = ar.get_reject_log(epochs)
 
     bad_epoch_indices = np.where(reject_log.bad_epochs)[0]
-    print(f"Found {len(bad_epoch_indices)} bad epochs out of {len(epochs)}")
+    log.info(f"Found {len(bad_epoch_indices)} bad epochs out of {len(epochs)}")
 
     # This marks bad segments WITHOUT removing them
     bad_annotations = mne.Annotations(
