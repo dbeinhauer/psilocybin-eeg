@@ -65,7 +65,7 @@ class TestGetPlotPath:
 class TestPlotSignalOverlap:
     """Test that signal overlap plotting produces a figure."""
 
-    def test_creates_figure(self):
+    def test_creates_figure(self, tmp_path):
         rng = np.random.default_rng(45)
         signals = [rng.normal(size=1000) for _ in range(3)]
         # Just verify it doesn't error; we won't check visual output
@@ -74,6 +74,6 @@ class TestPlotSignalOverlap:
             sfreq=250.0,
             t_start=0,
             time_duration=2,
-            save_fig="/tmp/test_overlap.png",
+            save_fig=str(tmp_path / "test_overlap.png"),
         )
         plt.close("all")

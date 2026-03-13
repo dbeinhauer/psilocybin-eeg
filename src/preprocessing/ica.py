@@ -150,7 +150,7 @@ def apply_ica_component_filtering(
     # Run ICA on the interpolated data.
     ica = ICA(
         n_components=0.99,  # or an int
-        method="infomax",  # extended infomax recommended :contentReference[oaicite:4]{index=4}
+        method="infomax",  # extended infomax (see MNE-ICALabel docs)
         fit_params=dict(extended=True),
         random_state=97,
         max_iter="auto",

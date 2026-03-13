@@ -41,6 +41,7 @@ def apply_ransac_filter(
     data: mne.io.Raw,
     epoch_duration: float = 2.0,
     ransac_epochs: int = 100,
+    n_jobs: int = 1,
     logger=None,
 ):
     """
@@ -50,6 +51,7 @@ def apply_ransac_filter(
     :param data: Data to be processes..
     :param epoch_duration: Duration of the time step (for discretization).
     :param ransac_epochs: Number of epochs in the Ransac processing.
+    :param n_jobs: Number of parallel jobs for Ransac. Default is 1 (no parallelism).
     :param logger: Optional logger instance. Falls back to module-level logger.
     :return: Returns data labeled as good/bad channels based on the Ransac.
     """
@@ -65,7 +67,7 @@ def apply_ransac_filter(
         min_corr=0.7,
         unbroken_time=0.2,
         random_state=97,
-        n_jobs=4,
+        n_jobs=n_jobs,
     )
     ransac.fit(epochs)
 
