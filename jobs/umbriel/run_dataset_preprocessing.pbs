@@ -1,0 +1,14 @@
+#!/bin/bash  
+#PBS -N data-preprocessing-psilo-music
+#PBS -o outputfile.log 
+#PBS -q qprodu 
+#PBS -l walltime=24:00:10
+#PBS -l nodes=1:ppn=64
+#PBS -j oe
+#PBS -V
+#PBS -m abe
+#PBS -M beinhauer@cs.cas.cz
+
+cd $PBS_O_WORKDIR
+
+singularity exec /home/dbeinhauer/psilocybin-eeg python scripts/run_preprocessing.py

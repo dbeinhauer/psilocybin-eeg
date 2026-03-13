@@ -153,3 +153,11 @@ RAW_DATA_VARIANTS = [
     PreprocessedDataVariants.RAW_EXCLUDED_IC,
     PreprocessedDataVariants.RAW_CROPPED,
 ]
+
+# Intermediate data variants that should be stored in the interim directory
+# (not the final processed directory).
+INTERIM_DATA_VARIANTS = [
+    PreprocessedDataVariants.RAW_BEFORE_ICA,
+    PreprocessedDataVariants.ICA_COMPONENTS,
+    PreprocessedDataVariants.IC_PROBABILITIES,
+]

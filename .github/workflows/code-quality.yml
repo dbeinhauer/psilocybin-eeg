@@ -1,0 +1,57 @@
+name: Code Quality (Black, Ruff, nbstripout)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Ensure only one run per PR at a time; cancel any in-progress run when a new
+# commit is pushed.  A single sequential job also prevents the push races that
+# occur when Black, Ruff, and nbstripout run as separate concurrent workflows.
+concurrency:
+  group: code-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format-and-lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # Skip for fork PRs: GITHUB_TOKEN cannot push to a fork's head branch.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install tools
+        run: pip install black==26.3.1 ruff==0.9.10 nbstripout==0.8.1
+
+      - name: Run Black formatter
+        run: black .
+
+      - name: Run Ruff linter (auto-fix)
+        run: ruff check --fix .
+
+      - name: Run Ruff formatter
+        run: ruff format .
+
+      - name: Strip notebook outputs
+        run: find . -name "*.ipynb" -not -path "./.git/*" -print0 | xargs -0 -r nbstripout
+
+      - name: Commit and push fixes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet; then
+            git add -A
+            git commit -m "style: apply automated code quality fixes (Black, Ruff, nbstripout)"
+            git push
+          fi

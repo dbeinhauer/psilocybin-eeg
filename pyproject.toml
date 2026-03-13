@@ -3,17 +3,24 @@ name = "psilocybin-eeg"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
     "autoreject>=0.4.3",
     "ipympl>=0.10.0",
-    "ipython>=9.9.0",
-    "jupyterlab>=4.5.2",
+    "ipython>=9.11.0",
+    "jupyterlab>=4.5.6",
     "mne>=1.11.0",
     "mne-icalabel>=0.8.1",
-    "pandas>=2.3.3",
+    "pandas>=3.0.1",
     "pyqt6>=6.10.2",
     "pytest>=9.0.2",
     "seaborn>=0.13.2",
     "torch>=2.10.0",
 ]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+# F401: imported but unused — kept for test files where pytest is used via decorators
+per-file-ignores = { "tests/*.py" = ["F401"] }

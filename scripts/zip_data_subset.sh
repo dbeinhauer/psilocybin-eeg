@@ -1,7 +1,7 @@
 #!/bin/bash
-#PBS -N PSILO_EEF_DATASET_PREPROCESSING
-#PBS -l walltime=1:00:00
-#PBS -l select=1:ncpus=1:mem=50gb:scratch_local=50gb
+#PBS -N ZIP_DATA
+#PBS -l walltime=2:00:00
+#PBS -l select=1:ncpus=4:mem=100gb:scratch_local=50gb
 
 #PBS -m ae
 #PBS -j oe

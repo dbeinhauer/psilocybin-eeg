@@ -1,11 +1,11 @@
 """
-Tests for the mean & variance computation functions in ``src.features.isc``.
+Tests for the mean & variance computation functions in ``src.analysis.isc``.
 """
 
 import numpy as np
 import pytest
 
-from src.features.isc import (
+from src.analysis.isc import (
     compute_mean_variance,
     compute_sliding_window_mean_variance,
 )
