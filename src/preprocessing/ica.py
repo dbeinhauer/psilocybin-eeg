@@ -68,8 +68,7 @@ def check_ic_component_probability(
     """
     return (
         all_probabilities[tested_component][ic_idx] >= tested_threshold
-        and all_probabilities[ICLabelComponentsClasses.BRAIN][ic_idx]
-        < brain_threshold
+        and all_probabilities[ICLabelComponentsClasses.BRAIN][ic_idx] < brain_threshold
     )
 
 
@@ -104,17 +103,13 @@ def mark_ic_for_exclusion(
     log = logger or _logger
 
     log.info("Getting probabilites of IC components.")
-    labeled_probabilities = get_ic_labeling_probabilities(
-        component_probabilities
-    )
+    labeled_probabilities = get_ic_labeling_probabilities(component_probabilities)
     # --- Auto-exclusion rule (tune thresholds to taste) ---
     # Conservative defaults: remove clear artifacts, keep 'brain' and usually keep 'other'
     # ---- Tuning thresholds ----
     exclude = []
 
-    log.info(
-        "Starting exclusion of the components passing selected threshold."
-    )
+    log.info("Starting exclusion of the components passing selected threshold.")
 
     for ic_idx in range(len(component_probabilities)):
         for component, threshold in component_thresholds.items():

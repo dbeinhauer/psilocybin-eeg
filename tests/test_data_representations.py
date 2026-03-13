@@ -66,17 +66,13 @@ class TestAnalysisData:
         assert normalized is not sample_data
         assert normalized.data.shape == sample_data.data.shape
         # Z-scored data should have mean ≈ 0, std ≈ 1 along axis=2
-        np.testing.assert_allclose(
-            normalized.data.mean(axis=2), 0.0, atol=1e-10
-        )
+        np.testing.assert_allclose(normalized.data.mean(axis=2), 0.0, atol=1e-10)
 
     def test_normalize_inplace(self, sample_data):
         original_shape = sample_data.data.shape
         sample_data.normalize_inplace()
         assert sample_data.data.shape == original_shape
-        np.testing.assert_allclose(
-            sample_data.data.mean(axis=2), 0.0, atol=1e-10
-        )
+        np.testing.assert_allclose(sample_data.data.mean(axis=2), 0.0, atol=1e-10)
 
     def test_copy_is_independent(self, sample_data):
         copied = sample_data.copy()

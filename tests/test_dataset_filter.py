@@ -19,7 +19,14 @@ def dataset_metadata():
     """Sample dataset metadata DataFrame using enum keys."""
     return pd.DataFrame(
         {
-            SingleDataMetadata.PARTICIPANT_ID: ["001", "001", "002", "002", "003", "003"],
+            SingleDataMetadata.PARTICIPANT_ID: [
+                "001",
+                "001",
+                "002",
+                "002",
+                "003",
+                "003",
+            ],
             SingleDataMetadata.CONDITION: [
                 ConditionVariants.PLACEBO,
                 ConditionVariants.PLACEBO,
@@ -37,7 +44,12 @@ def dataset_metadata():
                 MusicTypeVariants.PSYTRANCE,
             ],
             SingleDataMetadata.FILENAME: [
-                "f1.edf", "f2.edf", "f3.edf", "f4.edf", "f5.edf", "f6.edf"
+                "f1.edf",
+                "f2.edf",
+                "f3.edf",
+                "f4.edf",
+                "f5.edf",
+                "f6.edf",
             ],
         }
     )

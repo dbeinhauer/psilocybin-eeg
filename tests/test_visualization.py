@@ -7,6 +7,7 @@ display. matplotlib is set to the 'Agg' backend so all tests run headless.
 
 import pytest
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -69,6 +70,10 @@ class TestPlotSignalOverlap:
         signals = [rng.normal(size=1000) for _ in range(3)]
         # Just verify it doesn't error; we won't check visual output
         DatasetPlotter.plot_signal_overlap(
-            signals, sfreq=250.0, t_start=0, time_duration=2, save_fig="/tmp/test_overlap.png"
+            signals,
+            sfreq=250.0,
+            t_start=0,
+            time_duration=2,
+            save_fig="/tmp/test_overlap.png",
         )
         plt.close("all")

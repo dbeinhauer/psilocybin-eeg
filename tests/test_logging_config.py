@@ -41,7 +41,9 @@ class TestSetupLogging:
         assert "RotatingFileHandler" in handler_types
         # Should have 2 file handlers (main + error)
         file_handlers = [
-            h for h in logger.handlers if isinstance(h, logging.handlers.RotatingFileHandler)
+            h
+            for h in logger.handlers
+            if isinstance(h, logging.handlers.RotatingFileHandler)
         ]
         assert len(file_handlers) == 2
 

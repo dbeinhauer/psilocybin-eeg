@@ -9,7 +9,9 @@ class ProjectPaths:
     """
 
     PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()  # Root of the project.
-    CONFIG_DIR = PROJECT_ROOT / "config"  # Directory for checked-in configuration files.
+    CONFIG_DIR = (
+        PROJECT_ROOT / "config"
+    )  # Directory for checked-in configuration files.
     DATA_DIR = PROJECT_ROOT / "data"  # Directory where all data is stored.
     COORDINATES_DIR = CONFIG_DIR / "coordinates"  # Directory for all coordinate files.
     RAW_DATA_DIR = DATA_DIR / "raw"  # Directory for all raw data files.

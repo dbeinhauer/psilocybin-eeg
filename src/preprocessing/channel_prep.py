@@ -44,9 +44,7 @@ def rename_channels(data: mne.io.Raw, logger=None) -> mne.io.Raw:
     for ch_name in data.ch_names:
         # Handle "EEG VREF" -> "Cz"
         if ch_name == RAW_CHANNEL_NAMES[ChannelTypes.EEG_REF]:
-            channel_name_mapping[ch_name] = MONTAGE_CHANNEL_NAMES[
-                ChannelTypes.EEG_REF
-            ]
+            channel_name_mapping[ch_name] = MONTAGE_CHANNEL_NAMES[ChannelTypes.EEG_REF]
             # Handle "EEG {num}" -> "E{num}"
         elif ch_name.startswith(RAW_CHANNEL_NAMES[ChannelTypes.EEG]):
             # Extract numbers using regex (handles multiple spaces, etc.)

@@ -83,9 +83,7 @@ class TestGetCoordinatesFilePath:
         coord_path, excl_path = ProjectPaths.get_coordinates_file_path(
             CoordinateSystems.HYDROGEL_257
         )
-        assert coord_path == (
-            ProjectPaths.COORDINATES_DIR / "GSN-HydroCel-257.sfp"
-        )
+        assert coord_path == (ProjectPaths.COORDINATES_DIR / "GSN-HydroCel-257.sfp")
         assert excl_path == (
             ProjectPaths.EXCLUDED_ELECTRODES_DIR / "GSN-HydroCel-257.csv"
         )
@@ -98,6 +96,5 @@ class TestGetCoordinatesFilePath:
             ProjectPaths.COORDINATES_DIR / "GSN-HydroCel-257_no-fiducials.sfp"
         )
         assert excl_path == (
-            ProjectPaths.EXCLUDED_ELECTRODES_DIR
-            / "GSN-HydroCel-257_no-fiducials.csv"
+            ProjectPaths.EXCLUDED_ELECTRODES_DIR / "GSN-HydroCel-257_no-fiducials.csv"
         )

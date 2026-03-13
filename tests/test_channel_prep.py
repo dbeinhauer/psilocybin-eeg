@@ -74,7 +74,9 @@ class TestCropStartAndEnd:
     def test_crop_shortens_data(self, raw_with_eeg_channels):
         raw = raw_with_eeg_channels
         original_duration = raw.times[-1] - raw.times[0]
-        cropped = crop_start_and_end_of_dataseries(raw, start_offset=1.0, end_offset=1.0)
+        cropped = crop_start_and_end_of_dataseries(
+            raw, start_offset=1.0, end_offset=1.0
+        )
         cropped_duration = cropped.times[-1] - cropped.times[0]
         assert cropped_duration < original_duration
         assert cropped_duration == pytest.approx(original_duration - 2.0, abs=0.01)

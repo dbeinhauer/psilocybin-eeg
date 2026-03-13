@@ -9,16 +9,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.definitions.fields import (
-    ExperimentNames,
-    CoordinateSystems,
     MusicTypeVariants,
     ConditionVariants,
 )
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Run ISC and group-level analysis."
-    )
+    parser = argparse.ArgumentParser(description="Run ISC and group-level analysis.")
     parser.add_argument(
         "--condition",
         type=str,
@@ -37,7 +33,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Import here to defer heavy dependency loading
-    from src.analysis.summary import EEGSummarizedAnalyzer
 
-    print(f"Analysis entry point for condition={args.condition}, music_type={args.music_type}")
+    print(
+        f"Analysis entry point for condition={args.condition}, music_type={args.music_type}"
+    )
     print("Instantiate EEGSummarizedAnalyzer and run desired analysis methods.")

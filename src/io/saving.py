@@ -39,9 +39,7 @@ def save_data_file(
     """
     log = logger or _logger
 
-    log.info(
-        f"Saving the '{data_type.value}' data into the file {filename}."
-    )
+    log.info(f"Saving the '{data_type.value}' data into the file {filename}.")
     # Path to results file.
     data_path = get_preprocessing_results_path(
         processed_data_dir, filename, data_type, interim_data_dir=interim_data_dir
@@ -53,7 +51,5 @@ def save_data_file(
     elif data_type == PreprocessedDataVariants.IC_PROBABILITIES:
         np.save(data_path, data)
     else:
-        log.warning(
-            f"Wrong datatype: '{data_type.value}' to store. Skipping!"
-        )
+        log.warning(f"Wrong datatype: '{data_type.value}' to store. Skipping!")
     log.info("Data saved successfully!")
