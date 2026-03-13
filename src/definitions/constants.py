@@ -9,17 +9,23 @@ class ProjectPaths:
     """
 
     PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()  # Root of the project.
+    CONFIG_DIR = (
+        PROJECT_ROOT / "config"
+    )  # Directory for checked-in configuration files.
     DATA_DIR = PROJECT_ROOT / "data"  # Directory where all data is stored.
-    COORDINATES_DIR = DATA_DIR / "coordinates"  # Directory for all coordinate files.
+    COORDINATES_DIR = CONFIG_DIR / "coordinates"  # Directory for all coordinate files.
     RAW_DATA_DIR = DATA_DIR / "raw"  # Directory for all raw data files.
+    INTERIM_DATA_DIR = (
+        DATA_DIR / "interim"
+    )  # Directory for intermediate products (before ICA, etc.).
     PROCESSED_DATA_DIR = (
         DATA_DIR / "processed"
     )  # Directory for all processed data files.
     PARTICIPANT_MAPPING_DIR = (
-        DATA_DIR / "participant_mappings"
+        CONFIG_DIR / "participant_mappings"
     )  # Directory for participant mapping csv files.
     EXCLUDED_ELECTRODES_DIR = (
-        DATA_DIR / "excluded_electrodes"
+        CONFIG_DIR / "excluded_electrodes"
     )  # Directory where excluded electrodes from processing are stored (we want to typically omit the boundary electrodes).
     EXCLUDED_ICS_FILENAME_MAPPING = "excluded_ics_mapping.csv"  # Filename where the mapping of all ICs selected for exclusion are stored alongside with their category.
     PLOTS_PATH = PROJECT_ROOT / "plots"  # Path to all project plots.
@@ -54,6 +60,20 @@ class ProjectPaths:
         )
 
         return data_dir, participant_mapping_path
+
+    @staticmethod
+    def get_experiment_interim_dir(experiment_name: ExperimentNames) -> Path:
+        """
+        Get path to the interim data directory for the given experiment.
+
+        Interim data includes intermediate products such as data before ICA,
+        ICA components, and IC probabilities.
+
+        :param experiment_name: Value of the `ExperimentNames` field equals to experiment
+        data directory name.
+        :return: Path to interim data directory for the experiment.
+        """
+        return ProjectPaths.INTERIM_DATA_DIR / experiment_name.value
 
     @staticmethod
     def get_coordinates_file_path(
