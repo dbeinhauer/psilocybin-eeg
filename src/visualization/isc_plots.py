@@ -981,9 +981,7 @@ def plot_sliding_window_mean_variance(
             mean_trace = stat_tc.mean(axis=1)
 
             ax_top.plot(time_min, mean_trace, color=color, lw=1.2, zorder=3)
-            ax_top.fill_between(
-                time_min, mean_trace, alpha=0.25, color=color, zorder=2
-            )
+            ax_top.fill_between(time_min, mean_trace, alpha=0.25, color=color, zorder=2)
             ax_top.axhline(0, color="grey", ls="--", lw=0.6, zorder=1)
             ax_top.set_xlim(t_start, t_end)
             ax_top.set_ylabel(f"Mean {stat_name.lower()}")

@@ -10,7 +10,6 @@ from src.analysis.isc import (
     compute_sliding_window_mean_variance,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -50,10 +49,12 @@ class TestComputeMeanVariance:
     def test_known_values(self):
         """Manually verify with a small hand-crafted array."""
         # 2 items × 1 feature × 4 samples
-        data = np.array([
-            [[1.0, 2.0, 3.0, 4.0]],
-            [[3.0, 4.0, 5.0, 6.0]],
-        ])
+        data = np.array(
+            [
+                [[1.0, 2.0, 3.0, 4.0]],
+                [[3.0, 4.0, 5.0, 6.0]],
+            ]
+        )
         mean_f, var_f = compute_mean_variance(data)
         # mean across items: [2, 3, 4, 5]
         # temporal mean = 3.5, var = 1.25
