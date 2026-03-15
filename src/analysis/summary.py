@@ -718,3 +718,88 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         )
         self.logger.info("Sliding-window mean & variance computation complete.")
         return mean_tc, var_tc, times
+
+    def compute_band_mean_variance(
+        self,
+        bands: Optional[dict[str, tuple[float, float]]] = None,
+        sfreq: Optional[float] = None,
+    ) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+        """
+        Compute per-feature mean and variance separately for each frequency band.
+
+        For each band the data is band-pass filtered first, then mean and
+        variance are computed identically to :meth:`compute_mean_variance`.
+
+        :param bands: Mapping of band name to ``(l_freq, h_freq)`` in Hz.
+            Defaults to :data:`FREQUENCY_BANDS`
+            (delta / theta / alpha / beta / gamma).
+        :param sfreq: Sampling frequency override.  Falls back to
+            :attr:`resample_freq` or ``self.info['sfreq']``.
+        :return: Dict mapping each band name to
+            ``(mean_per_feature, var_per_feature)`` each of shape
+            ``(n_channels,)``.
+        :raises RuntimeError: If no data has been loaded yet.
+        """
+        if self.data is None:
+            raise RuntimeError("No data loaded.")
+        if bands is None:
+            bands = FREQUENCY_BANDS
+
+        results: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        for name, (l_freq, h_freq) in bands.items():
+            self.logger.info(f"Band mean & variance — {name} [{l_freq}–{h_freq} Hz].")
+            filtered = self.filter_to_band(l_freq, h_freq, sfreq)
+            results[name] = _compute_mean_variance(filtered)
+        self.logger.info("Band mean & variance computation complete.")
+        return results
+
+    def compute_band_sliding_window_mean_variance(
+        self,
+        bands: Optional[dict[str, tuple[float, float]]] = None,
+        window_sec: float = 5.0,
+        step_sec: float = 2.5,
+        sfreq: Optional[float] = None,
+    ) -> dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]:
+        """
+        Compute time-resolved mean and variance via a sliding window, separated
+        by frequency band.
+
+        Each band is band-pass filtered first; then
+        :meth:`compute_sliding_window_mean_variance` logic is applied.
+
+        :param bands: Mapping of band name to ``(l_freq, h_freq)`` in Hz.
+            Defaults to :data:`FREQUENCY_BANDS`.
+        :param window_sec: Window length in seconds.
+        :param step_sec: Step size (hop) in seconds.
+        :param sfreq: Sampling frequency override.  Falls back to
+            :attr:`resample_freq` or ``self.info['sfreq']``.
+        :return: Dict mapping each band name to
+            ``(mean_timecourse, var_timecourse, window_times)`` with shapes
+            ``(n_windows, n_channels)``, ``(n_windows, n_channels)`` and
+            ``(n_windows,)``.
+        :raises RuntimeError: If no data has been loaded yet.
+        """
+        if self.data is None:
+            raise RuntimeError("No data loaded.")
+        if bands is None:
+            bands = FREQUENCY_BANDS
+        if sfreq is None:
+            sfreq = (
+                self.resample_freq
+                if self.resample_freq is not None
+                else self.info["sfreq"]
+            )
+
+        results: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+        for name, (l_freq, h_freq) in bands.items():
+            self.logger.info(
+                f"Band sliding-window mean & variance — {name} [{l_freq}–{h_freq} Hz], "
+                f"win={window_sec}s, step={step_sec}s."
+            )
+            filtered = self.filter_to_band(l_freq, h_freq, sfreq)
+            mean_tc, var_tc, times = _compute_sliding_window_mean_variance(
+                filtered, window_sec=window_sec, step_sec=step_sec, sfreq=sfreq
+            )
+            results[name] = (mean_tc, var_tc, times)
+        self.logger.info("Band sliding-window mean & variance computation complete.")
+        return results
