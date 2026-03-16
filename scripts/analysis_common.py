@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -51,6 +51,9 @@ from src.visualization.isc_plots import (
     plot_band_mean_variance_distributions,
     plot_band_sliding_window_mean_variance,
 )
+
+if TYPE_CHECKING:
+    from src.analysis.summary import EEGSummarizedAnalyzer
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -139,14 +142,14 @@ def load_analyzers(
     condition: ConditionVariants,
     exclusion_categories: Sequence[ExclusionCategories],
     process_and_save: bool,
-) -> dict:
+) -> dict[str, EEGSummarizedAnalyzer]:
     """Load (or process & save) and normalise analysers for each music type.
 
     Returns a dict keyed by the music-type *value* (e.g. ``"CLASSIC"``).
     """
     from src.analysis.summary import EEGSummarizedAnalyzer
 
-    analyzers: dict = {}
+    analyzers: dict[str, EEGSummarizedAnalyzer] = {}
     for mt in music_types:
         label = mt.value
         analyzer = EEGSummarizedAnalyzer(
@@ -329,7 +332,7 @@ def run_isc_workflow(
 
 def run_mean_variance_workflow(
     datasets: dict[str, AnalysisData],
-    analyzers: dict,
+    analyzers: dict[str, EEGSummarizedAnalyzer],
     *,
     save_dir: Path,
     window_sec: float = 5.0,
