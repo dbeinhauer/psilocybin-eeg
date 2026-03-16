@@ -47,7 +47,6 @@ from src.visualization.isc_plots import (
     print_data_overview,
 )
 
-
 # ──────────────────────────────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────────────────────────────
@@ -101,10 +100,7 @@ if __name__ == "__main__":
         nargs="+",
         default=[mt.value for mt in MusicTypeVariants],
         choices=[mt.value for mt in MusicTypeVariants],
-        help=(
-            "One or more music types to analyse. "
-            "Defaults to all available types."
-        ),
+        help=("One or more music types to analyse. Defaults to all available types."),
     )
     parser.add_argument(
         "--process_and_save",
@@ -193,7 +189,9 @@ if __name__ == "__main__":
         loo_isc, mean_loo_isc = compute_loo_isc(ad.data)
         loo_iscs[label] = loo_isc
         mean_loo_iscs[label] = mean_loo_isc
-        print(f"[{label}]  loo_isc: {loo_isc.shape}   mean_loo_isc: {mean_loo_isc.shape}")
+        print(
+            f"[{label}]  loo_isc: {loo_isc.shape}   mean_loo_isc: {mean_loo_isc.shape}"
+        )
 
     _first_ad = next(iter(datasets.values()))
     plot_loo_isc_distribution(

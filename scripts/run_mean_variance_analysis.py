@@ -41,7 +41,6 @@ from src.visualization.isc_plots import (
     print_data_overview,
 )
 
-
 # ──────────────────────────────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────────────────────────────
@@ -95,10 +94,7 @@ if __name__ == "__main__":
         nargs="+",
         default=[mt.value for mt in MusicTypeVariants],
         choices=[mt.value for mt in MusicTypeVariants],
-        help=(
-            "One or more music types to analyse. "
-            "Defaults to all available types."
-        ),
+        help=("One or more music types to analyse. Defaults to all available types."),
     )
     parser.add_argument(
         "--process_and_save",
