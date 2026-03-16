@@ -127,6 +127,18 @@ class ExclusionCategories(Enum):
     )
 
 
+class FrequencyBandNames(Enum):
+    """
+    Standard EEG frequency band names used for band-specific analyses.
+    """
+
+    DELTA = "delta"
+    THETA = "theta"
+    ALPHA = "alpha"
+    BETA = "beta"
+    GAMMA = "gamma"
+
+
 class PreprocessedDataVariants(Enum):
     """
     All variants of possible data stored during preprocessing (for quality of the preprocessing analysis).

@@ -21,13 +21,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from scripts.analysis_common import (
+    add_common_arguments,
+    load_analyzers,
+    analyzers_to_datasets,
+    BAND_ISC_THRESHOLDS,
+)
 from src.definitions.fields import (
     MusicTypeVariants,
     ConditionVariants,
     ExclusionCategories,
-    ExperimentNames,
-    CoordinateSystems,
-    SingleDataMetadata,
 )
 from src.definitions.constants import ProjectPaths
 from src.analysis.isc import (
@@ -47,36 +50,6 @@ from src.visualization.isc_plots import (
     print_data_overview,
 )
 
-# ──────────────────────────────────────────────────────────────────────
-# Helpers
-# ──────────────────────────────────────────────────────────────────────
-
-
-def _make_analyzer(music_type, condition, exclusion_categories, process_and_save):
-    """Create, load (or process & save) and normalise an analyser for one music type."""
-    from src.analysis.summary import EEGSummarizedAnalyzer
-
-    analyzer = EEGSummarizedAnalyzer(
-        experiment_name=ExperimentNames.PSILO_MUSIC,
-        coordinate_system=CoordinateSystems.HYDROGEL_257_NO_FIDUCIALS,
-        music_types=[music_type],
-        conditions=[condition],
-        exclusion_categories=exclusion_categories,
-    )
-
-    if process_and_save:
-        analyzer.load_and_prepare_data(resample_freq=250.0, n_jobs=-1)
-        print(f"[{music_type.value}] data shape: {analyzer.data.shape}")
-        analyzer.save_data()
-    else:
-        analyzer.load_data(
-            info_filename=analyzer.filtered_df[SingleDataMetadata.FILENAME].iloc[0],
-        )
-        print(f"[{music_type.value}] Loaded data shape: {analyzer.data.shape}")
-
-    analyzer.normalize()
-    return analyzer
-
 
 # ──────────────────────────────────────────────────────────────────────
 # Main
@@ -87,60 +60,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Run ISC and group-level analysis on preprocessed EEG data."
     )
-    parser.add_argument(
-        "--condition",
-        type=str,
-        default=ConditionVariants.PLACEBO.value,
-        choices=[cond.value for cond in ConditionVariants],
-        help=f"The condition to process, should be one of {[cond.value for cond in ConditionVariants]}.",
-    )
-    parser.add_argument(
-        "--music_type",
-        type=str,
-        nargs="+",
-        default=[mt.value for mt in MusicTypeVariants],
-        choices=[mt.value for mt in MusicTypeVariants],
-        help=("One or more music types to analyse. Defaults to all available types."),
-    )
-    parser.add_argument(
-        "--process_and_save",
-        action="store_true",
-        default=False,
-        help="When set, load raw files, resample, stack and save before analysis.",
-    )
+    add_common_arguments(parser)
     parser.add_argument(
         "--isc_threshold",
         type=float,
         default=0.035,
         help="Broadband ISC significance threshold (default: 0.035).",
     )
-    parser.add_argument(
-        "--window_sec",
-        type=float,
-        default=5.0,
-        help="Sliding-window length in seconds (default: 5.0).",
-    )
-    parser.add_argument(
-        "--step_sec",
-        type=float,
-        default=2.5,
-        help="Sliding-window step size in seconds (default: 2.5).",
-    )
 
     args = parser.parse_args()
-
-    # ── Virtual display for headless environments ─────────────────────
-    try:
-        from xvfbwrapper import Xvfb
-
-        vdisplay = Xvfb()
-        vdisplay.start()
-    except ImportError:
-        pass
-
-    import matplotlib
-
-    matplotlib.use("Agg")
 
     # ── Configuration ─────────────────────────────────────────────────
     condition = ConditionVariants(args.condition)
@@ -152,31 +80,14 @@ if __name__ == "__main__":
     print(f"Figures will be saved to: {SAVE_DIR}")
 
     ISC_THRESHOLD = args.isc_threshold
-    BAND_ISC_THRESHOLDS = {
-        "delta": 0.1,
-        "theta": 0.07,
-        "alpha": 0.035,
-        "beta": 0.02,
-        "gamma": 0.01,
-    }
     WINDOW_SEC = args.window_sec
     STEP_SEC = args.step_sec
 
     # ── Data loading ──────────────────────────────────────────────────
-    analyzers = {}
-    for mt in music_types:
-        label = mt.value
-        analyzers[label] = _make_analyzer(
-            mt, condition, exclusion_categories, args.process_and_save
-        )
-
-    # Convert to AnalysisData (raw time-domain representation)
-    datasets = {
-        label: a.to_analysis_data(label=label) for label, a in analyzers.items()
-    }
-
-    for label, ad in datasets.items():
-        print(f"[{label}] {ad}")
+    analyzers = load_analyzers(
+        music_types, condition, exclusion_categories, args.process_and_save
+    )
+    datasets = analyzers_to_datasets(analyzers)
 
     # ── Data overview ─────────────────────────────────────────────────
     print_data_overview(datasets)
