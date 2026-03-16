@@ -25,6 +25,7 @@ Usage examples::
 """
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -43,6 +44,8 @@ from src.definitions.fields import (
     ExclusionCategories,
 )
 from src.definitions.constants import ProjectPaths
+
+_logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────────────
 # Main
@@ -94,4 +97,4 @@ if __name__ == "__main__":
             step_sec=STEP_SEC,
         )
 
-    print("\nAll requested analyses complete.")
+    _logger.info("All requested analyses complete.")

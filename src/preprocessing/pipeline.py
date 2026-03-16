@@ -531,7 +531,7 @@ class DatasetHandler(LoggerMixin):
                             is_processed=True,
                             processed_data_type=PreprocessedDataVariants.ICA_COMPONENTS,
                         )
-                        print(excluded_row[ExcludedICsMetadata.IC_ID.value])
+                        self.logger.debug(excluded_row[ExcludedICsMetadata.IC_ID.value])
                         DatasetPlotter.plot_raw_dataseries(
                             raw_data,
                             save_fig=f"{excluded_row[ExcludedICsMetadata.ORIGINAL_FILENAME.value].split('.')[0]}-{excluded_row[ExcludedICsMetadata.IC_ID.value]}-{excluded_row[ExcludedICsMetadata.IC_CATEGORY.value]}",
