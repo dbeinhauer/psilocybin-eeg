@@ -350,38 +350,6 @@ def to_wavelet_tfr(
     return tfr, freqs
 
 
-def to_mean_response(
-    ad: AnalysisData,
-    group_size: Optional[int] = None,
-) -> AnalysisData:
-    """
-    Compute mean response across items (subjects).
-
-    :param ad: Input data.
-    :param group_size: If ``None``, returns the grand mean as a single item.
-        Otherwise splits items into non-overlapping groups of this size and
-        averages within each group.
-    :return: ``AnalysisData`` with reduced first dimension.
-    """
-    if group_size is None:
-        mean = ad.data.mean(axis=0, keepdims=True)
-        label_suffix = "grand mean"
-    else:
-        n = ad.n_items
-        groups = [ad.data[i : i + group_size] for i in range(0, n, group_size)]
-        mean = np.array([g.mean(axis=0) for g in groups])
-        label_suffix = f"mean (group={group_size})"
-    return AnalysisData(
-        data=mean,
-        sfreq=ad.sfreq,
-        representation=DataRepresentation.MEAN_RESPONSE,
-        label=f"{ad.label} ({label_suffix})",
-        feature_names=ad.feature_names,
-        info=ad.info,
-        metadata={**ad.metadata, "group_size": group_size},
-    )
-
-
 def extract_ica_activations(
     raws: list,
     icas: list,

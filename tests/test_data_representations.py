@@ -10,7 +10,6 @@ from src.analysis.data_representations import (
     DataRepresentation,
     from_array,
     to_analytic_amplitude,
-    to_mean_response,
 )
 
 
@@ -161,41 +160,3 @@ class TestToAnalyticAmplitude:
         )
         result = to_analytic_amplitude(ad)
         assert result.data.shape == ad.data.shape
-
-
-class TestToMeanResponse:
-    """Test mean response adapter."""
-
-    def test_grand_mean(self):
-        rng = np.random.default_rng(45)
-        ad = AnalysisData(
-            data=rng.normal(size=(6, 3, 100)),
-            sfreq=250.0,
-            representation=DataRepresentation.TIME_DOMAIN,
-            label="raw",
-        )
-        result = to_mean_response(ad)
-        assert result.n_items == 1  # grand mean
-        assert result.representation == DataRepresentation.MEAN_RESPONSE
-
-    def test_grouped_mean(self):
-        rng = np.random.default_rng(46)
-        ad = AnalysisData(
-            data=rng.normal(size=(6, 3, 100)),
-            sfreq=250.0,
-            representation=DataRepresentation.TIME_DOMAIN,
-            label="raw",
-        )
-        result = to_mean_response(ad, group_size=3)
-        assert result.n_items == 2  # 6 / 3 = 2 groups
-
-    def test_grand_mean_values(self):
-        data = np.ones((4, 2, 50)) * 2.0
-        ad = AnalysisData(
-            data=data,
-            sfreq=100.0,
-            representation=DataRepresentation.TIME_DOMAIN,
-            label="constant",
-        )
-        result = to_mean_response(ad)
-        np.testing.assert_allclose(result.data, 2.0)
