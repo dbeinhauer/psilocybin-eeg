@@ -6,6 +6,8 @@ power spectra, and correlation heatmaps for aligned signals.
 from pathlib import Path
 from typing import Literal
 
+import logging
+
 import mne
 from scipy.signal import correlate, correlation_lags
 import matplotlib.pyplot as plt
@@ -16,6 +18,8 @@ import seaborn as sns
 from src.definitions.constants import ProjectPaths
 from src.definitions.fields import PreprocessedDataVariants
 from src.utils.logging_config import LoggerMixin
+
+_logger = logging.getLogger(__name__)
 
 
 class DatasetPlotter(LoggerMixin):
@@ -202,10 +206,10 @@ class DatasetPlotter(LoggerMixin):
             np.triu_indices(n, k=1)
         ]  # Get upper triangle without diagonal
 
-        print(f"Mean pairwise correlation: {upper.mean():.4f}")
-        print(f"Median pairwise correlation: {np.median(upper):.4f}")
-        print(f"Min pairwise correlation: {upper.min():.4f}")
-        print(f"Max pairwise correlation: {upper.max():.4f}")
+        _logger.info(f"Mean pairwise correlation: {upper.mean():.4f}")
+        _logger.info(f"Median pairwise correlation: {np.median(upper):.4f}")
+        _logger.info(f"Min pairwise correlation: {upper.min():.4f}")
+        _logger.info(f"Max pairwise correlation: {upper.max():.4f}")
 
     @staticmethod
     def plot_alignment_correlation_heatmap(

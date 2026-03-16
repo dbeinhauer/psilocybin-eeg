@@ -12,6 +12,7 @@ representation (raw EEG, ICA, wavelet, mean response, …).
 from __future__ import annotations
 
 from itertools import groupby
+import logging
 from operator import itemgetter
 from pathlib import Path
 from typing import Optional, Union
@@ -27,6 +28,8 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 from src.analysis.isc import FREQUENCY_BANDS
 from src.analysis.data_representations import AnalysisData
 from src.definitions.fields import FrequencyBandNames
+
+_logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -236,7 +239,7 @@ def plot_sliding_window_isc(
         plt.colorbar(im, cax=cax, label="LOO-ISC (r)")
 
         n_sig = sig_mask.sum()
-        print(
+        _logger.info(
             f"[{label}] Significant windows (r > {isc_threshold}): "
             f"{n_sig}/{len(sig_mask)} ({100 * n_sig / len(sig_mask):.1f} %)"
         )
@@ -287,21 +290,21 @@ def print_significant_intervals(
                 (t_begin, t_finish, mean_sw_isc[run].mean(), mean_sw_isc[peak_idx])
             )
 
-        print(f"=== {label} ===")
-        print(
+        _logger.info(f"=== {label} ===")
+        _logger.info(
             f"Threshold: r > {isc_threshold}   |   "
             f"Significant windows: {n_sig}/{len(sig_mask)} "
-            f"({100 * n_sig / len(sig_mask):.1f} %)\n"
+            f"({100 * n_sig / len(sig_mask):.1f} %)"
         )
-        print(header)
-        print(sep)
+        _logger.info(header)
+        _logger.info(sep)
         for k, (tb, tf, mean_r, peak_r) in enumerate(intervals, 1):
             dur_s = (tf - tb) * 60
-            print(
+            _logger.info(
                 f"{k:>3}  {tb:>11.3f}  {tf:>9.3f}  {dur_s:>12.1f}  "
                 f"{mean_r:>8.4f}  {peak_r:>8.4f}"
             )
-        print()
+        _logger.info("")
 
 
 # ---------------------------------------------------------------------------
@@ -571,9 +574,9 @@ def print_band_significant_intervals(
     thresholds = _resolve_band_thresholds(band_names, band_thresholds)
 
     for label in band_sw:
-        print(f"{'=' * 70}")
-        print(f"  {label}")
-        print(f"{'=' * 70}")
+        _logger.info(f"{'=' * 70}")
+        _logger.info(f"  {label}")
+        _logger.info(f"{'=' * 70}")
         for band in band_names:
             tc, times = band_sw[label][band]
             time_min = times / 60
@@ -593,8 +596,8 @@ def print_band_significant_intervals(
                 intervals.append((t_b, t_f, mean_tc[run].mean(), mean_tc[run].max()))
 
             l_freq, h_freq = bands[band]
-            print(
-                f"\n  {band} ({l_freq}\u2013{h_freq} Hz)  |  threshold r > {thr}  |  "
+            _logger.info(
+                f"  {band} ({l_freq}\u2013{h_freq} Hz)  |  threshold r > {thr}  |  "
                 f"sig windows: {n_sig}/{n_total} ({100 * n_sig / n_total:.1f} %)"
             )
             if intervals:
@@ -602,17 +605,17 @@ def print_band_significant_intervals(
                     f"  {'#':>3}  {'Start(min)':>10}  {'End(min)':>9}  "
                     f"{'Dur(s)':>7}  {'Mean r':>8}  {'Peak r':>8}"
                 )
-                print(header)
-                print("  " + "-" * 56)
+                _logger.info(header)
+                _logger.info("  " + "-" * 56)
                 for k, (tb, tf, mr, pr) in enumerate(intervals, 1):
                     dur_s = (tf - tb) * 60
-                    print(
+                    _logger.info(
                         f"  {k:>3}  {tb:>10.3f}  {tf:>9.3f}  "
                         f"{dur_s:>7.1f}  {mr:>8.4f}  {pr:>8.4f}"
                     )
             else:
-                print("  (no significant intervals)")
-        print()
+                _logger.info("  (no significant intervals)")
+        _logger.info("")
 
 
 # ---------------------------------------------------------------------------
@@ -805,7 +808,7 @@ def plot_band_overlap(
             )
 
         n_all = int(all_sig.sum())
-        print(
+        _logger.info(
             f"[{label}] ALL-rows simultaneous windows: "
             f"{n_all}/{n_windows} ({100 * n_all / n_windows:.1f} %)"
         )
@@ -837,15 +840,15 @@ def print_data_overview(
     for label, ad in datasets.items():
         n_items, n_features, n_samples = ad.data.shape
         duration_sec = n_samples / ad.sfreq
-        print(f"--- {label} ({ad.representation.value}) ---")
-        print(f"  {ad.item_axis_label}s : {n_items}")
-        print(f"  {ad.feature_axis_label}s: {n_features}")
-        print(f"  Samples      : {n_samples}")
-        print(f"  Sfreq        : {ad.sfreq} Hz")
-        print(f"  Duration     : {duration_sec:.1f} s  ({duration_sec / 60:.1f} min)")
-        print(f"  Data dtype   : {ad.data.dtype}")
-        print(f"  Data range   : [{ad.data.min():.3f}, {ad.data.max():.3f}]")
-        print()
+        _logger.info(f"--- {label} ({ad.representation.value}) ---")
+        _logger.info(f"  {ad.item_axis_label}s : {n_items}")
+        _logger.info(f"  {ad.feature_axis_label}s: {n_features}")
+        _logger.info(f"  Samples      : {n_samples}")
+        _logger.info(f"  Sfreq        : {ad.sfreq} Hz")
+        _logger.info(f"  Duration     : {duration_sec:.1f} s  ({duration_sec / 60:.1f} min)")
+        _logger.info(f"  Data dtype   : {ad.data.dtype}")
+        _logger.info(f"  Data range   : [{ad.data.min():.3f}, {ad.data.max():.3f}]")
+        _logger.info("")
 
 
 # ---------------------------------------------------------------------------

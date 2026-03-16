@@ -1,5 +1,10 @@
+import logging
+
+_logger = logging.getLogger(__name__)
+
+
 def main():
-    print("Hello from psilocybin-eeg!")
+    _logger.info("Hello from psilocybin-eeg!")
 
 
 if __name__ == "__main__":
