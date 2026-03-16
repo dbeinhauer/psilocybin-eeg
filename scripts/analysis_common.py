@@ -83,10 +83,7 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         nargs="+",
         default=["isc", "mean_variance"],
         choices=["isc", "mean_variance"],
-        help=(
-            "Which analyses to run. Defaults to both. "
-            "Choices: isc, mean_variance."
-        ),
+        help=("Which analyses to run. Defaults to both. Choices: isc, mean_variance."),
     )
     parser.add_argument(
         "--condition",
@@ -166,9 +163,7 @@ def load_analyzers(
             analyzer.save_data()
         else:
             analyzer.load_data(
-                info_filename=analyzer.filtered_df[
-                    SingleDataMetadata.FILENAME
-                ].iloc[0],
+                info_filename=analyzer.filtered_df[SingleDataMetadata.FILENAME].iloc[0],
             )
             print(f"[{label}] Loaded data shape: {analyzer.data.shape}")
 
@@ -226,8 +221,7 @@ def run_isc_workflow(
         loo_iscs[label] = loo_isc
         mean_loo_iscs[label] = mean_loo_isc
         print(
-            f"[{label}]  loo_isc: {loo_isc.shape}   "
-            f"mean_loo_isc: {mean_loo_isc.shape}"
+            f"[{label}]  loo_isc: {loo_isc.shape}   mean_loo_isc: {mean_loo_isc.shape}"
         )
 
     plot_loo_isc_distribution(
@@ -269,9 +263,7 @@ def run_isc_workflow(
     plot_band_isc_distributions(
         band_iscs,
         bands=FREQUENCY_BANDS,
-        feature_axis_label=(
-            f"Number of {_first_ad.feature_axis_label.lower()}s"
-        ),
+        feature_axis_label=(f"Number of {_first_ad.feature_axis_label.lower()}s"),
         save_path=save_dir / "band_isc_distributions.png",
     )
     plot_band_mean_isc_bar(
@@ -366,9 +358,7 @@ def run_mean_variance_workflow(
 
     plot_mean_variance_distribution(
         mean_var_results,
-        feature_axis_label=(
-            f"Number of {_first_ad.feature_axis_label.lower()}s"
-        ),
+        feature_axis_label=(f"Number of {_first_ad.feature_axis_label.lower()}s"),
         save_path=save_dir / "mean_variance_distribution.png",
     )
 
@@ -405,9 +395,7 @@ def run_mean_variance_workflow(
 
     plot_band_mean_variance_distributions(
         band_mv_results,
-        feature_axis_label=(
-            f"Number of {_first_ad.feature_axis_label.lower()}s"
-        ),
+        feature_axis_label=(f"Number of {_first_ad.feature_axis_label.lower()}s"),
         save_path=save_dir / "band_mean_variance_distribution.png",
     )
 
