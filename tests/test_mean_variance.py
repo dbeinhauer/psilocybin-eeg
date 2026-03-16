@@ -245,9 +245,7 @@ class TestBandSlidingWindowMeanVarianceWorkflow:
             np.testing.assert_allclose(
                 mean_tc, 7.0, err_msg=f"mean_tc wrong for {band}"
             )
-            np.testing.assert_allclose(
-                var_tc, 0.0, err_msg=f"var_tc wrong for {band}"
-            )
+            np.testing.assert_allclose(var_tc, 0.0, err_msg=f"var_tc wrong for {band}")
 
     def test_consistent_times_across_bands(self):
         """All bands computed from the same data → identical window_times."""
