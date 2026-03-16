@@ -8,16 +8,15 @@ that is common to every analysis workflow (ISC, mean/variance, …).
 from __future__ import annotations
 
 import argparse
+import sys
+from pathlib import Path
 from typing import Sequence
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import matplotlib
 
 matplotlib.use("Agg")
-
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.definitions.fields import (
     MusicTypeVariants,
