@@ -465,6 +465,144 @@ def run_mean_variance_workflow(
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Wavelet workflow helpers
+# ──────────────────────────────────────────────────────────────────────
+
+#: Frequency resolution (Hz) used when building per-band Morlet frequencies.
+_WAVELET_BAND_FREQ_RESOLUTION_HZ: float = 1.0
+
+
+def _wavelet_transform(
+    datasets: dict[str, AnalysisData],
+    freqs: np.ndarray,
+    representation: str,
+) -> dict[str, AnalysisData]:
+    """Apply a wavelet *representation* to every dataset.
+
+    :param datasets: Source :class:`AnalysisData` objects keyed by label.
+    :param freqs: Morlet frequencies (Hz).
+    :param representation: ``"amplitude"`` or ``"power"``.
+    :returns: New dict of transformed datasets with the same keys.
+    """
+    if representation == "amplitude":
+        return {label: to_wavelet_amplitude(ad, freqs) for label, ad in datasets.items()}
+    return {label: to_wavelet_power(ad, freqs) for label, ad in datasets.items()}
+
+
+def _run_wavelet_isc(
+    wavelet_ds: dict[str, AnalysisData],
+    save_dir: Path,
+    *,
+    isc_threshold: float,
+    window_sec: float,
+    step_sec: float,
+) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], dict]:
+    """LOO-ISC and sliding-window ISC on wavelet-transformed data.
+
+    Unlike :func:`run_isc_workflow`, this function does **not** attempt
+    per-band splitting via :meth:`~AnalysisData.filter_to_band`, which
+    would be semantically incorrect on frequency-decomposed data.
+
+    :returns: ``(loo_iscs, mean_loo_iscs, sw_results)`` — raw result dicts
+        keyed by label, suitable for building aggregated band-comparison
+        plots in :func:`run_wavelet_workflow`.
+    """
+    save_dir.mkdir(parents=True, exist_ok=True)
+    _first_wd = next(iter(wavelet_ds.values()))
+
+    # ── LOO-ISC ───────────────────────────────────────────────────
+    loo_iscs: dict[str, np.ndarray] = {}
+    mean_loo_iscs: dict[str, np.ndarray] = {}
+    for label, wd in wavelet_ds.items():
+        loo, mean_loo = compute_loo_isc(wd.data)
+        loo_iscs[label] = loo
+        mean_loo_iscs[label] = mean_loo
+        _logger.info(
+            f"[{label}]  loo_isc={loo.shape}  mean_loo_isc={mean_loo.shape}"
+        )
+
+    plot_loo_isc_distribution(
+        mean_loo_iscs,
+        ylabel=f"Number of {_first_wd.feature_axis_label.lower()}s",
+        save_path=save_dir / "loo_isc_distribution.png",
+    )
+
+    # ── Sliding-window ISC ────────────────────────────────────────
+    sw_results: dict = {}
+    for label, wd in wavelet_ds.items():
+        sw_isc, sw_times = compute_sliding_window_isc(
+            wd.data, window_sec=window_sec, step_sec=step_sec, sfreq=wd.sfreq
+        )
+        sw_results[label] = (sw_isc, sw_times)
+        _logger.info(
+            f"[{label}]  sw_isc={sw_isc.shape}  sw_times={sw_times.shape}"
+        )
+
+    plot_sliding_window_isc(
+        sw_results,
+        isc_threshold=isc_threshold,
+        feature_axis_label=f"{_first_wd.feature_axis_label} index",
+        save_path=save_dir / "sliding_window_isc.png",
+    )
+    print_significant_intervals(sw_results, isc_threshold=isc_threshold)
+
+    return loo_iscs, mean_loo_iscs, sw_results
+
+
+def _run_wavelet_mean_variance(
+    wavelet_ds: dict[str, AnalysisData],
+    save_dir: Path,
+    *,
+    window_sec: float,
+    step_sec: float,
+) -> tuple[dict, dict]:
+    """Global and sliding-window mean/variance on wavelet-transformed data.
+
+    :returns: ``(mean_var_results, sw_mv_results)`` — raw result dicts
+        keyed by label, suitable for building aggregated band-comparison
+        plots in :func:`run_wavelet_workflow`.
+    """
+    save_dir.mkdir(parents=True, exist_ok=True)
+    _first_wd = next(iter(wavelet_ds.values()))
+
+    # ── Global mean & variance ────────────────────────────────────
+    mean_var_results: dict = {}
+    for label, wd in wavelet_ds.items():
+        mean_f, var_f = compute_mean_variance(wd.data)
+        mean_var_results[label] = (mean_f, var_f)
+        _logger.info(
+            f"[{label}]  mean range: [{mean_f.min():.4f}, {mean_f.max():.4f}]  "
+            f"var range: [{var_f.min():.4f}, {var_f.max():.4f}]"
+        )
+
+    plot_mean_variance_distribution(
+        mean_var_results,
+        feature_axis_label=f"Number of {_first_wd.feature_axis_label.lower()}s",
+        save_path=save_dir / "mean_variance_distribution.png",
+    )
+
+    # ── Sliding-window mean & variance ────────────────────────────
+    sw_mv_results: dict = {}
+    for label, wd in wavelet_ds.items():
+        mean_tc, var_tc, sw_times = compute_sliding_window_mean_variance(
+            wd.data, window_sec=window_sec, step_sec=step_sec, sfreq=wd.sfreq
+        )
+        sw_mv_results[label] = (mean_tc, var_tc, sw_times)
+        _logger.info(
+            f"[{label}]  mean_tc={mean_tc.shape}  var_tc={var_tc.shape}  "
+            f"times={sw_times.shape}"
+        )
+
+    plot_sliding_window_mean_variance(
+        sw_mv_results,
+        feature_axis_label=f"{_first_wd.feature_axis_label} index",
+        save_path=save_dir / "sliding_window_mean_variance.png",
+    )
+
+    return mean_var_results, sw_mv_results
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Wavelet workflow
 # ──────────────────────────────────────────────────────────────────────
 
@@ -482,17 +620,26 @@ def run_wavelet_workflow(
 ) -> None:
     """Run ISC and mean/variance analyses on wavelet-transformed data.
 
-    Runs a broadband analysis on the full *freqs* range, followed by a
-    per-band analysis for each entry in :data:`FREQUENCY_BANDS` (each band's
-    own frequency range is used for the Morlet decomposition).
+    Runs two stages:
+
+    1. **Broadband** — transform with the full *freqs* range; saves plots
+       under ``<save_dir>/broadband/``.
+    2. **Per-band** — transform each EEG band independently using
+       :data:`FREQUENCY_BANDS` (1 Hz frequency resolution); saves per-band
+       plots under ``<save_dir>/band_<name>/`` and aggregated cross-band
+       comparison plots under ``<save_dir>/band_comparison/``.
+
+    The per-band ISC and mean/variance use Morlet-wavelet-transformed data
+    restricted to each band's own frequency range; bandpass filtering of the
+    wavelet data is explicitly avoided as it would be semantically incorrect
+    on frequency-decomposed data.
 
     :param datasets: Time-domain :class:`AnalysisData` objects keyed by label.
-    :param analyzers: Reserved for future extension (e.g. per-band wavelet
-        analysis via ``EEGSummarizedAnalyzer``).  Not used at present.
+    :param analyzers: Reserved for future extension.  Not used at present.
     :param representation: ``"amplitude"`` or ``"power"``.
-    :param freqs: Frequencies of interest for the broadband Morlet wavelet (Hz).
+    :param freqs: Morlet frequencies for the broadband analysis (Hz).
     :param save_dir: Root directory in which to save plots.
-    :param isc_threshold: ISC significance threshold for broadband plots.
+    :param isc_threshold: ISC significance threshold.
     :param window_sec: Sliding-window length in seconds.
     :param step_sec: Sliding-window step size in seconds.
     :raises ValueError: If *representation* is not ``"amplitude"`` or ``"power"``.
@@ -503,93 +650,120 @@ def run_wavelet_workflow(
         )
 
     save_dir.mkdir(parents=True, exist_ok=True)
-    _logger.info(
-        f"Wavelet {representation} figures will be saved to: {save_dir}"
+    _logger.info(f"Wavelet {representation} figures will be saved to: {save_dir}")
+
+    # Shared keyword dicts to avoid repeating the same kwargs everywhere.
+    _isc_kw: dict = dict(
+        isc_threshold=isc_threshold, window_sec=window_sec, step_sec=step_sec
     )
+    _mv_kw: dict = dict(window_sec=window_sec, step_sec=step_sec)
 
-    def _transform(ad: AnalysisData, band_freqs: np.ndarray) -> AnalysisData:
-        """Apply the selected wavelet transform with the given frequencies."""
-        if representation == "amplitude":
-            return to_wavelet_amplitude(ad, band_freqs)
-        return to_wavelet_power(ad, band_freqs)
-
-    def _run_isc_and_mv(
-        wavelet_ds: dict[str, AnalysisData],
-        sub_dir: Path,
-    ) -> None:
-        """Run ISC workflow + global/sliding-window mean-variance."""
-        sub_dir.mkdir(parents=True, exist_ok=True)
-        _first_wd = next(iter(wavelet_ds.values()))
-
-        run_isc_workflow(
-            wavelet_ds,
-            save_dir=sub_dir / "isc",
-            isc_threshold=isc_threshold,
-            window_sec=window_sec,
-            step_sec=step_sec,
-        )
-
-        # Global mean & variance
-        mean_var_results: dict = {}
-        for label, wd in wavelet_ds.items():
-            mean_f, var_f = compute_mean_variance(wd.data)
-            mean_var_results[label] = (mean_f, var_f)
-            _logger.info(
-                f"[{label}]  mean range: [{mean_f.min():.4f}, {mean_f.max():.4f}]  "
-                f"var range: [{var_f.min():.4f}, {var_f.max():.4f}]"
-            )
-
-        mv_save_dir = sub_dir / "mean_variance"
-        mv_save_dir.mkdir(parents=True, exist_ok=True)
-        plot_mean_variance_distribution(
-            mean_var_results,
-            feature_axis_label=(f"Number of {_first_wd.feature_axis_label.lower()}s"),
-            save_path=mv_save_dir / "mean_variance_distribution.png",
-        )
-
-        # Sliding-window mean & variance
-        sw_mv_results: dict = {}
-        for label, wd in wavelet_ds.items():
-            mean_tc, var_tc, sw_times = compute_sliding_window_mean_variance(
-                wd.data, window_sec=window_sec, step_sec=step_sec, sfreq=wd.sfreq
-            )
-            sw_mv_results[label] = (mean_tc, var_tc, sw_times)
-            _logger.info(
-                f"[{label}]  mean_tc: {mean_tc.shape}  var_tc: {var_tc.shape}  "
-                f"times: {sw_times.shape}"
-            )
-
-        plot_sliding_window_mean_variance(
-            sw_mv_results,
-            feature_axis_label=f"{_first_wd.feature_axis_label} index",
-            save_path=mv_save_dir / "sliding_window_mean_variance.png",
-        )
-
-    # ── Broadband wavelet analysis ────────────────────────────────
-    _logger.info(f"=== Broadband Wavelet {representation.capitalize()} ===")
-    _logger.info(f"Computing wavelet {representation} for all datasets …")
-    broadband_datasets: dict[str, AnalysisData] = {
-        label: _transform(ad, freqs) for label, ad in datasets.items()
-    }
-    for label, wd in broadband_datasets.items():
-        _logger.info(f"  [{label}] {wd}")
-
-    _run_isc_and_mv(broadband_datasets, save_dir / "broadband")
-
-    # ── Per-band wavelet analysis ─────────────────────────────────
-    # Use a fixed resolution of 1 Hz steps so that all bands are sampled
-    # consistently regardless of their width.
-    _BAND_FREQ_RESOLUTION_HZ = 1.0
-    _logger.info(f"=== Per-Band Wavelet {representation.capitalize()} ===")
+    # ── Pre-compute per-band wavelet datasets ─────────────────────
+    _logger.info(f"Pre-computing per-band wavelet {representation} datasets …")
+    band_wavelet_ds: dict[str, dict[str, AnalysisData]] = {}
     for band, (l_freq, h_freq) in FREQUENCY_BANDS.items():
-        n_freqs = max(2, int(round((h_freq - l_freq) / _BAND_FREQ_RESOLUTION_HZ)) + 1)
+        n_freqs = max(
+            2,
+            int(round((h_freq - l_freq) / _WAVELET_BAND_FREQ_RESOLUTION_HZ)) + 1,
+        )
+        band_freqs = np.linspace(l_freq, h_freq, n_freqs)
         _logger.info(
             f"  Band: {band} ({l_freq:.1f}–{h_freq:.1f} Hz, {n_freqs} steps)"
         )
-        band_freqs = np.linspace(l_freq, h_freq, n_freqs)
-        band_datasets: dict[str, AnalysisData] = {
-            label: _transform(ad, band_freqs) for label, ad in datasets.items()
-        }
-        _run_isc_and_mv(band_datasets, save_dir / f"band_{band}")
+        band_wavelet_ds[band] = _wavelet_transform(datasets, band_freqs, representation)
+
+    # ── Broadband wavelet analysis ────────────────────────────────
+    _logger.info(f"=== Broadband Wavelet {representation.capitalize()} ===")
+    broadband_ds = _wavelet_transform(datasets, freqs, representation)
+    for label, wd in broadband_ds.items():
+        _logger.info(f"  [{label}] {wd}")
+
+    _, _, bb_sw_results = _run_wavelet_isc(
+        broadband_ds, save_dir / "broadband" / "isc", **_isc_kw
+    )
+    _run_wavelet_mean_variance(
+        broadband_ds, save_dir / "broadband" / "mean_variance", **_mv_kw
+    )
+
+    # ── Per-band wavelet analysis ─────────────────────────────────
+    _logger.info(f"=== Per-Band Wavelet {representation.capitalize()} ===")
+
+    # Accumulators for cross-band comparison plots.
+    band_loo_iscs: dict[str, dict] = {label: {} for label in datasets}
+    band_sw_iscs: dict[str, dict] = {label: {} for label in datasets}
+    band_mv_results: dict[str, dict] = {label: {} for label in datasets}
+    band_sw_mv_results: dict[str, dict] = {label: {} for label in datasets}
+
+    for band, band_ds in band_wavelet_ds.items():
+        _logger.info(f"  Processing band: {band}")
+        band_dir = save_dir / f"band_{band}"
+
+        loo_iscs, mean_loo_iscs, sw_iscs = _run_wavelet_isc(
+            band_ds, band_dir / "isc", **_isc_kw
+        )
+        mv_res, sw_mv_res = _run_wavelet_mean_variance(
+            band_ds, band_dir / "mean_variance", **_mv_kw
+        )
+
+        for label in datasets:
+            band_loo_iscs[label][band] = (loo_iscs[label], mean_loo_iscs[label])
+            band_sw_iscs[label][band] = sw_iscs[label]
+            band_mv_results[label][band] = mv_res[label]
+            band_sw_mv_results[label][band] = sw_mv_res[label]
+
+    # ── Cross-band comparison plots ───────────────────────────────
+    _logger.info(
+        f"=== Band Comparison Wavelet {representation.capitalize()} ==="
+    )
+    cmp_dir = save_dir / "band_comparison"
+    cmp_dir.mkdir(parents=True, exist_ok=True)
+    _first_band_wd = next(iter(next(iter(band_wavelet_ds.values())).values()))
+
+    plot_band_isc_distributions(
+        band_loo_iscs,
+        bands=FREQUENCY_BANDS,
+        feature_axis_label=(
+            f"Number of {_first_band_wd.feature_axis_label.lower()}s"
+        ),
+        save_path=cmp_dir / "band_isc_distributions.png",
+    )
+    plot_band_mean_isc_bar(
+        band_loo_iscs,
+        bands=FREQUENCY_BANDS,
+        save_path=cmp_dir / "band_isc_mean_bar.png",
+    )
+    plot_band_sliding_window_isc(
+        band_sw_iscs,
+        bands=FREQUENCY_BANDS,
+        isc_threshold=BAND_ISC_THRESHOLDS,
+        feature_axis_label=_first_band_wd.feature_axis_label,
+        save_path=cmp_dir / "band_sliding_window_isc.png",
+    )
+    print_band_significant_intervals(
+        band_sw_iscs,
+        bands=FREQUENCY_BANDS,
+        band_thresholds=BAND_ISC_THRESHOLDS,
+        default_threshold=isc_threshold,
+    )
+    plot_band_overlap(
+        band_sw_iscs,
+        bands=FREQUENCY_BANDS,
+        band_thresholds=BAND_ISC_THRESHOLDS,
+        broadband_sw=bb_sw_results,
+        broadband_threshold=isc_threshold,
+        save_path=cmp_dir / "band_overlap.png",
+    )
+    plot_band_mean_variance_distributions(
+        band_mv_results,
+        feature_axis_label=(
+            f"Number of {_first_band_wd.feature_axis_label.lower()}s"
+        ),
+        save_path=cmp_dir / "band_mean_variance_distributions.png",
+    )
+    plot_band_sliding_window_mean_variance(
+        band_sw_mv_results,
+        feature_axis_label=f"{_first_band_wd.feature_axis_label} index",
+        save_path=cmp_dir / "band_sliding_window_mean_variance.png",
+    )
 
     _logger.info(f"Wavelet {representation} analysis complete.")
