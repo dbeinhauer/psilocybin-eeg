@@ -10,8 +10,9 @@ from src.analysis.data_representations import (
     DataRepresentation,
     from_array,
     to_analytic_amplitude,
+    to_wavelet_amplitude,
+    to_wavelet_power,
 )
-
 
 class TestDataRepresentation:
     """Test DataRepresentation enum."""
@@ -160,3 +161,96 @@ class TestToAnalyticAmplitude:
         )
         result = to_analytic_amplitude(ad)
         assert result.data.shape == ad.data.shape
+
+
+class TestToWaveletAmplitude:
+    """Test Morlet-wavelet amplitude adapter."""
+
+    @pytest.fixture
+    def sample_ad(self):
+        rng = np.random.default_rng(50)
+        return AnalysisData(
+            data=rng.normal(size=(3, 4, 500)),
+            sfreq=250.0,
+            representation=DataRepresentation.TIME_DOMAIN,
+            label="raw",
+        )
+
+    @pytest.fixture
+    def freqs(self):
+        return np.linspace(4.0, 30.0, 5)
+
+    def test_output_representation(self, sample_ad, freqs):
+        result = to_wavelet_amplitude(sample_ad, freqs)
+        assert result.representation == DataRepresentation.WAVELET_AMPLITUDE
+
+    def test_output_shape_preserved(self, sample_ad, freqs):
+        result = to_wavelet_amplitude(sample_ad, freqs)
+        assert result.data.shape == sample_ad.data.shape
+
+    def test_amplitude_is_non_negative(self, sample_ad, freqs):
+        result = to_wavelet_amplitude(sample_ad, freqs)
+        assert np.all(result.data >= 0)
+
+    def test_label_contains_freq_range(self, sample_ad, freqs):
+        result = to_wavelet_amplitude(sample_ad, freqs)
+        assert "wavelet amp" in result.label
+
+    def test_metadata_contains_freqs(self, sample_ad, freqs):
+        result = to_wavelet_amplitude(sample_ad, freqs)
+        assert "freqs" in result.metadata
+        np.testing.assert_array_equal(result.metadata["freqs"], freqs)
+
+    def test_default_n_cycles(self, sample_ad, freqs):
+        result = to_wavelet_amplitude(sample_ad, freqs)
+        expected_cycles = freqs / 2.0
+        np.testing.assert_allclose(result.metadata["n_cycles"], expected_cycles)
+
+    def test_custom_n_cycles(self, sample_ad, freqs):
+        result = to_wavelet_amplitude(sample_ad, freqs, n_cycles=3.0)
+        assert result.metadata["n_cycles"] == 3.0
+
+
+class TestToWaveletPower:
+    """Test Morlet-wavelet power adapter."""
+
+    @pytest.fixture
+    def sample_ad(self):
+        rng = np.random.default_rng(60)
+        return AnalysisData(
+            data=rng.normal(size=(3, 4, 500)),
+            sfreq=250.0,
+            representation=DataRepresentation.TIME_DOMAIN,
+            label="raw",
+        )
+
+    @pytest.fixture
+    def freqs(self):
+        return np.linspace(4.0, 30.0, 5)
+
+    def test_output_representation(self, sample_ad, freqs):
+        result = to_wavelet_power(sample_ad, freqs)
+        assert result.representation == DataRepresentation.WAVELET_POWER
+
+    def test_output_shape_preserved(self, sample_ad, freqs):
+        result = to_wavelet_power(sample_ad, freqs)
+        assert result.data.shape == sample_ad.data.shape
+
+    def test_power_is_non_negative(self, sample_ad, freqs):
+        result = to_wavelet_power(sample_ad, freqs)
+        assert np.all(result.data >= 0)
+
+    def test_label_contains_freq_range(self, sample_ad, freqs):
+        result = to_wavelet_power(sample_ad, freqs)
+        assert "wavelet power" in result.label
+
+    def test_metadata_contains_freqs(self, sample_ad, freqs):
+        result = to_wavelet_power(sample_ad, freqs)
+        assert "freqs" in result.metadata
+        np.testing.assert_array_equal(result.metadata["freqs"], freqs)
+
+    def test_power_greater_than_amplitude(self, sample_ad, freqs):
+        """Wavelet power should not equal wavelet amplitude (different transforms)."""
+        amp = to_wavelet_amplitude(sample_ad, freqs)
+        pwr = to_wavelet_power(sample_ad, freqs)
+        assert not np.allclose(amp.data, pwr.data)

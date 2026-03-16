@@ -29,6 +29,8 @@ import logging
 import sys
 from pathlib import Path
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.analysis_common import (
@@ -37,6 +39,7 @@ from scripts.analysis_common import (
     analyzers_to_datasets,
     run_isc_workflow,
     run_mean_variance_workflow,
+    run_wavelet_workflow,
 )
 from src.definitions.fields import (
     MusicTypeVariants,
@@ -71,9 +74,14 @@ if __name__ == "__main__":
     WINDOW_SEC = args.window_sec
     STEP_SEC = args.step_sec
 
+    wavelet_freqs = np.linspace(
+        args.wavelet_freq_min, args.wavelet_freq_max, args.wavelet_n_freqs
+    )
+
     # ── Data loading (shared across both analyses) ────────────────
     analyzers = load_analyzers(
-        music_types, condition, exclusion_categories, args.process_and_save
+        music_types, condition, exclusion_categories, args.process_and_save,
+        n_jobs=args.n_jobs,
     )
     datasets = analyzers_to_datasets(analyzers)
 
@@ -93,6 +101,32 @@ if __name__ == "__main__":
             datasets,
             analyzers,
             save_dir=ProjectPaths.PLOTS_PATH / "MeanVarianceAnalysis",
+            window_sec=WINDOW_SEC,
+            step_sec=STEP_SEC,
+        )
+
+    # ── Wavelet amplitude analysis ────────────────────────────────
+    if "wavelet_amplitude" in analyses:
+        run_wavelet_workflow(
+            datasets,
+            analyzers,
+            representation="amplitude",
+            freqs=wavelet_freqs,
+            save_dir=ProjectPaths.PLOTS_PATH / "WaveletAmplitudeAnalysis",
+            isc_threshold=args.isc_threshold,
+            window_sec=WINDOW_SEC,
+            step_sec=STEP_SEC,
+        )
+
+    # ── Wavelet power analysis ────────────────────────────────────
+    if "wavelet_power" in analyses:
+        run_wavelet_workflow(
+            datasets,
+            analyzers,
+            representation="power",
+            freqs=wavelet_freqs,
+            save_dir=ProjectPaths.PLOTS_PATH / "WaveletPowerAnalysis",
+            isc_threshold=args.isc_threshold,
             window_sec=WINDOW_SEC,
             step_sec=STEP_SEC,
         )

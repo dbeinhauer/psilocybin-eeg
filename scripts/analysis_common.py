@@ -29,7 +29,13 @@ from src.definitions.fields import (
     SingleDataMetadata,
     FrequencyBandNames,
 )
-from src.analysis.data_representations import AnalysisData
+import numpy as np
+
+from src.analysis.data_representations import (
+    AnalysisData,
+    to_wavelet_amplitude,
+    to_wavelet_power,
+)
 from src.analysis.isc import (
     compute_loo_isc,
     compute_sliding_window_isc,
@@ -85,8 +91,12 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         type=str,
         nargs="+",
         default=["isc", "mean_variance"],
-        choices=["isc", "mean_variance"],
-        help=("Which analyses to run. Defaults to both. Choices: isc, mean_variance."),
+        choices=["isc", "mean_variance", "wavelet_amplitude", "wavelet_power"],
+        help=(
+            "Which analyses to run. Defaults to isc and mean_variance. "
+            "Use wavelet_amplitude or wavelet_power to additionally run ISC "
+            "and mean/variance on wavelet-transformed data."
+        ),
     )
     parser.add_argument(
         "--condition",
@@ -130,6 +140,33 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         default=2.5,
         help="Sliding-window step size in seconds (default: 2.5).",
     )
+    parser.add_argument(
+        "--n_jobs",
+        type=int,
+        default=1,
+        help=(
+            "Number of parallel jobs for data loading/resampling. "
+            "Use -1 to use all available CPUs (default: 1)."
+        ),
+    )
+    parser.add_argument(
+        "--wavelet_freq_min",
+        type=float,
+        default=1.0,
+        help="Minimum frequency (Hz) for wavelet analysis (default: 1.0).",
+    )
+    parser.add_argument(
+        "--wavelet_freq_max",
+        type=float,
+        default=40.0,
+        help="Maximum frequency (Hz) for wavelet analysis (default: 40.0).",
+    )
+    parser.add_argument(
+        "--wavelet_n_freqs",
+        type=int,
+        default=20,
+        help="Number of frequency steps for wavelet analysis (default: 20).",
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -142,6 +179,7 @@ def load_analyzers(
     condition: ConditionVariants,
     exclusion_categories: Sequence[ExclusionCategories],
     process_and_save: bool,
+    n_jobs: int = -1,
 ) -> dict[str, EEGSummarizedAnalyzer]:
     """Load (or process & save) and normalise analysers for each music type.
 
@@ -161,7 +199,7 @@ def load_analyzers(
         )
 
         if process_and_save:
-            analyzer.load_and_prepare_data(resample_freq=250.0, n_jobs=-1)
+            analyzer.load_and_prepare_data(resample_freq=250.0, n_jobs=n_jobs)
             _logger.info(f"[{label}] data shape: {analyzer.data.shape}")
             analyzer.save_data()
         else:
@@ -424,3 +462,114 @@ def run_mean_variance_workflow(
     )
 
     _logger.info("Mean & variance analysis complete.")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Wavelet workflow
+# ──────────────────────────────────────────────────────────────────────
+
+
+def run_wavelet_workflow(
+    datasets: dict[str, AnalysisData],
+    analyzers: dict[str, "EEGSummarizedAnalyzer"],
+    *,
+    representation: str,
+    freqs: np.ndarray,
+    save_dir: Path,
+    isc_threshold: float = 0.035,
+    window_sec: float = 5.0,
+    step_sec: float = 2.5,
+) -> None:
+    """Run ISC and mean/variance analyses on wavelet-transformed data.
+
+    Transforms the provided *datasets* to the requested wavelet representation
+    and then runs the full ISC workflow plus global/sliding-window mean-variance
+    on the transformed data.  Per-band mean-variance (which requires
+    ``EEGSummarizedAnalyzer``) is skipped because the wavelet transform is
+    itself a frequency-selective operation.
+
+    :param datasets: Time-domain :class:`AnalysisData` objects keyed by label.
+    :param analyzers: Reserved for future extension (e.g. per-band wavelet
+        analysis via ``EEGSummarizedAnalyzer``).  Not used at present.
+    :param representation: ``"amplitude"`` or ``"power"``.
+    :param freqs: Frequencies of interest for the Morlet wavelet (Hz).
+    :param save_dir: Root directory in which to save plots.
+    :param isc_threshold: ISC significance threshold for broadband plots.
+    :param window_sec: Sliding-window length in seconds.
+    :param step_sec: Sliding-window step size in seconds.
+    :raises ValueError: If *representation* is not ``"amplitude"`` or ``"power"``.
+    """
+    if representation not in ("amplitude", "power"):
+        raise ValueError(
+            f"representation must be 'amplitude' or 'power', got {representation!r}"
+        )
+
+    save_dir.mkdir(parents=True, exist_ok=True)
+    _logger.info(
+        f"Wavelet {representation} figures will be saved to: {save_dir}"
+    )
+
+    # ── Transform to wavelet representation ───────────────────────
+    _logger.info(f"Computing wavelet {representation} for all datasets …")
+    if representation == "amplitude":
+        wavelet_datasets: dict[str, AnalysisData] = {
+            label: to_wavelet_amplitude(ad, freqs)
+            for label, ad in datasets.items()
+        }
+    else:
+        wavelet_datasets = {
+            label: to_wavelet_power(ad, freqs)
+            for label, ad in datasets.items()
+        }
+    for label, wd in wavelet_datasets.items():
+        _logger.info(f"  [{label}] {wd}")
+
+    # ── ISC workflow on wavelet data ──────────────────────────────
+    _logger.info("=== ISC on Wavelet Data ===")
+    run_isc_workflow(
+        wavelet_datasets,
+        save_dir=save_dir / "isc",
+        isc_threshold=isc_threshold,
+        window_sec=window_sec,
+        step_sec=step_sec,
+    )
+
+    # ── Global + sliding-window mean/variance on wavelet data ─────
+    _logger.info("=== Mean/Variance on Wavelet Data ===")
+    _first_wd = next(iter(wavelet_datasets.values()))
+    mv_save_dir = save_dir / "mean_variance"
+    mv_save_dir.mkdir(parents=True, exist_ok=True)
+
+    mean_var_results: dict = {}
+    for label, wd in wavelet_datasets.items():
+        mean_f, var_f = compute_mean_variance(wd.data)
+        mean_var_results[label] = (mean_f, var_f)
+        _logger.info(
+            f"[{label}]  mean range: [{mean_f.min():.4f}, {mean_f.max():.4f}]  "
+            f"var range: [{var_f.min():.4f}, {var_f.max():.4f}]"
+        )
+
+    plot_mean_variance_distribution(
+        mean_var_results,
+        feature_axis_label=(f"Number of {_first_wd.feature_axis_label.lower()}s"),
+        save_path=mv_save_dir / "mean_variance_distribution.png",
+    )
+
+    sw_mv_results: dict = {}
+    for label, wd in wavelet_datasets.items():
+        mean_tc, var_tc, sw_times = compute_sliding_window_mean_variance(
+            wd.data, window_sec=window_sec, step_sec=step_sec, sfreq=wd.sfreq
+        )
+        sw_mv_results[label] = (mean_tc, var_tc, sw_times)
+        _logger.info(
+            f"[{label}]  mean_tc: {mean_tc.shape}  var_tc: {var_tc.shape}  "
+            f"times: {sw_times.shape}"
+        )
+
+    plot_sliding_window_mean_variance(
+        sw_mv_results,
+        feature_axis_label=f"{_first_wd.feature_axis_label} index",
+        save_path=mv_save_dir / "sliding_window_mean_variance.png",
+    )
+
+    _logger.info(f"Wavelet {representation} analysis complete.")
