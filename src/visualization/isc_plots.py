@@ -845,7 +845,9 @@ def print_data_overview(
         _logger.info(f"  {ad.feature_axis_label}s: {n_features}")
         _logger.info(f"  Samples      : {n_samples}")
         _logger.info(f"  Sfreq        : {ad.sfreq} Hz")
-        _logger.info(f"  Duration     : {duration_sec:.1f} s  ({duration_sec / 60:.1f} min)")
+        _logger.info(
+            f"  Duration     : {duration_sec:.1f} s  ({duration_sec / 60:.1f} min)"
+        )
         _logger.info(f"  Data dtype   : {ad.data.dtype}")
         _logger.info(f"  Data range   : [{ad.data.min():.3f}, {ad.data.max():.3f}]")
         _logger.info("")

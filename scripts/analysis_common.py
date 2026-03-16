@@ -261,7 +261,9 @@ def run_isc_workflow(
             filtered = ad.filter_to_band(l_freq, h_freq)
             loo, mean_isc = compute_loo_isc(filtered.data)
             band_iscs[label][band] = (loo, mean_isc)
-            _logger.info(f"  {band:6s}  loo_isc={loo.shape}  mean={mean_isc.mean():.4f}")
+            _logger.info(
+                f"  {band:6s}  loo_isc={loo.shape}  mean={mean_isc.mean():.4f}"
+            )
 
     plot_band_isc_distributions(
         band_iscs,
