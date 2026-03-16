@@ -27,6 +27,7 @@ from src.definitions.fields import (
     ConditionVariants,
     ExclusionCategories,
     ExperimentNames,
+    FrequencyBandNames,
     MusicTypeVariants,
     PreprocessedDataVariants,
     SingleDataMetadata,
@@ -46,13 +47,13 @@ from src.utils.logging_config import LoggerMixin
 # ---------------------------------------------------------------------------
 
 #: Standard EEG frequency bands used for band-specific ISC analysis.
-#: Each entry maps a band name to ``(l_freq, h_freq)`` in Hz.
+#: Each entry maps a :class:`FrequencyBandNames` value to ``(l_freq, h_freq)`` in Hz.
 FREQUENCY_BANDS: dict[str, tuple[float, float]] = {
-    "delta": (1.0, 4.0),
-    "theta": (4.0, 8.0),
-    "alpha": (8.0, 13.0),
-    "beta": (13.0, 30.0),
-    "gamma": (30.0, 70.0),
+    FrequencyBandNames.DELTA.value: (1.0, 4.0),
+    FrequencyBandNames.THETA.value: (4.0, 8.0),
+    FrequencyBandNames.ALPHA.value: (8.0, 13.0),
+    FrequencyBandNames.BETA.value: (13.0, 30.0),
+    FrequencyBandNames.GAMMA.value: (30.0, 70.0),
 }
 
 

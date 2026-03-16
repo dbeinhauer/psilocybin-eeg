@@ -26,6 +26,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from src.analysis.isc import FREQUENCY_BANDS
 from src.analysis.data_representations import AnalysisData
+from src.definitions.fields import FrequencyBandNames
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -41,11 +42,11 @@ _DEFAULT_PALETTE = [
 ]
 
 _BAND_COLORS = {
-    "delta": "#4e79a7",
-    "theta": "#f28e2b",
-    "alpha": "#59a14f",
-    "beta": "#e15759",
-    "gamma": "#b07aa1",
+    FrequencyBandNames.DELTA.value: "#4e79a7",
+    FrequencyBandNames.THETA.value: "#f28e2b",
+    FrequencyBandNames.ALPHA.value: "#59a14f",
+    FrequencyBandNames.BETA.value: "#e15759",
+    FrequencyBandNames.GAMMA.value: "#b07aa1",
 }
 
 
