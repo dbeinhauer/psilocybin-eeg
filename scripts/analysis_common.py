@@ -167,6 +167,26 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         default=20,
         help="Number of frequency steps for wavelet analysis (default: 20).",
     )
+    parser.add_argument(
+        "--wavelet_bands",
+        type=str,
+        nargs="+",
+        default=None,
+        choices=list(FREQUENCY_BANDS.keys()),
+        help=(
+            "Optional subset of EEG bands for wavelet per-band analysis. "
+            "Defaults to all bands."
+        ),
+    )
+    parser.add_argument(
+        "--skip_wavelet_broadband",
+        action="store_true",
+        default=False,
+        help=(
+            "Skip the broadband wavelet stage and run only selected per-band "
+            "wavelet analyses."
+        ),
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -614,6 +634,8 @@ def run_wavelet_workflow(
     representation: str,
     freqs: np.ndarray,
     save_dir: Path,
+    bands: Sequence[str] | None = None,
+    include_broadband: bool = True,
     isc_threshold: float = 0.035,
     window_sec: float = 5.0,
     step_sec: float = 2.5,
@@ -639,6 +661,9 @@ def run_wavelet_workflow(
     :param representation: ``"amplitude"`` or ``"power"``.
     :param freqs: Morlet frequencies for the broadband analysis (Hz).
     :param save_dir: Root directory in which to save plots.
+    :param bands: Optional subset of band names to run in per-band stage.
+        Defaults to all keys from :data:`FREQUENCY_BANDS`.
+    :param include_broadband: Whether to run the broadband wavelet stage.
     :param isc_threshold: ISC significance threshold.
     :param window_sec: Sliding-window length in seconds.
     :param step_sec: Sliding-window step size in seconds.
@@ -658,32 +683,27 @@ def run_wavelet_workflow(
     )
     _mv_kw: dict = dict(window_sec=window_sec, step_sec=step_sec)
 
-    # ── Pre-compute per-band wavelet datasets ─────────────────────
-    _logger.info(f"Pre-computing per-band wavelet {representation} datasets …")
-    band_wavelet_ds: dict[str, dict[str, AnalysisData]] = {}
-    for band, (l_freq, h_freq) in FREQUENCY_BANDS.items():
-        n_freqs = max(
-            2,
-            int(round((h_freq - l_freq) / _WAVELET_BAND_FREQ_RESOLUTION_HZ)) + 1,
-        )
-        band_freqs = np.linspace(l_freq, h_freq, n_freqs)
-        _logger.info(
-            f"  Band: {band} ({l_freq:.1f}–{h_freq:.1f} Hz, {n_freqs} steps)"
-        )
-        band_wavelet_ds[band] = _wavelet_transform(datasets, band_freqs, representation)
+    selected_band_names = list(FREQUENCY_BANDS.keys()) if bands is None else list(bands)
+    selected_bands = {band: FREQUENCY_BANDS[band] for band in selected_band_names}
+    selected_band_thresholds = {
+        band: BAND_ISC_THRESHOLDS[band] for band in selected_band_names
+    }
 
     # ── Broadband wavelet analysis ────────────────────────────────
-    _logger.info(f"=== Broadband Wavelet {representation.capitalize()} ===")
-    broadband_ds = _wavelet_transform(datasets, freqs, representation)
-    for label, wd in broadband_ds.items():
-        _logger.info(f"  [{label}] {wd}")
+    bb_sw_results: dict[str, tuple[np.ndarray, np.ndarray]] | None = None
+    if include_broadband:
+        _logger.info(f"=== Broadband Wavelet {representation.capitalize()} ===")
+        broadband_ds = _wavelet_transform(datasets, freqs, representation)
+        for label, wd in broadband_ds.items():
+            _logger.info(f"  [{label}] {wd}")
 
-    _, _, bb_sw_results = _run_wavelet_isc(
-        broadband_ds, save_dir / "broadband" / "isc", **_isc_kw
-    )
-    _run_wavelet_mean_variance(
-        broadband_ds, save_dir / "broadband" / "mean_variance", **_mv_kw
-    )
+        _, _, bb_sw_results = _run_wavelet_isc(
+            broadband_ds, save_dir / "broadband" / "isc", **_isc_kw
+        )
+        _run_wavelet_mean_variance(
+            broadband_ds, save_dir / "broadband" / "mean_variance", **_mv_kw
+        )
+        del broadband_ds
 
     # ── Per-band wavelet analysis ─────────────────────────────────
     _logger.info(f"=== Per-Band Wavelet {representation.capitalize()} ===")
@@ -693,10 +713,21 @@ def run_wavelet_workflow(
     band_sw_iscs: dict[str, dict] = {label: {} for label in datasets}
     band_mv_results: dict[str, dict] = {label: {} for label in datasets}
     band_sw_mv_results: dict[str, dict] = {label: {} for label in datasets}
+    feature_axis_label: str | None = None
 
-    for band, band_ds in band_wavelet_ds.items():
-        _logger.info(f"  Processing band: {band}")
+    for band, (l_freq, h_freq) in selected_bands.items():
+        n_freqs = max(
+            2,
+            int(round((h_freq - l_freq) / _WAVELET_BAND_FREQ_RESOLUTION_HZ)) + 1,
+        )
+        _logger.info(
+            f"  Processing band: {band} ({l_freq:.1f}–{h_freq:.1f} Hz, {n_freqs} steps)"
+        )
+        band_freqs = np.linspace(l_freq, h_freq, n_freqs)
+        band_ds = _wavelet_transform(datasets, band_freqs, representation)
         band_dir = save_dir / f"band_{band}"
+        if feature_axis_label is None:
+            feature_axis_label = next(iter(band_ds.values())).feature_axis_label
 
         loo_iscs, mean_loo_iscs, sw_iscs = _run_wavelet_isc(
             band_ds, band_dir / "isc", **_isc_kw
@@ -710,59 +741,73 @@ def run_wavelet_workflow(
             band_sw_iscs[label][band] = sw_iscs[label]
             band_mv_results[label][band] = mv_res[label]
             band_sw_mv_results[label][band] = sw_mv_res[label]
+        del band_ds
 
     # ── Cross-band comparison plots ───────────────────────────────
     _logger.info(
         f"=== Band Comparison Wavelet {representation.capitalize()} ==="
     )
-    cmp_dir = save_dir / "band_comparison"
+    cmp_dir_name = "band_comparison"
+    if len(selected_bands) != len(FREQUENCY_BANDS):
+        band_tag = "_".join(selected_band_names)
+        if len(band_tag) > 40:
+            band_tag = f"{len(selected_band_names)}_bands"
+        cmp_dir_name = f"band_comparison_{band_tag}"
+    cmp_dir = save_dir / cmp_dir_name
     cmp_dir.mkdir(parents=True, exist_ok=True)
-    _first_band_wd = next(iter(next(iter(band_wavelet_ds.values())).values()))
+    if feature_axis_label is None:
+        raise ValueError(
+            "No valid bands were processed in wavelet per-band analysis. "
+            "Ensure that at least one band from FREQUENCY_BANDS is selected."
+        )
 
     plot_band_isc_distributions(
         band_loo_iscs,
-        bands=FREQUENCY_BANDS,
+        bands=selected_bands,
         feature_axis_label=(
-            f"Number of {_first_band_wd.feature_axis_label.lower()}s"
+            f"Number of {feature_axis_label.lower()}s"
         ),
         save_path=cmp_dir / "band_isc_distributions.png",
     )
     plot_band_mean_isc_bar(
         band_loo_iscs,
-        bands=FREQUENCY_BANDS,
+        bands=selected_bands,
         save_path=cmp_dir / "band_isc_mean_bar.png",
     )
     plot_band_sliding_window_isc(
         band_sw_iscs,
-        bands=FREQUENCY_BANDS,
-        isc_threshold=BAND_ISC_THRESHOLDS,
-        feature_axis_label=_first_band_wd.feature_axis_label,
+        bands=selected_bands,
+        isc_threshold=selected_band_thresholds,
+        feature_axis_label=feature_axis_label,
         save_path=cmp_dir / "band_sliding_window_isc.png",
     )
     print_band_significant_intervals(
         band_sw_iscs,
-        bands=FREQUENCY_BANDS,
-        band_thresholds=BAND_ISC_THRESHOLDS,
+        bands=selected_bands,
+        band_thresholds=selected_band_thresholds,
         default_threshold=isc_threshold,
     )
-    plot_band_overlap(
-        band_sw_iscs,
-        bands=FREQUENCY_BANDS,
-        band_thresholds=BAND_ISC_THRESHOLDS,
-        broadband_sw=bb_sw_results,
-        broadband_threshold=isc_threshold,
-        save_path=cmp_dir / "band_overlap.png",
-    )
+    if bb_sw_results is not None:
+        plot_band_overlap(
+            band_sw_iscs,
+            bands=selected_bands,
+            band_thresholds=selected_band_thresholds,
+            broadband_sw=bb_sw_results,
+            broadband_threshold=isc_threshold,
+            save_path=cmp_dir / "band_overlap.png",
+        )
     plot_band_mean_variance_distributions(
         band_mv_results,
+        bands=selected_bands,
         feature_axis_label=(
-            f"Number of {_first_band_wd.feature_axis_label.lower()}s"
+            f"Number of {feature_axis_label.lower()}s"
         ),
         save_path=cmp_dir / "band_mean_variance_distributions.png",
     )
     plot_band_sliding_window_mean_variance(
         band_sw_mv_results,
-        feature_axis_label=f"{_first_band_wd.feature_axis_label} index",
+        bands=selected_bands,
+        feature_axis_label=f"{feature_axis_label} index",
         save_path=cmp_dir / "band_sliding_window_mean_variance.png",
     )
 

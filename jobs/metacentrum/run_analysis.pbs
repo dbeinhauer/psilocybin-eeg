@@ -41,7 +41,7 @@ cat << 'EOF' > run_inside.sh
 #!/bin/bash
 source /opt/myproject/.venv/bin/activate
 python /mnt/scripts/run_analysis.py \
---analysis isc mean_variance wavelet_amplitude wavelet_power \
+--analysis isc mean_variance \
 --condition Placebo \
 --music_type CLASSIC PSYTRANCE \
 --n_jobs -1

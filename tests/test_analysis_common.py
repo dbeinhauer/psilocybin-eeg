@@ -100,6 +100,22 @@ class TestAddCommonArguments:
         args = parser.parse_args(["--wavelet_n_freqs", "50"])
         assert args.wavelet_n_freqs == 50
 
+    def test_wavelet_bands_default(self, parser):
+        args = parser.parse_args([])
+        assert args.wavelet_bands is None
+
+    def test_wavelet_bands_custom_subset(self, parser):
+        args = parser.parse_args(["--wavelet_bands", "delta", "alpha"])
+        assert args.wavelet_bands == ["delta", "alpha"]
+
+    def test_skip_wavelet_broadband_default(self, parser):
+        args = parser.parse_args([])
+        assert args.skip_wavelet_broadband is False
+
+    def test_skip_wavelet_broadband_flag(self, parser):
+        args = parser.parse_args(["--skip_wavelet_broadband"])
+        assert args.skip_wavelet_broadband is True
+
     def test_wavelet_freqs_linspace_construction(self, parser):
         """Check that wavelet_freq_{min,max,n_freqs} produce a valid linspace."""
         args = parser.parse_args(
