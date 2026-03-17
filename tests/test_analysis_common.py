@@ -31,10 +31,6 @@ class TestAddCommonArguments:
         args = parser.parse_args([])
         assert set(args.analysis) == {"isc", "mean_variance"}
 
-    def test_analysis_accepts_wavelet_amplitude(self, parser):
-        args = parser.parse_args(["--analysis", "wavelet_amplitude"])
-        assert "wavelet_amplitude" in args.analysis
-
     def test_analysis_accepts_wavelet_power(self, parser):
         args = parser.parse_args(["--analysis", "wavelet_power"])
         assert "wavelet_power" in args.analysis
@@ -45,14 +41,12 @@ class TestAddCommonArguments:
                 "--analysis",
                 "isc",
                 "mean_variance",
-                "wavelet_amplitude",
                 "wavelet_power",
             ]
         )
         assert set(args.analysis) == {
             "isc",
             "mean_variance",
-            "wavelet_amplitude",
             "wavelet_power",
         }
 
@@ -116,6 +110,22 @@ class TestAddCommonArguments:
         args = parser.parse_args(["--skip_wavelet_broadband"])
         assert args.skip_wavelet_broadband is True
 
+    def test_wavelet_cache_dir_default(self, parser):
+        args = parser.parse_args([])
+        assert args.wavelet_cache_dir is None
+
+    def test_wavelet_cache_dir_custom(self, parser):
+        args = parser.parse_args(["--wavelet_cache_dir", "/tmp/wavelets"])
+        assert args.wavelet_cache_dir == "/tmp/wavelets"
+
+    def test_reuse_wavelet_cache_flag(self, parser):
+        args = parser.parse_args(["--reuse_wavelet_cache"])
+        assert args.reuse_wavelet_cache is True
+
+    def test_wavelet_keep_frequency_dim_flag(self, parser):
+        args = parser.parse_args(["--wavelet_keep_frequency_dim"])
+        assert args.wavelet_keep_frequency_dim is True
+
     def test_wavelet_freqs_linspace_construction(self, parser):
         """Check that wavelet_freq_{min,max,n_freqs} produce a valid linspace."""
         args = parser.parse_args(
@@ -162,7 +172,7 @@ class TestRunWaveletWorkflowValidation:
 
     def test_invalid_representation_raises(self, sample_datasets, tmp_path):
         freqs = np.linspace(4.0, 30.0, 5)
-        with pytest.raises(ValueError, match="representation must be"):
+        with pytest.raises(ValueError, match="representation must be 'power'"):
             run_wavelet_workflow(
                 sample_datasets,
                 analyzers={},

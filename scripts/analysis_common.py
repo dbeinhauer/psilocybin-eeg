@@ -9,7 +9,9 @@ entry-point script or from a Jupyter notebook.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
+import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
@@ -33,7 +35,7 @@ import numpy as np
 
 from src.analysis.data_representations import (
     AnalysisData,
-    to_wavelet_amplitude,
+    DataRepresentation,
     to_wavelet_power,
 )
 from src.analysis.isc import (
@@ -91,11 +93,11 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         type=str,
         nargs="+",
         default=["isc", "mean_variance"],
-        choices=["isc", "mean_variance", "wavelet_amplitude", "wavelet_power"],
+        choices=["isc", "mean_variance", "wavelet_power"],
         help=(
             "Which analyses to run. Defaults to isc and mean_variance. "
-            "Use wavelet_amplitude or wavelet_power to additionally run ISC "
-            "and mean/variance on wavelet-transformed data."
+            "Use wavelet_power to additionally run ISC and mean/variance "
+            "on wavelet-transformed data."
         ),
     )
     parser.add_argument(
@@ -187,6 +189,31 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
             "wavelet analyses."
         ),
     )
+    parser.add_argument(
+        "--wavelet_cache_dir",
+        type=str,
+        default=None,
+        help=(
+            "Optional directory for caching wavelet-transformed datasets "
+            "(computed arrays are saved there and can be reused)."
+        ),
+    )
+    parser.add_argument(
+        "--reuse_wavelet_cache",
+        action="store_true",
+        default=False,
+        help="Reuse wavelet cache files from --wavelet_cache_dir when available.",
+    )
+    parser.add_argument(
+        "--wavelet_keep_frequency_dim",
+        action="store_true",
+        default=False,
+        help=(
+            "Keep frequency dimension in wavelet power output "
+            "(flattened as feature×frequency instead of averaging across "
+            "frequencies)."
+        ),
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -200,6 +227,7 @@ def load_analyzers(
     exclusion_categories: Sequence[ExclusionCategories],
     process_and_save: bool,
     n_jobs: int = -1,
+    normalize_data: bool = True,
 ) -> dict[str, EEGSummarizedAnalyzer]:
     """Load (or process & save) and normalise analysers for each music type.
 
@@ -228,7 +256,8 @@ def load_analyzers(
             )
             _logger.info(f"[{label}] Loaded data shape: {analyzer.data.shape}")
 
-        analyzer.normalize()
+        if normalize_data:
+            analyzer.normalize()
         analyzers[label] = analyzer
 
     return analyzers
@@ -495,18 +524,88 @@ _WAVELET_BAND_FREQ_RESOLUTION_HZ: float = 1.0
 def _wavelet_transform(
     datasets: dict[str, AnalysisData],
     freqs: np.ndarray,
-    representation: str,
+    representation: str = "power",
+    *,
+    keep_frequency_dim: bool = False,
+    cache_dir: Path | None = None,
+    reuse_cache: bool = False,
 ) -> dict[str, AnalysisData]:
     """Apply a wavelet *representation* to every dataset.
 
     :param datasets: Source :class:`AnalysisData` objects keyed by label.
     :param freqs: Morlet frequencies (Hz).
-    :param representation: ``"amplitude"`` or ``"power"``.
+    :param representation: Wavelet representation. Only ``"power"`` is supported.
+    :param keep_frequency_dim: Keep frequency dimension instead of averaging it.
+    :param cache_dir: Optional cache directory for transformed outputs.
+    :param reuse_cache: If true, reuse cache files when present.
     :returns: New dict of transformed datasets with the same keys.
     """
-    if representation == "amplitude":
-        return {label: to_wavelet_amplitude(ad, freqs) for label, ad in datasets.items()}
-    return {label: to_wavelet_power(ad, freqs) for label, ad in datasets.items()}
+    if representation != "power":
+        raise ValueError(
+            f"Only 'power' wavelet representation is supported, got {representation!r}"
+        )
+
+    if cache_dir is not None:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+    transformed: dict[str, AnalysisData] = {}
+    freq_sig = f"{freqs[0]:.3f}_{freqs[-1]:.3f}_{len(freqs)}"
+    for label, ad in datasets.items():
+        cache_file: Path | None = None
+        if cache_dir is not None:
+            safe_label = re.sub(r"[^A-Za-z0-9_-]", "_", label).strip("_")
+            if not safe_label:
+                safe_label = f"dataset_{hashlib.sha256(label.encode()).hexdigest()[:8]}"
+            cache_file = (
+                cache_dir
+                / f"{safe_label}__wavelet_power__{freq_sig}__freqdim{int(keep_frequency_dim)}.npz"
+            )
+            if reuse_cache and cache_file.exists():
+                loaded = np.load(cache_file)
+                has_feature_names = loaded["has_feature_names"].item()
+                loaded_feature_names = loaded["feature_names"]
+                feature_names = (
+                    loaded_feature_names.tolist()
+                    if has_feature_names and loaded_feature_names.size > 0
+                    else None
+                )
+                transformed[label] = AnalysisData(
+                    data=loaded["data"],
+                    sfreq=float(loaded["sfreq"]),
+                    representation=DataRepresentation.WAVELET_POWER,
+                    label=str(loaded["label"]),
+                    feature_names=feature_names,
+                    info=ad.info,
+                    metadata={
+                        **ad.metadata,
+                        "freqs": loaded["freqs"],
+                        "n_cycles": loaded["n_cycles"],
+                        "keep_frequency_dim": bool(loaded["keep_frequency_dim"]),
+                        "loaded_from_cache": str(cache_file),
+                    },
+                )
+                continue
+
+        wd = to_wavelet_power(
+            ad, freqs, keep_frequency_dim=keep_frequency_dim
+        )
+        transformed[label] = wd
+        if cache_file is not None:
+            feature_names = wd.feature_names if wd.feature_names is not None else []
+            np.savez_compressed(
+                cache_file,
+                data=wd.data,
+                sfreq=wd.sfreq,
+                label=wd.label,
+                feature_names=np.asarray(feature_names, dtype=str),
+                has_feature_names=np.asarray(
+                    int(wd.feature_names is not None), dtype=np.int8
+                ),
+                freqs=freqs,
+                n_cycles=np.asarray(wd.metadata.get("n_cycles")),
+                keep_frequency_dim=np.asarray(int(keep_frequency_dim), dtype=np.int8),
+            )
+    return transformed
 
 
 def _run_wavelet_isc(
@@ -631,11 +730,14 @@ def run_wavelet_workflow(
     datasets: dict[str, AnalysisData],
     analyzers: dict[str, "EEGSummarizedAnalyzer"],
     *,
-    representation: str,
+    representation: str = "power",
     freqs: np.ndarray,
     save_dir: Path,
     bands: Sequence[str] | None = None,
     include_broadband: bool = True,
+    cache_dir: Path | None = None,
+    reuse_cache: bool = False,
+    keep_frequency_dim: bool = False,
     isc_threshold: float = 0.035,
     window_sec: float = 5.0,
     step_sec: float = 2.5,
@@ -658,21 +760,22 @@ def run_wavelet_workflow(
 
     :param datasets: Time-domain :class:`AnalysisData` objects keyed by label.
     :param analyzers: Reserved for future extension.  Not used at present.
-    :param representation: ``"amplitude"`` or ``"power"``.
+    :param representation: Wavelet representation; only ``"power"`` supported.
     :param freqs: Morlet frequencies for the broadband analysis (Hz).
     :param save_dir: Root directory in which to save plots.
     :param bands: Optional subset of band names to run in per-band stage.
         Defaults to all keys from :data:`FREQUENCY_BANDS`.
     :param include_broadband: Whether to run the broadband wavelet stage.
+    :param cache_dir: Optional cache directory for wavelet transforms.
+    :param reuse_cache: Reuse cached transforms from *cache_dir* when available.
+    :param keep_frequency_dim: Keep frequency dimension in wavelet outputs.
     :param isc_threshold: ISC significance threshold.
     :param window_sec: Sliding-window length in seconds.
     :param step_sec: Sliding-window step size in seconds.
-    :raises ValueError: If *representation* is not ``"amplitude"`` or ``"power"``.
+    :raises ValueError: If *representation* is not ``"power"``.
     """
-    if representation not in ("amplitude", "power"):
-        raise ValueError(
-            f"representation must be 'amplitude' or 'power', got {representation!r}"
-        )
+    if representation != "power":
+        raise ValueError(f"representation must be 'power', got {representation!r}")
 
     save_dir.mkdir(parents=True, exist_ok=True)
     _logger.info(f"Wavelet {representation} figures will be saved to: {save_dir}")
@@ -693,7 +796,14 @@ def run_wavelet_workflow(
     bb_sw_results: dict[str, tuple[np.ndarray, np.ndarray]] | None = None
     if include_broadband:
         _logger.info(f"=== Broadband Wavelet {representation.capitalize()} ===")
-        broadband_ds = _wavelet_transform(datasets, freqs, representation)
+        broadband_ds = _wavelet_transform(
+            datasets,
+            freqs,
+            representation,
+            keep_frequency_dim=keep_frequency_dim,
+            cache_dir=(cache_dir / "broadband") if cache_dir else None,
+            reuse_cache=reuse_cache,
+        )
         for label, wd in broadband_ds.items():
             _logger.info(f"  [{label}] {wd}")
 
@@ -724,7 +834,14 @@ def run_wavelet_workflow(
             f"  Processing band: {band} ({l_freq:.1f}–{h_freq:.1f} Hz, {n_freqs} steps)"
         )
         band_freqs = np.linspace(l_freq, h_freq, n_freqs)
-        band_ds = _wavelet_transform(datasets, band_freqs, representation)
+        band_ds = _wavelet_transform(
+            datasets,
+            band_freqs,
+            representation,
+            keep_frequency_dim=keep_frequency_dim,
+            cache_dir=(cache_dir / f"band_{band}") if cache_dir else None,
+            reuse_cache=reuse_cache,
+        )
         band_dir = save_dir / f"band_{band}"
         if feature_axis_label is None:
             feature_axis_label = next(iter(band_ds.values())).feature_axis_label

@@ -254,3 +254,12 @@ class TestToWaveletPower:
         amp = to_wavelet_amplitude(sample_ad, freqs)
         pwr = to_wavelet_power(sample_ad, freqs)
         assert not np.allclose(amp.data, pwr.data)
+
+    def test_keep_frequency_dim_preserves_frequency_axis(self, sample_ad, freqs):
+        result = to_wavelet_power(sample_ad, freqs, keep_frequency_dim=True)
+        assert result.data.shape == (
+            sample_ad.n_items,
+            sample_ad.n_features * len(freqs),
+            sample_ad.n_samples,
+        )
+        assert result.metadata["keep_frequency_dim"]

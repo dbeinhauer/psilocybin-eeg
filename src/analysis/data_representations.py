@@ -287,6 +287,8 @@ def to_wavelet_power(
     ad: AnalysisData,
     freqs: np.ndarray,
     n_cycles: Optional[Union[np.ndarray, float]] = None,
+    *,
+    keep_frequency_dim: bool = False,
 ) -> AnalysisData:
     """
     Compute Morlet-wavelet power, averaged over the frequency axis.
@@ -295,8 +297,13 @@ def to_wavelet_power(
     :param freqs: Frequencies of interest (Hz).
     :param n_cycles: Number of wavelet cycles per frequency.
         Defaults to ``freqs / 2``.
+    :param keep_frequency_dim: When ``True``, preserves the frequency
+        dimension by flattening ``(feature, frequency)`` into the
+        feature axis. Output shape becomes
+        ``(n_items, n_features * n_freqs, n_samples)``.
     :return: ``AnalysisData`` with shape ``(n_items, n_features, n_samples)``
-        containing the mean wavelet power across *freqs*.
+        containing the mean wavelet power across *freqs* (default), or
+        frequency-resolved flattened output when *keep_frequency_dim* is true.
     """
     if n_cycles is None:
         n_cycles = freqs / 2.0
@@ -309,15 +316,34 @@ def to_wavelet_power(
         verbose=False,
     )
     # tfr: (n_items, n_features, n_freqs, n_samples)
-    power = tfr.mean(axis=2)
+    if keep_frequency_dim:
+        power = tfr.reshape(
+            tfr.shape[0], tfr.shape[1] * tfr.shape[2], tfr.shape[3]
+        )
+        if ad.feature_names is not None:
+            feature_names = [
+                f"{name}@{freq:.1f}Hz"
+                for name in ad.feature_names
+                for freq in freqs
+            ]
+        else:
+            feature_names = None
+    else:
+        power = tfr.mean(axis=2)
+        feature_names = ad.feature_names
     return AnalysisData(
         data=power,
         sfreq=ad.sfreq,
         representation=DataRepresentation.WAVELET_POWER,
         label=f"{ad.label} (wavelet power {freqs[0]:.0f}-{freqs[-1]:.0f} Hz)",
-        feature_names=ad.feature_names,
+        feature_names=feature_names,
         info=ad.info,
-        metadata={**ad.metadata, "freqs": freqs, "n_cycles": n_cycles},
+        metadata={
+            **ad.metadata,
+            "freqs": freqs,
+            "n_cycles": n_cycles,
+            "keep_frequency_dim": keep_frequency_dim,
+        },
     )
 
 

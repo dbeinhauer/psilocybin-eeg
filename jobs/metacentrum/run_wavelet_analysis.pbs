@@ -41,18 +41,21 @@ cat << 'EOF' > run_inside.sh
 #!/bin/bash
 source /opt/myproject/.venv/bin/activate
 python /mnt/scripts/run_analysis.py \
---analysis wavelet_amplitude wavelet_power \
+--analysis wavelet_power \
 --condition Placebo \
 --music_type CLASSIC PSYTRANCE \
 --wavelet_bands delta theta alpha \
+--wavelet_cache_dir /mnt/data/interim/wavelet_cache \
 --n_jobs -1
 
 python /mnt/scripts/run_analysis.py \
---analysis wavelet_amplitude wavelet_power \
+--analysis wavelet_power \
 --condition Placebo \
 --music_type CLASSIC PSYTRANCE \
 --wavelet_bands beta gamma \
 --skip_wavelet_broadband \
+--wavelet_cache_dir /mnt/data/interim/wavelet_cache \
+--reuse_wavelet_cache \
 --n_jobs -1
 EOF
 
