@@ -283,14 +283,10 @@ def to_wavelet_power(
     )
     # tfr: (n_items, n_features, n_freqs, n_samples)
     if keep_frequency_dim:
-        power = tfr.reshape(
-            tfr.shape[0], tfr.shape[1] * tfr.shape[2], tfr.shape[3]
-        )
+        power = tfr.reshape(tfr.shape[0], tfr.shape[1] * tfr.shape[2], tfr.shape[3])
         if ad.feature_names is not None:
             feature_names = [
-                f"{name}@{freq:.1f}Hz"
-                for name in ad.feature_names
-                for freq in freqs
+                f"{name}@{freq:.1f}Hz" for name in ad.feature_names for freq in freqs
             ]
         else:
             feature_names = None
@@ -346,14 +342,10 @@ def to_wavelet_phase(
         verbose=False,
     )
     if keep_frequency_dim:
-        phase = tfr.reshape(
-            tfr.shape[0], tfr.shape[1] * tfr.shape[2], tfr.shape[3]
-        )
+        phase = tfr.reshape(tfr.shape[0], tfr.shape[1] * tfr.shape[2], tfr.shape[3])
         if ad.feature_names is not None:
             feature_names = [
-                f"{name}@{freq:.1f}Hz"
-                for name in ad.feature_names
-                for freq in freqs
+                f"{name}@{freq:.1f}Hz" for name in ad.feature_names for freq in freqs
             ]
         else:
             feature_names = None

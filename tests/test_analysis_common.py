@@ -123,7 +123,9 @@ class TestAddCommonArguments:
 
     def test_wavelet_data_dir_default(self, parser):
         args = parser.parse_args([])
-        assert args.wavelet_data_dir == str(ProjectPaths.PROCESSED_DATA_DIR / "wavelets")
+        assert args.wavelet_data_dir == str(
+            ProjectPaths.PROCESSED_DATA_DIR / "wavelets"
+        )
 
     def test_wavelet_data_dir_custom(self, parser):
         args = parser.parse_args(["--wavelet_data_dir", "/tmp/wavelets"])
@@ -134,7 +136,9 @@ class TestAddCommonArguments:
         assert args.reuse_wavelets is True
 
     def test_backward_compatible_wavelet_cache_aliases(self, parser):
-        args = parser.parse_args(["--wavelet_cache_dir", "/tmp/wavelets", "--reuse_wavelet_cache"])
+        args = parser.parse_args(
+            ["--wavelet_cache_dir", "/tmp/wavelets", "--reuse_wavelet_cache"]
+        )
         assert args.wavelet_data_dir == "/tmp/wavelets"
         assert args.reuse_wavelets is True
 
@@ -146,12 +150,17 @@ class TestAddCommonArguments:
         """Check that wavelet_freq_{min,max,n_freqs} produce a valid linspace."""
         args = parser.parse_args(
             [
-                "--wavelet_freq_min", "1.0",
-                "--wavelet_freq_max", "40.0",
-                "--wavelet_n_freqs", "20",
+                "--wavelet_freq_min",
+                "1.0",
+                "--wavelet_freq_max",
+                "40.0",
+                "--wavelet_n_freqs",
+                "20",
             ]
         )
-        freqs = np.linspace(args.wavelet_freq_min, args.wavelet_freq_max, args.wavelet_n_freqs)
+        freqs = np.linspace(
+            args.wavelet_freq_min, args.wavelet_freq_max, args.wavelet_n_freqs
+        )
         assert freqs.shape == (20,)
         assert freqs[0] == pytest.approx(1.0)
         assert freqs[-1] == pytest.approx(40.0)
@@ -188,7 +197,9 @@ class TestRunWaveletWorkflowValidation:
 
     def test_invalid_representation_raises(self, sample_datasets, tmp_path):
         freqs = np.linspace(4.0, 30.0, 5)
-        with pytest.raises(ValueError, match="representation must be 'power' or 'phase'"):
+        with pytest.raises(
+            ValueError, match="representation must be 'power' or 'phase'"
+        ):
             run_wavelet_workflow(
                 sample_datasets,
                 analyzers={},

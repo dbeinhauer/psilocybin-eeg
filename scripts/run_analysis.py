@@ -84,7 +84,10 @@ if __name__ == "__main__":
 
     # ── Data loading (shared across both analyses) ────────────────
     analyzers = load_analyzers(
-        music_types, condition, exclusion_categories, args.process_and_save,
+        music_types,
+        condition,
+        exclusion_categories,
+        args.process_and_save,
         n_jobs=args.n_jobs,
         normalize_data=False,
     )

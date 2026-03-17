@@ -14,6 +14,7 @@ from src.analysis.data_representations import (
     to_wavelet_power,
 )
 
+
 class TestDataRepresentation:
     """Test DataRepresentation enum."""
 

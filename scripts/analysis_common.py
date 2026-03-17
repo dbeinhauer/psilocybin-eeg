@@ -571,12 +571,9 @@ def _wavelet_transform(
             safe_label = re.sub(r"[^A-Za-z0-9_-]", "_", label).strip("_")
             if not safe_label:
                 safe_label = f"dataset_{hashlib.sha256(label.encode()).hexdigest()[:8]}"
-            wavelet_file = (
-                wavelet_dir
-                / (
-                    f"{safe_label}__wavelet_{representation}__"
-                    f"{freq_sig}__freqdim{int(keep_frequency_dim)}.npz"
-                )
+            wavelet_file = wavelet_dir / (
+                f"{safe_label}__wavelet_{representation}__"
+                f"{freq_sig}__freqdim{int(keep_frequency_dim)}.npz"
             )
             if reuse_wavelets and wavelet_file.exists():
                 loaded = np.load(wavelet_file)
@@ -659,9 +656,7 @@ def _run_wavelet_isc(
         loo, mean_loo = compute_loo_isc(wd.data)
         loo_iscs[label] = loo
         mean_loo_iscs[label] = mean_loo
-        _logger.info(
-            f"[{label}]  loo_isc={loo.shape}  mean_loo_isc={mean_loo.shape}"
-        )
+        _logger.info(f"[{label}]  loo_isc={loo.shape}  mean_loo_isc={mean_loo.shape}")
 
     plot_loo_isc_distribution(
         mean_loo_iscs,
@@ -676,9 +671,7 @@ def _run_wavelet_isc(
             wd.data, window_sec=window_sec, step_sec=step_sec, sfreq=wd.sfreq
         )
         sw_results[label] = (sw_isc, sw_times)
-        _logger.info(
-            f"[{label}]  sw_isc={sw_isc.shape}  sw_times={sw_times.shape}"
-        )
+        _logger.info(f"[{label}]  sw_isc={sw_isc.shape}  sw_times={sw_times.shape}")
 
     plot_sliding_window_isc(
         sw_results,
@@ -886,9 +879,7 @@ def run_wavelet_workflow(
         del band_ds
 
     # ── Cross-band comparison plots ───────────────────────────────
-    _logger.info(
-        f"=== Band Comparison Wavelet {representation.capitalize()} ==="
-    )
+    _logger.info(f"=== Band Comparison Wavelet {representation.capitalize()} ===")
     cmp_dir_name = "band_comparison"
     if len(selected_bands) != len(FREQUENCY_BANDS):
         band_tag = "_".join(selected_band_names)
@@ -906,9 +897,7 @@ def run_wavelet_workflow(
     plot_band_isc_distributions(
         band_loo_iscs,
         bands=selected_bands,
-        feature_axis_label=(
-            f"Number of {feature_axis_label.lower()}s"
-        ),
+        feature_axis_label=(f"Number of {feature_axis_label.lower()}s"),
         save_path=cmp_dir / "band_isc_distributions.png",
     )
     plot_band_mean_isc_bar(
@@ -941,9 +930,7 @@ def run_wavelet_workflow(
     plot_band_mean_variance_distributions(
         band_mv_results,
         bands=selected_bands,
-        feature_axis_label=(
-            f"Number of {feature_axis_label.lower()}s"
-        ),
+        feature_axis_label=(f"Number of {feature_axis_label.lower()}s"),
         save_path=cmp_dir / "band_mean_variance_distributions.png",
     )
     plot_band_sliding_window_mean_variance(
