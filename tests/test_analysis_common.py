@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.analysis_common import add_common_arguments, run_wavelet_workflow
 from src.analysis.data_representations import AnalysisData, DataRepresentation
+from src.definitions.constants import ProjectPaths
 
 
 class TestAddCommonArguments:
@@ -116,17 +117,22 @@ class TestAddCommonArguments:
         args = parser.parse_args(["--skip_wavelet_broadband"])
         assert args.skip_wavelet_broadband is True
 
-    def test_wavelet_cache_dir_default(self, parser):
+    def test_wavelet_data_dir_default(self, parser):
         args = parser.parse_args([])
-        assert args.wavelet_cache_dir is None
+        assert args.wavelet_data_dir == str(ProjectPaths.PROCESSED_DATA_DIR / "wavelets")
 
-    def test_wavelet_cache_dir_custom(self, parser):
-        args = parser.parse_args(["--wavelet_cache_dir", "/tmp/wavelets"])
-        assert args.wavelet_cache_dir == "/tmp/wavelets"
+    def test_wavelet_data_dir_custom(self, parser):
+        args = parser.parse_args(["--wavelet_data_dir", "/tmp/wavelets"])
+        assert args.wavelet_data_dir == "/tmp/wavelets"
 
-    def test_reuse_wavelet_cache_flag(self, parser):
-        args = parser.parse_args(["--reuse_wavelet_cache"])
-        assert args.reuse_wavelet_cache is True
+    def test_reuse_wavelets_flag(self, parser):
+        args = parser.parse_args(["--reuse_wavelets"])
+        assert args.reuse_wavelets is True
+
+    def test_backward_compatible_wavelet_cache_aliases(self, parser):
+        args = parser.parse_args(["--wavelet_cache_dir", "/tmp/wavelets", "--reuse_wavelet_cache"])
+        assert args.wavelet_data_dir == "/tmp/wavelets"
+        assert args.reuse_wavelets is True
 
     def test_wavelet_keep_frequency_dim_flag(self, parser):
         args = parser.parse_args(["--wavelet_keep_frequency_dim"])

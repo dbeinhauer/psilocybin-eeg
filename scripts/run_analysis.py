@@ -126,12 +126,8 @@ if __name__ == "__main__":
             save_dir=ProjectPaths.PLOTS_PATH / "WaveletPowerAnalysis",
             bands=args.wavelet_bands,
             include_broadband=not args.skip_wavelet_broadband,
-            cache_dir=(
-                Path(args.wavelet_cache_dir)
-                if args.wavelet_cache_dir
-                else None
-            ),
-            reuse_cache=args.reuse_wavelet_cache,
+            wavelet_dir=Path(args.wavelet_data_dir),
+            reuse_wavelets=args.reuse_wavelets,
             keep_frequency_dim=args.wavelet_keep_frequency_dim,
             isc_threshold=args.isc_threshold,
             window_sec=WINDOW_SEC,
@@ -150,12 +146,8 @@ if __name__ == "__main__":
             save_dir=ProjectPaths.PLOTS_PATH / "WaveletPhaseAnalysis",
             bands=args.wavelet_bands,
             include_broadband=not args.skip_wavelet_broadband,
-            cache_dir=(
-                Path(args.wavelet_cache_dir)
-                if args.wavelet_cache_dir
-                else None
-            ),
-            reuse_cache=args.reuse_wavelet_cache,
+            wavelet_dir=Path(args.wavelet_data_dir),
+            reuse_wavelets=args.reuse_wavelets,
             keep_frequency_dim=args.wavelet_keep_frequency_dim,
             isc_threshold=args.isc_threshold,
             window_sec=WINDOW_SEC,
