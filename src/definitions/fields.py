@@ -139,6 +139,17 @@ class FrequencyBandNames(Enum):
     GAMMA = "gamma"
 
 
+class AnalysisVariants(Enum):
+    """
+    All analysis keywords accepted by the unified analysis entrypoint.
+    """
+
+    ISC = "isc"
+    MEAN_VARIANCE = "mean_variance"
+    WAVELET_POWER = "wavelet_power"
+    WAVELET_PHASE = "wavelet_phase"
+
+
 class PreprocessedDataVariants(Enum):
     """
     All variants of possible data stored during preprocessing (for quality of the preprocessing analysis).

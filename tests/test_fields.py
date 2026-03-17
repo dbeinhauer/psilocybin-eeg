@@ -15,6 +15,7 @@ from src.definitions.fields import (
     ChannelTypes,
     ICLabelComponentsClasses,
     ExclusionCategories,
+    AnalysisVariants,
     PreprocessedDataVariants,
     RAW_DATA_VARIANTS,
     INTERIM_DATA_VARIANTS,
@@ -121,6 +122,12 @@ class TestPreprocessedDataVariants:
 
     def test_concatenated(self):
         assert PreprocessedDataVariants.CONCATENATED.value == "concatenated"
+
+
+class TestAnalysisVariants:
+    def test_contains_expected_analysis_keywords(self):
+        values = {v.value for v in AnalysisVariants}
+        assert values == {"isc", "mean_variance", "wavelet_power", "wavelet_phase"}
 
 
 class TestRawDataVariants:

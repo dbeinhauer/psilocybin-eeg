@@ -45,6 +45,7 @@ from src.definitions.fields import (
     MusicTypeVariants,
     ConditionVariants,
     ExclusionCategories,
+    AnalysisVariants,
 )
 from src.definitions.constants import ProjectPaths
 
@@ -70,8 +71,8 @@ if __name__ == "__main__":
     music_types = [MusicTypeVariants(mt) for mt in args.music_type]
     exclusion_categories = [ExclusionCategories.BAD_MUSIC]
     analyses = set(args.analysis)
-    run_wavelet_power = "wavelet_power" in analyses
-    run_wavelet_phase = "wavelet_phase" in analyses
+    run_wavelet_power = AnalysisVariants.WAVELET_POWER.value in analyses
+    run_wavelet_phase = AnalysisVariants.WAVELET_PHASE.value in analyses
     run_wavelet = run_wavelet_power or run_wavelet_phase
 
     WINDOW_SEC = args.window_sec
@@ -87,10 +88,14 @@ if __name__ == "__main__":
         n_jobs=args.n_jobs,
         normalize_data=False,
     )
-    raw_datasets = analyzers_to_datasets(analyzers) if run_wavelet or "isc" in analyses else None
+    raw_datasets = (
+        analyzers_to_datasets(analyzers)
+        if run_wavelet or AnalysisVariants.ISC.value in analyses
+        else None
+    )
 
     # ── ISC analysis ──────────────────────────────────────────────
-    if "isc" in analyses:
+    if AnalysisVariants.ISC.value in analyses:
         if raw_datasets is None:
             raw_datasets = analyzers_to_datasets(analyzers)
         run_isc_workflow(
@@ -102,7 +107,7 @@ if __name__ == "__main__":
         )
 
     # ── Mean / variance analysis ──────────────────────────────────
-    if "mean_variance" in analyses:
+    if AnalysisVariants.MEAN_VARIANCE.value in analyses:
         for analyzer in analyzers.values():
             analyzer.normalize()
         mean_var_datasets = analyzers_to_datasets(analyzers)

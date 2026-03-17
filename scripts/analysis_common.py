@@ -30,6 +30,7 @@ from src.definitions.fields import (
     CoordinateSystems,
     SingleDataMetadata,
     FrequencyBandNames,
+    AnalysisVariants,
 )
 from src.definitions.constants import ProjectPaths
 import numpy as np
@@ -94,8 +95,8 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--analysis",
         type=str,
         nargs="+",
-        default=["isc", "mean_variance"],
-        choices=["isc", "mean_variance", "wavelet_power", "wavelet_phase"],
+        default=[AnalysisVariants.ISC.value, AnalysisVariants.MEAN_VARIANCE.value],
+        choices=[analysis.value for analysis in AnalysisVariants],
         help=(
             "Which analyses to run. Defaults to isc and mean_variance. "
             "Use wavelet_power or wavelet_phase to additionally run ISC and "

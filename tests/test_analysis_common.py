@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from scripts.analysis_common import add_common_arguments, run_wavelet_workflow
 from src.analysis.data_representations import AnalysisData, DataRepresentation
 from src.definitions.constants import ProjectPaths
+from src.definitions.fields import AnalysisVariants
 
 
 class TestAddCommonArguments:
@@ -30,31 +31,34 @@ class TestAddCommonArguments:
 
     def test_analysis_defaults_to_isc_and_mean_variance(self, parser):
         args = parser.parse_args([])
-        assert set(args.analysis) == {"isc", "mean_variance"}
+        assert set(args.analysis) == {
+            AnalysisVariants.ISC.value,
+            AnalysisVariants.MEAN_VARIANCE.value,
+        }
 
     def test_analysis_accepts_wavelet_power(self, parser):
-        args = parser.parse_args(["--analysis", "wavelet_power"])
-        assert "wavelet_power" in args.analysis
+        args = parser.parse_args(["--analysis", AnalysisVariants.WAVELET_POWER.value])
+        assert AnalysisVariants.WAVELET_POWER.value in args.analysis
 
     def test_analysis_accepts_wavelet_phase(self, parser):
-        args = parser.parse_args(["--analysis", "wavelet_phase"])
-        assert "wavelet_phase" in args.analysis
+        args = parser.parse_args(["--analysis", AnalysisVariants.WAVELET_PHASE.value])
+        assert AnalysisVariants.WAVELET_PHASE.value in args.analysis
 
     def test_analysis_accepts_all_choices(self, parser):
         args = parser.parse_args(
             [
                 "--analysis",
-                "isc",
-                "mean_variance",
-                "wavelet_power",
-                "wavelet_phase",
+                AnalysisVariants.ISC.value,
+                AnalysisVariants.MEAN_VARIANCE.value,
+                AnalysisVariants.WAVELET_POWER.value,
+                AnalysisVariants.WAVELET_PHASE.value,
             ]
         )
         assert set(args.analysis) == {
-            "isc",
-            "mean_variance",
-            "wavelet_power",
-            "wavelet_phase",
+            AnalysisVariants.ISC.value,
+            AnalysisVariants.MEAN_VARIANCE.value,
+            AnalysisVariants.WAVELET_POWER.value,
+            AnalysisVariants.WAVELET_PHASE.value,
         }
 
     def test_analysis_rejects_invalid_choice(self, parser):
