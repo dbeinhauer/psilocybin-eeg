@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from scripts.analysis_common import add_common_arguments, run_wavelet_workflow
 from src.analysis.data_representations import AnalysisData, DataRepresentation
 from src.definitions.constants import ProjectPaths
-from src.definitions.fields import AnalysisVariants
+from src.definitions.fields import AnalysisVariants, ExperimentNames
 
 
 class TestAddCommonArguments:
@@ -124,7 +124,8 @@ class TestAddCommonArguments:
     def test_wavelet_data_dir_default(self, parser):
         args = parser.parse_args([])
         assert args.wavelet_data_dir == str(
-            ProjectPaths.PROCESSED_DATA_DIR / "wavelets"
+            ProjectPaths.get_experiment_data_dir(ExperimentNames.PSILO_MUSIC)[0]
+            / "wavelets"
         )
 
     def test_wavelet_data_dir_custom(self, parser):

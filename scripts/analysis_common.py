@@ -195,10 +195,13 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--wavelet_data_dir",
         type=str,
-        default=str(ProjectPaths.PROCESSED_DATA_DIR / "wavelets"),
+        default=str(
+            ProjectPaths.get_experiment_data_dir(ExperimentNames.PSILO_MUSIC)[0]
+            / "wavelets"
+        ),
         help=(
             "Directory for storing wavelet-transformed datasets for future use "
-            "(default: data/processed/wavelets)."
+            "(default: data/processed/psilo_music/wavelets)."
         ),
     )
     parser.add_argument(

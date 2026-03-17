@@ -45,7 +45,7 @@ python /mnt/scripts/run_analysis.py \
 --condition Placebo \
 --music_type CLASSIC PSYTRANCE \
 --wavelet_bands delta theta alpha \
---wavelet_data_dir /mnt/data/processed/wavelets \
+--wavelet_data_dir /mnt/data/processed/psilo_music/wavelets \
 --n_jobs -1
 
 python /mnt/scripts/run_analysis.py \
@@ -54,7 +54,7 @@ python /mnt/scripts/run_analysis.py \
 --music_type CLASSIC PSYTRANCE \
 --wavelet_bands beta gamma \
 --skip_wavelet_broadband \
---wavelet_data_dir /mnt/data/processed/wavelets \
+--wavelet_data_dir /mnt/data/processed/psilo_music/wavelets \
 --reuse_wavelets \
 --n_jobs -1
 EOF
