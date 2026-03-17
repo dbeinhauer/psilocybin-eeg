@@ -35,6 +35,10 @@ class TestAddCommonArguments:
         args = parser.parse_args(["--analysis", "wavelet_power"])
         assert "wavelet_power" in args.analysis
 
+    def test_analysis_accepts_wavelet_phase(self, parser):
+        args = parser.parse_args(["--analysis", "wavelet_phase"])
+        assert "wavelet_phase" in args.analysis
+
     def test_analysis_accepts_all_choices(self, parser):
         args = parser.parse_args(
             [
@@ -42,12 +46,14 @@ class TestAddCommonArguments:
                 "isc",
                 "mean_variance",
                 "wavelet_power",
+                "wavelet_phase",
             ]
         )
         assert set(args.analysis) == {
             "isc",
             "mean_variance",
             "wavelet_power",
+            "wavelet_phase",
         }
 
     def test_analysis_rejects_invalid_choice(self, parser):
@@ -172,7 +178,7 @@ class TestRunWaveletWorkflowValidation:
 
     def test_invalid_representation_raises(self, sample_datasets, tmp_path):
         freqs = np.linspace(4.0, 30.0, 5)
-        with pytest.raises(ValueError, match="representation must be 'power'"):
+        with pytest.raises(ValueError, match="representation must be 'power' or 'phase'"):
             run_wavelet_workflow(
                 sample_datasets,
                 analyzers={},

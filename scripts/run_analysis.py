@@ -70,7 +70,9 @@ if __name__ == "__main__":
     music_types = [MusicTypeVariants(mt) for mt in args.music_type]
     exclusion_categories = [ExclusionCategories.BAD_MUSIC]
     analyses = set(args.analysis)
-    run_wavelet = "wavelet_power" in analyses
+    run_wavelet_power = "wavelet_power" in analyses
+    run_wavelet_phase = "wavelet_phase" in analyses
+    run_wavelet = run_wavelet_power or run_wavelet_phase
 
     WINDOW_SEC = args.window_sec
     STEP_SEC = args.step_sec
@@ -83,24 +85,16 @@ if __name__ == "__main__":
     analyzers = load_analyzers(
         music_types, condition, exclusion_categories, args.process_and_save,
         n_jobs=args.n_jobs,
-        normalize_data=not run_wavelet,
+        normalize_data=False,
     )
-    raw_datasets = analyzers_to_datasets(analyzers) if run_wavelet else None
-
-    run_standard = "isc" in analyses or "mean_variance" in analyses
-    if run_standard and run_wavelet:
-        for analyzer in analyzers.values():
-            analyzer.normalize()
-        datasets = analyzers_to_datasets(analyzers)
-    elif run_standard:
-        datasets = analyzers_to_datasets(analyzers)
-    else:
-        datasets = {}
+    raw_datasets = analyzers_to_datasets(analyzers) if run_wavelet or "isc" in analyses else None
 
     # ── ISC analysis ──────────────────────────────────────────────
     if "isc" in analyses:
+        if raw_datasets is None:
+            raw_datasets = analyzers_to_datasets(analyzers)
         run_isc_workflow(
-            datasets,
+            raw_datasets,
             save_dir=ProjectPaths.PLOTS_PATH / "OverallAnalysis",
             isc_threshold=args.isc_threshold,
             window_sec=WINDOW_SEC,
@@ -109,8 +103,11 @@ if __name__ == "__main__":
 
     # ── Mean / variance analysis ──────────────────────────────────
     if "mean_variance" in analyses:
+        for analyzer in analyzers.values():
+            analyzer.normalize()
+        mean_var_datasets = analyzers_to_datasets(analyzers)
         run_mean_variance_workflow(
-            datasets,
+            mean_var_datasets,
             analyzers,
             save_dir=ProjectPaths.PLOTS_PATH / "MeanVarianceAnalysis",
             window_sec=WINDOW_SEC,
@@ -118,7 +115,7 @@ if __name__ == "__main__":
         )
 
     # ── Wavelet power analysis ────────────────────────────────────
-    if "wavelet_power" in analyses:
+    if run_wavelet_power:
         if raw_datasets is None:
             raise RuntimeError("raw_datasets are required for wavelet power analysis")
         run_wavelet_workflow(
@@ -127,6 +124,30 @@ if __name__ == "__main__":
             representation="power",
             freqs=wavelet_freqs,
             save_dir=ProjectPaths.PLOTS_PATH / "WaveletPowerAnalysis",
+            bands=args.wavelet_bands,
+            include_broadband=not args.skip_wavelet_broadband,
+            cache_dir=(
+                Path(args.wavelet_cache_dir)
+                if args.wavelet_cache_dir
+                else None
+            ),
+            reuse_cache=args.reuse_wavelet_cache,
+            keep_frequency_dim=args.wavelet_keep_frequency_dim,
+            isc_threshold=args.isc_threshold,
+            window_sec=WINDOW_SEC,
+            step_sec=STEP_SEC,
+        )
+
+    # ── Wavelet phase analysis ────────────────────────────────────
+    if run_wavelet_phase:
+        if raw_datasets is None:
+            raise RuntimeError("raw_datasets are required for wavelet phase analysis")
+        run_wavelet_workflow(
+            raw_datasets,
+            analyzers,
+            representation="phase",
+            freqs=wavelet_freqs,
+            save_dir=ProjectPaths.PLOTS_PATH / "WaveletPhaseAnalysis",
             bands=args.wavelet_bands,
             include_broadband=not args.skip_wavelet_broadband,
             cache_dir=(

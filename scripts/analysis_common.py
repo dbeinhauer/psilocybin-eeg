@@ -36,6 +36,7 @@ import numpy as np
 from src.analysis.data_representations import (
     AnalysisData,
     DataRepresentation,
+    to_wavelet_phase,
     to_wavelet_power,
 )
 from src.analysis.isc import (
@@ -93,11 +94,11 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         type=str,
         nargs="+",
         default=["isc", "mean_variance"],
-        choices=["isc", "mean_variance", "wavelet_power"],
+        choices=["isc", "mean_variance", "wavelet_power", "wavelet_phase"],
         help=(
             "Which analyses to run. Defaults to isc and mean_variance. "
-            "Use wavelet_power to additionally run ISC and mean/variance "
-            "on wavelet-transformed data."
+            "Use wavelet_power or wavelet_phase to additionally run ISC and "
+            "mean/variance on wavelet-transformed data."
         ),
     )
     parser.add_argument(
@@ -209,7 +210,7 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         default=False,
         help=(
-            "Keep frequency dimension in wavelet power output "
+            "Keep frequency dimension in wavelet output "
             "(flattened as feature×frequency instead of averaging across "
             "frequencies)."
         ),
@@ -534,15 +535,15 @@ def _wavelet_transform(
 
     :param datasets: Source :class:`AnalysisData` objects keyed by label.
     :param freqs: Morlet frequencies (Hz).
-    :param representation: Wavelet representation. Only ``"power"`` is supported.
+    :param representation: Wavelet representation (``"power"`` or ``"phase"``).
     :param keep_frequency_dim: Keep frequency dimension instead of averaging it.
     :param cache_dir: Optional cache directory for transformed outputs.
     :param reuse_cache: If true, reuse cache files when present.
     :returns: New dict of transformed datasets with the same keys.
     """
-    if representation != "power":
+    if representation not in ("power", "phase"):
         raise ValueError(
-            f"Only 'power' wavelet representation is supported, got {representation!r}"
+            f"Only 'power' and 'phase' wavelet representations are supported, got {representation!r}"
         )
 
     if cache_dir is not None:
@@ -558,7 +559,10 @@ def _wavelet_transform(
                 safe_label = f"dataset_{hashlib.sha256(label.encode()).hexdigest()[:8]}"
             cache_file = (
                 cache_dir
-                / f"{safe_label}__wavelet_power__{freq_sig}__freqdim{int(keep_frequency_dim)}.npz"
+                / (
+                    f"{safe_label}__wavelet_{representation}__"
+                    f"{freq_sig}__freqdim{int(keep_frequency_dim)}.npz"
+                )
             )
             if reuse_cache and cache_file.exists():
                 loaded = np.load(cache_file)
@@ -572,7 +576,11 @@ def _wavelet_transform(
                 transformed[label] = AnalysisData(
                     data=loaded["data"],
                     sfreq=float(loaded["sfreq"]),
-                    representation=DataRepresentation.WAVELET_POWER,
+                    representation=(
+                        DataRepresentation.WAVELET_PHASE
+                        if representation == "phase"
+                        else DataRepresentation.WAVELET_POWER
+                    ),
                     label=str(loaded["label"]),
                     feature_names=feature_names,
                     info=ad.info,
@@ -586,9 +594,10 @@ def _wavelet_transform(
                 )
                 continue
 
-        wd = to_wavelet_power(
-            ad, freqs, keep_frequency_dim=keep_frequency_dim
-        )
+        if representation == "power":
+            wd = to_wavelet_power(ad, freqs, keep_frequency_dim=keep_frequency_dim)
+        else:
+            wd = to_wavelet_phase(ad, freqs, keep_frequency_dim=keep_frequency_dim)
         transformed[label] = wd
         if cache_file is not None:
             feature_names = wd.feature_names if wd.feature_names is not None else []
@@ -760,7 +769,7 @@ def run_wavelet_workflow(
 
     :param datasets: Time-domain :class:`AnalysisData` objects keyed by label.
     :param analyzers: Reserved for future extension.  Not used at present.
-    :param representation: Wavelet representation; only ``"power"`` supported.
+    :param representation: Wavelet representation; ``"power"`` or ``"phase"``.
     :param freqs: Morlet frequencies for the broadband analysis (Hz).
     :param save_dir: Root directory in which to save plots.
     :param bands: Optional subset of band names to run in per-band stage.
@@ -772,10 +781,12 @@ def run_wavelet_workflow(
     :param isc_threshold: ISC significance threshold.
     :param window_sec: Sliding-window length in seconds.
     :param step_sec: Sliding-window step size in seconds.
-    :raises ValueError: If *representation* is not ``"power"``.
+    :raises ValueError: If *representation* is not ``"power"`` or ``"phase"``.
     """
-    if representation != "power":
-        raise ValueError(f"representation must be 'power', got {representation!r}")
+    if representation not in ("power", "phase"):
+        raise ValueError(
+            f"representation must be 'power' or 'phase', got {representation!r}"
+        )
 
     save_dir.mkdir(parents=True, exist_ok=True)
     _logger.info(f"Wavelet {representation} figures will be saved to: {save_dir}")
