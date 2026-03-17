@@ -124,7 +124,8 @@ class TestAddCommonArguments:
     def test_wavelet_data_dir_default(self, parser):
         args = parser.parse_args([])
         assert args.wavelet_data_dir == str(
-            ProjectPaths.get_experiment_data_dir(ExperimentNames.PSILO_MUSIC)[0]
+            ProjectPaths.PROCESSED_DATA_DIR
+            / ExperimentNames.PSILO_MUSIC.value
             / "wavelets"
         )
 
