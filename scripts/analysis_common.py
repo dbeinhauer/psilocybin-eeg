@@ -34,6 +34,7 @@ from src.definitions.fields import (
 )
 from src.definitions.constants import ProjectPaths
 import numpy as np
+from scipy.stats import circmean
 
 from src.analysis.data_representations import (
     AnalysisData,
@@ -569,13 +570,51 @@ def _wavelet_transform(
 
     transformed: dict[str, AnalysisData] = {}
     freq_sig = f"{freqs[0]:.3f}_{freqs[-1]:.3f}_{len(freqs)}"
+
+    def _reduce_frequency_dimension(
+        wavelet_ad: AnalysisData,
+        *,
+        representation_kind: str,
+        base_feature_names: list[str] | None,
+    ) -> AnalysisData:
+        """Reduce a frequency-resolved wavelet AnalysisData along frequency axis."""
+        n_freqs = int(np.asarray(wavelet_ad.metadata["freqs"]).shape[0])
+        n_items, n_features_flat, n_samples = wavelet_ad.data.shape
+        if n_features_flat % n_freqs != 0:
+            raise ValueError(
+                "Frequency-resolved wavelet data has invalid shape for "
+                f"reduction: n_features={n_features_flat}, n_freqs={n_freqs}"
+            )
+
+        n_features = n_features_flat // n_freqs
+        reshaped = wavelet_ad.data.reshape(n_items, n_features, n_freqs, n_samples)
+        if representation_kind == "power":
+            reduced = reshaped.mean(axis=2)
+        else:
+            reduced = circmean(reshaped, high=np.pi, low=-np.pi, axis=2)
+
+        return AnalysisData(
+            data=reduced,
+            sfreq=wavelet_ad.sfreq,
+            representation=wavelet_ad.representation,
+            label=wavelet_ad.label,
+            feature_names=base_feature_names,
+            info=wavelet_ad.info,
+            metadata={**wavelet_ad.metadata, "keep_frequency_dim": False},
+        )
+
     for label, ad in datasets.items():
         wavelet_file: Path | None = None
+        legacy_wavelet_file: Path | None = None
         if wavelet_dir is not None:
             safe_label = re.sub(r"[^A-Za-z0-9_-]", "_", label).strip("_")
             if not safe_label:
                 safe_label = f"dataset_{hashlib.sha256(label.encode()).hexdigest()[:8]}"
             wavelet_file = wavelet_dir / (
+                f"{safe_label}__wavelet_{representation}__"
+                f"{freq_sig}__freqdim1.npz"
+            )
+            legacy_wavelet_file = wavelet_dir / (
                 f"{safe_label}__wavelet_{representation}__"
                 f"{freq_sig}__freqdim{int(keep_frequency_dim)}.npz"
             )
@@ -607,27 +646,75 @@ def _wavelet_transform(
                         "loaded_from_wavelet_file": str(wavelet_file),
                     },
                 )
+                if not keep_frequency_dim:
+                    transformed[label] = _reduce_frequency_dimension(
+                        transformed[label],
+                        representation_kind=representation,
+                        base_feature_names=ad.feature_names,
+                    )
+                continue
+
+            if (
+                reuse_wavelets
+                and legacy_wavelet_file is not None
+                and legacy_wavelet_file.exists()
+            ):
+                loaded = np.load(legacy_wavelet_file)
+                has_feature_names = loaded["has_feature_names"].item()
+                loaded_feature_names = loaded["feature_names"]
+                feature_names = (
+                    loaded_feature_names.tolist()
+                    if has_feature_names and loaded_feature_names.size > 0
+                    else None
+                )
+                transformed[label] = AnalysisData(
+                    data=loaded["data"],
+                    sfreq=float(loaded["sfreq"]),
+                    representation=(
+                        DataRepresentation.WAVELET_PHASE
+                        if representation == "phase"
+                        else DataRepresentation.WAVELET_POWER
+                    ),
+                    label=str(loaded["label"]),
+                    feature_names=feature_names,
+                    info=ad.info,
+                    metadata={
+                        **ad.metadata,
+                        "freqs": loaded["freqs"],
+                        "n_cycles": loaded["n_cycles"],
+                        "keep_frequency_dim": bool(loaded["keep_frequency_dim"]),
+                        "loaded_from_wavelet_file": str(legacy_wavelet_file),
+                    },
+                )
                 continue
 
         if representation == "power":
-            wd = to_wavelet_power(ad, freqs, keep_frequency_dim=keep_frequency_dim)
+            wd_freq = to_wavelet_power(ad, freqs, keep_frequency_dim=True)
         else:
-            wd = to_wavelet_phase(ad, freqs, keep_frequency_dim=keep_frequency_dim)
-        transformed[label] = wd
+            wd_freq = to_wavelet_phase(ad, freqs, keep_frequency_dim=True)
+        transformed[label] = (
+            wd_freq
+            if keep_frequency_dim
+            else _reduce_frequency_dimension(
+                wd_freq,
+                representation_kind=representation,
+                base_feature_names=ad.feature_names,
+            )
+        )
         if wavelet_file is not None:
-            feature_names = wd.feature_names if wd.feature_names is not None else []
+            feature_names = wd_freq.feature_names if wd_freq.feature_names is not None else []
             np.savez_compressed(
                 wavelet_file,
-                data=wd.data,
-                sfreq=wd.sfreq,
-                label=wd.label,
+                data=wd_freq.data,
+                sfreq=wd_freq.sfreq,
+                label=wd_freq.label,
                 feature_names=np.asarray(feature_names, dtype=str),
                 has_feature_names=np.asarray(
-                    int(wd.feature_names is not None), dtype=np.int8
+                    int(wd_freq.feature_names is not None), dtype=np.int8
                 ),
                 freqs=freqs,
-                n_cycles=np.asarray(wd.metadata.get("n_cycles")),
-                keep_frequency_dim=np.asarray(int(keep_frequency_dim), dtype=np.int8),
+                n_cycles=np.asarray(wd_freq.metadata.get("n_cycles")),
+                keep_frequency_dim=np.asarray(1, dtype=np.int8),
             )
     return transformed
 
