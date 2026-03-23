@@ -611,8 +611,7 @@ def _wavelet_transform(
             if not safe_label:
                 safe_label = f"dataset_{hashlib.sha256(label.encode()).hexdigest()[:8]}"
             wavelet_file = wavelet_dir / (
-                f"{safe_label}__wavelet_{representation}__"
-                f"{freq_sig}__freqdim1.npz"
+                f"{safe_label}__wavelet_{representation}__{freq_sig}__freqdim1.npz"
             )
             legacy_wavelet_file = wavelet_dir / (
                 f"{safe_label}__wavelet_{representation}__"
@@ -702,7 +701,9 @@ def _wavelet_transform(
             )
         )
         if wavelet_file is not None:
-            feature_names = wd_freq.feature_names if wd_freq.feature_names is not None else []
+            feature_names = (
+                wd_freq.feature_names if wd_freq.feature_names is not None else []
+            )
             np.savez_compressed(
                 wavelet_file,
                 data=wd_freq.data,
