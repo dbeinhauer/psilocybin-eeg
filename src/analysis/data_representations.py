@@ -19,7 +19,7 @@ import numpy as np
 import mne
 from mne.time_frequency import tfr_array_morlet
 from scipy.signal import hilbert
-from scipy.stats import zscore
+from scipy.stats import zscore, circmean
 
 # ---------------------------------------------------------------------------
 # Enum for representation types
@@ -33,6 +33,7 @@ class DataRepresentation(Enum):
     ICA_ACTIVATIONS = "ica_activations"
     WAVELET_AMPLITUDE = "wavelet_amplitude"
     WAVELET_POWER = "wavelet_power"
+    WAVELET_PHASE = "wavelet_phase"
     MEAN_RESPONSE = "mean_response"
 
 
@@ -92,6 +93,7 @@ class AnalysisData:
             DataRepresentation.ICA_ACTIVATIONS: "IC component",
             DataRepresentation.WAVELET_AMPLITUDE: "Channel",
             DataRepresentation.WAVELET_POWER: "Channel",
+            DataRepresentation.WAVELET_PHASE: "Channel",
             DataRepresentation.MEAN_RESPONSE: "Channel",
         }
         return _map.get(self.representation, "Feature")
@@ -104,6 +106,7 @@ class AnalysisData:
             DataRepresentation.ICA_ACTIVATIONS: "Subject",
             DataRepresentation.WAVELET_AMPLITUDE: "Subject",
             DataRepresentation.WAVELET_POWER: "Subject",
+            DataRepresentation.WAVELET_PHASE: "Subject",
             DataRepresentation.MEAN_RESPONSE: "Group",
         }
         return _map.get(self.representation, "Item")
@@ -116,6 +119,7 @@ class AnalysisData:
             DataRepresentation.ICA_ACTIVATIONS: "Activation (a.u.)",
             DataRepresentation.WAVELET_AMPLITUDE: "Amplitude envelope",
             DataRepresentation.WAVELET_POWER: "Power",
+            DataRepresentation.WAVELET_PHASE: "Phase (rad)",
             DataRepresentation.MEAN_RESPONSE: "Amplitude (µV)",
         }
         return _map.get(self.representation, "Value")
@@ -245,48 +249,12 @@ def to_analytic_amplitude(ad: AnalysisData) -> AnalysisData:
     )
 
 
-def to_wavelet_amplitude(
-    ad: AnalysisData,
-    freqs: np.ndarray,
-    n_cycles: Optional[Union[np.ndarray, float]] = None,
-) -> AnalysisData:
-    """
-    Compute Morlet-wavelet amplitude, averaged over the frequency axis.
-
-    :param ad: Input data (should be time-domain or ICA activations).
-    :param freqs: Frequencies of interest (Hz).
-    :param n_cycles: Number of wavelet cycles per frequency.
-        Defaults to ``freqs / 2``.
-    :return: ``AnalysisData`` with shape ``(n_items, n_features, n_samples)``
-        containing the mean wavelet amplitude across *freqs*.
-    """
-    if n_cycles is None:
-        n_cycles = freqs / 2.0
-    tfr = tfr_array_morlet(
-        ad.data.astype(float),
-        sfreq=ad.sfreq,
-        freqs=freqs,
-        n_cycles=n_cycles,
-        output="complex",
-        verbose=False,
-    )
-    # tfr: (n_items, n_features, n_freqs, n_samples)
-    amplitude = np.abs(tfr).mean(axis=2)
-    return AnalysisData(
-        data=amplitude,
-        sfreq=ad.sfreq,
-        representation=DataRepresentation.WAVELET_AMPLITUDE,
-        label=f"{ad.label} (wavelet amp {freqs[0]:.0f}-{freqs[-1]:.0f} Hz)",
-        feature_names=ad.feature_names,
-        info=ad.info,
-        metadata={**ad.metadata, "freqs": freqs, "n_cycles": n_cycles},
-    )
-
-
 def to_wavelet_power(
     ad: AnalysisData,
     freqs: np.ndarray,
     n_cycles: Optional[Union[np.ndarray, float]] = None,
+    *,
+    keep_frequency_dim: bool = False,
 ) -> AnalysisData:
     """
     Compute Morlet-wavelet power, averaged over the frequency axis.
@@ -295,8 +263,13 @@ def to_wavelet_power(
     :param freqs: Frequencies of interest (Hz).
     :param n_cycles: Number of wavelet cycles per frequency.
         Defaults to ``freqs / 2``.
+    :param keep_frequency_dim: When ``True``, preserves the frequency
+        dimension by flattening ``(feature, frequency)`` into the
+        feature axis. Output shape becomes
+        ``(n_items, n_features * n_freqs, n_samples)``.
     :return: ``AnalysisData`` with shape ``(n_items, n_features, n_samples)``
-        containing the mean wavelet power across *freqs*.
+        containing the mean wavelet power across *freqs* (default), or
+        frequency-resolved flattened output when *keep_frequency_dim* is true.
     """
     if n_cycles is None:
         n_cycles = freqs / 2.0
@@ -309,15 +282,89 @@ def to_wavelet_power(
         verbose=False,
     )
     # tfr: (n_items, n_features, n_freqs, n_samples)
-    power = tfr.mean(axis=2)
+    if keep_frequency_dim:
+        power = tfr.reshape(tfr.shape[0], tfr.shape[1] * tfr.shape[2], tfr.shape[3])
+        if ad.feature_names is not None:
+            feature_names = [
+                f"{name}@{freq:.1f}Hz" for name in ad.feature_names for freq in freqs
+            ]
+        else:
+            feature_names = None
+    else:
+        power = tfr.mean(axis=2)
+        feature_names = ad.feature_names
     return AnalysisData(
         data=power,
         sfreq=ad.sfreq,
         representation=DataRepresentation.WAVELET_POWER,
         label=f"{ad.label} (wavelet power {freqs[0]:.0f}-{freqs[-1]:.0f} Hz)",
-        feature_names=ad.feature_names,
+        feature_names=feature_names,
         info=ad.info,
-        metadata={**ad.metadata, "freqs": freqs, "n_cycles": n_cycles},
+        metadata={
+            **ad.metadata,
+            "freqs": freqs,
+            "n_cycles": n_cycles,
+            "keep_frequency_dim": keep_frequency_dim,
+        },
+    )
+
+
+def to_wavelet_phase(
+    ad: AnalysisData,
+    freqs: np.ndarray,
+    n_cycles: Optional[Union[np.ndarray, float]] = None,
+    *,
+    keep_frequency_dim: bool = False,
+) -> AnalysisData:
+    """
+    Compute Morlet-wavelet phase.
+
+    :param ad: Input data (should be time-domain or ICA activations).
+    :param freqs: Frequencies of interest (Hz).
+    :param n_cycles: Number of wavelet cycles per frequency.
+        Defaults to ``freqs / 2``.
+    :param keep_frequency_dim: When ``True``, preserves the frequency
+        dimension by flattening ``(feature, frequency)`` into the
+        feature axis. Output shape becomes
+        ``(n_items, n_features * n_freqs, n_samples)``.
+        By default (``False``), phase is averaged across frequencies
+        using circular mean.
+    :return: ``AnalysisData`` with wavelet phase values.
+    """
+    if n_cycles is None:
+        n_cycles = freqs / 2.0
+    tfr = tfr_array_morlet(
+        ad.data.astype(float),
+        sfreq=ad.sfreq,
+        freqs=freqs,
+        n_cycles=n_cycles,
+        output="phase",
+        verbose=False,
+    )
+    if keep_frequency_dim:
+        phase = tfr.reshape(tfr.shape[0], tfr.shape[1] * tfr.shape[2], tfr.shape[3])
+        if ad.feature_names is not None:
+            feature_names = [
+                f"{name}@{freq:.1f}Hz" for name in ad.feature_names for freq in freqs
+            ]
+        else:
+            feature_names = None
+    else:
+        phase = circmean(tfr, high=np.pi, low=-np.pi, axis=2)
+        feature_names = ad.feature_names
+    return AnalysisData(
+        data=phase,
+        sfreq=ad.sfreq,
+        representation=DataRepresentation.WAVELET_PHASE,
+        label=f"{ad.label} (wavelet phase {freqs[0]:.0f}-{freqs[-1]:.0f} Hz)",
+        feature_names=feature_names,
+        info=ad.info,
+        metadata={
+            **ad.metadata,
+            "freqs": freqs,
+            "n_cycles": n_cycles,
+            "keep_frequency_dim": keep_frequency_dim,
+        },
     )
 
 

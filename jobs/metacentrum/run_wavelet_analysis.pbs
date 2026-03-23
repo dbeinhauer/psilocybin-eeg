@@ -1,6 +1,6 @@
 #!/bin/bash
-#PBS -N PSILO_ANALYSIS
-#PBS -l walltime=8:00:00
+#PBS -N PSILO_WAVELET_ANALYSIS
+#PBS -l walltime=12:00:00
 #PBS -l select=1:ncpus=8:mem=100gb:scratch_local=100gb
 
 #PBS -m ae
@@ -41,9 +41,21 @@ cat << 'EOF' > run_inside.sh
 #!/bin/bash
 source /opt/myproject/.venv/bin/activate
 python /mnt/scripts/run_analysis.py \
---analysis isc mean_variance \
+--analysis wavelet_power \
 --condition Placebo \
 --music_type CLASSIC PSYTRANCE \
+--wavelet_bands delta theta alpha \
+--wavelet_data_dir /mnt/data/processed/psilo_music/wavelets \
+--n_jobs -1
+
+python /mnt/scripts/run_analysis.py \
+--analysis wavelet_power \
+--condition Placebo \
+--music_type CLASSIC PSYTRANCE \
+--wavelet_bands beta gamma \
+--skip_wavelet_broadband \
+--wavelet_data_dir /mnt/data/processed/psilo_music/wavelets \
+--reuse_wavelets \
 --n_jobs -1
 EOF
 
@@ -58,5 +70,3 @@ singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
 }
 
 echo "Task finished at $(date)"
-
-clean_scratch

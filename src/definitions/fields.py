@@ -125,6 +125,7 @@ class ExclusionCategories(Enum):
     MISSING_TRIALS = (
         "missing_trials"  # Some of the trials are missing for the participant
     )
+    ARTIFACTS = "artifacts"  # Too many artifacts in the data (also after preprocessing)
 
 
 class FrequencyBandNames(Enum):
@@ -137,6 +138,17 @@ class FrequencyBandNames(Enum):
     ALPHA = "alpha"
     BETA = "beta"
     GAMMA = "gamma"
+
+
+class AnalysisVariants(Enum):
+    """
+    All analysis keywords accepted by the unified analysis entrypoint.
+    """
+
+    ISC = "isc"
+    MEAN_VARIANCE = "mean_variance"
+    WAVELET_POWER = "wavelet_power"
+    WAVELET_PHASE = "wavelet_phase"
 
 
 class PreprocessedDataVariants(Enum):
