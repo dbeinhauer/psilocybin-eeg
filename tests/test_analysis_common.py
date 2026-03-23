@@ -3,6 +3,7 @@ Tests for scripts/analysis_common.py — argument parsing and workflow helpers.
 """
 
 import argparse
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -12,7 +13,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scripts.analysis_common import add_common_arguments, run_wavelet_workflow
+from scripts.analysis_common import (
+    _wavelet_transform,
+    add_common_arguments,
+    run_wavelet_workflow,
+)
 from src.analysis.data_representations import AnalysisData, DataRepresentation
 from src.definitions.constants import ProjectPaths
 from src.definitions.fields import AnalysisVariants, ExperimentNames
@@ -209,3 +214,36 @@ class TestRunWaveletWorkflowValidation:
                 freqs=freqs,
                 save_dir=tmp_path / "out",
             )
+
+
+class TestWaveletStorageBehavior:
+    @pytest.fixture
+    def sample_dataset(self):
+        rng = np.random.default_rng(42)
+        return {
+            "TEST": AnalysisData(
+                data=rng.normal(size=(2, 3, 120)),
+                sfreq=120.0,
+                representation=DataRepresentation.TIME_DOMAIN,
+                label="TEST",
+                feature_names=["Fz", "Cz", "Pz"],
+            )
+        }
+
+    def test_wavelet_store_always_saves_frequency_dim(self, tmp_path, sample_dataset):
+        freqs = np.linspace(4.0, 8.0, 3)
+        _wavelet_transform(
+            sample_dataset,
+            freqs,
+            representation="power",
+            keep_frequency_dim=False,
+            wavelet_dir=tmp_path / "wavelets",
+            reuse_wavelets=False,
+        )
+
+        saved = list((tmp_path / "wavelets").glob("*.npz"))
+        assert len(saved) == 1
+        loaded = np.load(saved[0])
+        assert bool(loaded["keep_frequency_dim"]) is True
+        assert loaded["data"].shape == (2, 3 * len(freqs), 120)
+        assert "_freqdim1.npz" in saved[0].name
