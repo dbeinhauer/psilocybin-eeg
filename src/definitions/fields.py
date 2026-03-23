@@ -125,6 +125,7 @@ class ExclusionCategories(Enum):
     MISSING_TRIALS = (
         "missing_trials"  # Some of the trials are missing for the participant
     )
+    ARTIFACTS = "artifacts"  # Too many artifacts in the data (also after preprocessing)
 
 
 class FrequencyBandNames(Enum):

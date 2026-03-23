@@ -69,7 +69,10 @@ if __name__ == "__main__":
     # ── Configuration ─────────────────────────────────────────────
     condition = ConditionVariants(args.condition)
     music_types = [MusicTypeVariants(mt) for mt in args.music_type]
-    exclusion_categories = [ExclusionCategories.BAD_MUSIC]
+    exclusion_categories = [
+        ExclusionCategories.BAD_MUSIC,
+        ExclusionCategories.ARTIFACTS,
+    ]
     analyses = set(args.analysis)
     run_wavelet_power = AnalysisVariants.WAVELET_POWER.value in analyses
     run_wavelet_phase = AnalysisVariants.WAVELET_PHASE.value in analyses
