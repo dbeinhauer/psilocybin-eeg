@@ -228,6 +228,7 @@ python scripts/run_analysis.py --analysis wavelet_power --wavelet_cache_dir data
 ✓ Return pandas DataFrames from analysis functions
 ✓ Sketch new analyses in a Jupyter notebook before implementing them
 ✓ Run linter and tests before committing (`ruff check .`, `pytest tests/ -v`)
+✓ **Keep documentation in sync with code** — update `src/analysis/README.md`, `src/preprocessing/README.md`, `docs/preprocessing_steps.md`, and this file whenever you add, rename, or remove modules, functions, classes, or CLI flags
 
 ### Don't
 ✗ Hardcode categorical values as strings (use Enums instead)
@@ -240,6 +241,7 @@ python scripts/run_analysis.py --analysis wavelet_power --wavelet_cache_dir data
 ✗ Create circular imports between modules
 ✗ Mutate input data without copying first
 ✗ Use global state or class-level mutable defaults
+✗ Leave documentation stale — if you find an error or omission in any README or doc file, correct it in the same commit
 
 ## Testing Requirements
 

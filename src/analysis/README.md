@@ -157,6 +157,23 @@ analyzer.save_data(save_path)
 5. Write tests in `tests/test_<module>.py` targeting the pure function and the analyzer method.
 6. Use **Seaborn** for all statistical plots; fall back to Matplotlib only for EEG topomaps.
 
+## Keeping This Documentation Up to Date
+
+This README is the authoritative reference for the analysis package. **When you make changes to
+this package, update this file accordingly.** Specifically:
+
+- **New module added** → add a row to the Module Overview table and a dedicated section.
+- **New function in `isc.py`** → add a row to the relevant function table (ISC or mean/variance).
+- **New method in `EEGSummarizedAnalyzer`** → add a row to the Key methods table and update the typical workflow if the usage pattern changes.
+- **New adapter in `data_representations.py`** → add a row to the Adapter functions table and update the `DataRepresentation` enum table if a new representation is introduced.
+- **Data shape convention changes** → update the shape table and any function signatures that reference it.
+- **Renamed or removed symbols** → remove or correct the corresponding rows/examples.
+
+If you discover that any part of this README is inaccurate or out of date, correct it as part of
+the same commit that changes the code — do not leave stale documentation behind.
+
+---
+
 ## Running the Analysis
 
 ```bash
