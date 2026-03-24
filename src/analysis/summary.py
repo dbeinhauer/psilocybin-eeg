@@ -275,11 +275,13 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         self.data = np.load(load_path)
         self.logger.info(f"Data loaded from {load_path}  (shape={self.data.shape})")
 
-        resolved_metadata_path = (
-            Path(metadata_path)
-            if metadata_path is not None
-            else self._default_metadata_save_path()
-        )
+        if metadata_path is not None:
+            resolved_metadata_path = Path(metadata_path)
+        else:
+            # Derive metadata path from the resolved load_path (same directory and stem).
+            # This preserves behaviour for the default save path while correctly
+            # handling custom load locations.
+            resolved_metadata_path = load_path.with_suffix(".csv")
         if resolved_metadata_path.exists():
             self.filtered_df = pd.read_csv(resolved_metadata_path, index_col=0)
             self._normalize_filtered_df_columns()
