@@ -12,6 +12,7 @@ amplitudes, mean responses, …).
 
 from __future__ import annotations
 
+from enum import Enum
 from pathlib import Path
 from typing import List, Optional
 
@@ -252,6 +253,7 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         metadata_path = self._metadata_save_path(load_path)
         if metadata_path.exists():
             self.filtered_df = pd.read_csv(metadata_path, index_col=0)
+            self._normalize_filtered_df_columns()
             self.logger.info(f"Metadata loaded from {metadata_path}")
 
         if info_filename is not None:
@@ -271,7 +273,32 @@ class EEGSummarizedAnalyzer(LoggerMixin):
     @staticmethod
     def _metadata_save_path(data_path: Path) -> Path:
         """Return sidecar CSV path used to persist filtered metadata."""
-        return data_path.parent / f"{data_path.name}.metadata.csv"
+        return data_path.parent / f"{data_path.stem}.metadata.csv"
+
+    def _normalize_filtered_df_columns(self) -> None:
+        """
+        Normalise loaded metadata column names back to enum keys when possible.
+
+        Sidecar CSV round-trips can coerce enum column names to strings
+        (e.g. ``SingleDataMetadata.FILENAME``), which breaks lookups expecting
+        enum keys in existing workflows.
+        """
+        if self.filtered_df is None:
+            return
+
+        rename_map: dict[str, Enum] = {}
+        for metadata_field in SingleDataMetadata:
+            if metadata_field in self.filtered_df.columns:
+                continue
+
+            enum_repr = f"{metadata_field.__class__.__name__}.{metadata_field.name}"
+            for column_variant in (enum_repr, metadata_field.value):
+                if column_variant in self.filtered_df.columns:
+                    rename_map[column_variant] = metadata_field
+                    break
+
+        if rename_map:
+            self.filtered_df = self.filtered_df.rename(columns=rename_map)
 
     def _default_save_path(self) -> Path:
         """Build a default save path from the current filtered DataFrame."""

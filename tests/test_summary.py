@@ -106,4 +106,8 @@ class TestSaveLoadDataWithMetadata:
         np.testing.assert_array_equal(restored.data, analyzer.data)
         assert "data_axis0_index" in restored.filtered_df.columns
         assert restored.filtered_df["data_axis0_index"].tolist() == [0, 1]
+        assert restored.filtered_df[SingleDataMetadata.FILENAME].tolist() == [
+            "first_raw.fif",
+            "second_raw.fif",
+        ]
         assert restored.filtered_df.index.tolist() == [10, 20]
