@@ -1,5 +1,5 @@
 """
-Tests for src/analysis/summary.py — summarized analyzer loading behavior.
+Tests for src/analysis/summary.py -- summarized analyzer loading behavior.
 """
 
 from unittest.mock import MagicMock, patch
@@ -57,6 +57,8 @@ class TestLoadAndPrepareData:
         data, _ = analyzer.load_and_prepare_data(resample_freq=200.0, n_jobs=1)
 
         assert data.shape == (2, 2, 3)
+        np.testing.assert_array_equal(data[0], np.zeros((2, 3)))
+        np.testing.assert_array_equal(data[1], np.ones((2, 3)))
         assert "data_axis0_index" in analyzer.filtered_df.columns
         assert analyzer.filtered_df["data_axis0_index"].tolist() == [0, 1]
         assert analyzer.filtered_df.index.tolist() == [10, 20]

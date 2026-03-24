@@ -160,8 +160,7 @@ class EEGSummarizedAnalyzer(LoggerMixin):
             raws.append(raw.resample(resample_freq, n_jobs=n_jobs))
             axis0_indices.append(axis0_index)
 
-        self.filtered_df = self.filtered_df.copy()
-        self.filtered_df["data_axis0_index"] = axis0_indices
+        self.filtered_df = self.filtered_df.assign(data_axis0_index=axis0_indices)
 
         # Store MNE Info from first file (before any resampling changes it)
         self._refresh_info(raws[0].info)
