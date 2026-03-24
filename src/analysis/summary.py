@@ -17,6 +17,7 @@ from typing import List, Optional
 
 import numpy as np
 import mne
+import pandas as pd
 from scipy.stats import zscore
 
 from src.preprocessing.pipeline import DatasetHandler
@@ -185,6 +186,10 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         """
         Save :attr:`data` as a ``.npy`` file.
 
+        When :attr:`filtered_df` is available, a sidecar metadata file with
+        the same stem and ``.metadata.csv`` suffix is also stored, preserving
+        row ordering and ``data_axis0_index`` mapping.
+
         If *save_path* is not given the file is placed in the project's
         ``processed/<experiment>/concatenated/`` directory with an auto-generated
         name derived from the last filter applied.
@@ -208,6 +213,10 @@ class EEGSummarizedAnalyzer(LoggerMixin):
             return save_path
 
         np.save(save_path, self.data)
+        if self.filtered_df is not None:
+            metadata_path = self._metadata_save_path(save_path)
+            self.filtered_df.to_csv(metadata_path, index=True)
+            self.logger.info(f"Metadata saved to {metadata_path}")
         self.logger.info(f"Data saved to {save_path}  (shape={self.data.shape})")
         return save_path
 
@@ -219,6 +228,9 @@ class EEGSummarizedAnalyzer(LoggerMixin):
     ) -> tuple[np.ndarray, mne.Info]:
         """
         Load a previously saved ``.npy`` data array from disk.
+
+        If a sidecar ``.metadata.csv`` file exists, it is loaded into
+        :attr:`filtered_df`, including the ``data_axis0_index`` mapping.
 
         :param load_path: Path to the ``.npy`` file.
         :param info_filename: Optional filename from the dataset metadata to use for
@@ -237,6 +249,10 @@ class EEGSummarizedAnalyzer(LoggerMixin):
 
         self.data = np.load(load_path)
         self.logger.info(f"Data loaded from {load_path}  (shape={self.data.shape})")
+        metadata_path = self._metadata_save_path(load_path)
+        if metadata_path.exists():
+            self.filtered_df = pd.read_csv(metadata_path, index_col=0)
+            self.logger.info(f"Metadata loaded from {metadata_path}")
 
         if info_filename is not None:
             raw = self.dataset_handler.load_data_file(
@@ -251,6 +267,11 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         self.resample_freq = resample_freq
 
         return self.data, self.info
+
+    @staticmethod
+    def _metadata_save_path(data_path: Path) -> Path:
+        """Return sidecar CSV path used to persist filtered metadata."""
+        return data_path.with_suffix(".metadata.csv")
 
     def _default_save_path(self) -> Path:
         """Build a default save path from the current filtered DataFrame."""
