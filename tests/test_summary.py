@@ -60,8 +60,7 @@ class TestLoadAndPrepareData:
         np.testing.assert_array_equal(data[0], np.zeros((2, 3)))
         np.testing.assert_array_equal(data[1], np.ones((2, 3)))
         assert (
-            SingleDataMetadata.CONCATENATED_PERSON_INDEX
-            in analyzer.filtered_df.columns
+            SingleDataMetadata.CONCATENATED_PERSON_INDEX in analyzer.filtered_df.columns
         )
         assert analyzer.filtered_df[
             SingleDataMetadata.CONCATENATED_PERSON_INDEX
@@ -112,8 +111,7 @@ class TestSaveLoadDataWithMetadata:
 
         np.testing.assert_array_equal(restored.data, analyzer.data)
         assert (
-            SingleDataMetadata.CONCATENATED_PERSON_INDEX
-            in restored.filtered_df.columns
+            SingleDataMetadata.CONCATENATED_PERSON_INDEX in restored.filtered_df.columns
         )
         assert restored.filtered_df[
             SingleDataMetadata.CONCATENATED_PERSON_INDEX
