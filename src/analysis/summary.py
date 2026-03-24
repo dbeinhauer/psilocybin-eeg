@@ -12,11 +12,13 @@ amplitudes, mean responses, …).
 
 from __future__ import annotations
 
+from enum import Enum
 from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
 import mne
+import pandas as pd
 from scipy.stats import zscore
 
 from src.preprocessing.pipeline import DatasetHandler
@@ -78,6 +80,9 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         MNE Info object taken from the first loaded file.
     filtered_df : pd.DataFrame or None
         Metadata DataFrame of the last applied filter / load operation.
+        Includes :attr:`~src.definitions.fields.SingleDataMetadata.CONCATENATED_PERSON_INDEX`
+        after :meth:`load_and_prepare_data`, mapping
+        each row to its subject index in :attr:`data`.
     """
 
     # ------------------------------------------------------------------ #
@@ -146,7 +151,8 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         )
 
         raws: list[mne.io.Raw] = []
-        for _, row in self.filtered_df.iterrows():
+        axis0_indices: list[int] = []
+        for axis0_index, (_, row) in enumerate(self.filtered_df.iterrows()):
             filename = row[SingleDataMetadata.FILENAME]
             raw = self.dataset_handler.load_data_file(
                 filename,
@@ -155,6 +161,9 @@ class EEGSummarizedAnalyzer(LoggerMixin):
                 preload=True,
             ).pick(["eeg"])
             raws.append(raw.resample(resample_freq, n_jobs=n_jobs))
+            axis0_indices.append(axis0_index)
+
+        self.filtered_df[SingleDataMetadata.CONCATENATED_PERSON_INDEX] = axis0_indices
 
         # Store MNE Info from first file (before any resampling changes it)
         self._refresh_info(raws[0].info)
@@ -174,18 +183,31 @@ class EEGSummarizedAnalyzer(LoggerMixin):
     # ------------------------------------------------------------------ #
 
     def save_data(
-        self, save_path: Optional[Path] = None, overwrite: bool = True
+        self,
+        save_path: Optional[Path] = None,
+        metadata_path: Optional[Path] = None,
+        overwrite: bool = True,
     ) -> Path:
         """
         Save :attr:`data` as a ``.npy`` file.
+
+        When :attr:`filtered_df` is available, a metadata CSV is also stored
+        alongside the concatenated data, preserving row ordering and the
+        :attr:`~src.definitions.fields.SingleDataMetadata.CONCATENATED_PERSON_INDEX` mapping.
 
         If *save_path* is not given the file is placed in the project's
         ``processed/<experiment>/concatenated/`` directory with an auto-generated
         name derived from the last filter applied.
 
-        :param save_path: Explicit destination path (including filename).
-        :param overwrite: Whether to overwrite an existing file.
-        :return: The path where the file was written.
+        The metadata CSV is written to *metadata_path* when given.  When
+        omitted it defaults to the project's concatenated directory next to
+        the data array (see :meth:`_default_metadata_save_path`).
+
+        :param save_path: Explicit destination path for the ``.npy`` file.
+        :param metadata_path: Explicit destination path for the metadata CSV.
+            Defaults to the project's concatenated directory.
+        :param overwrite: Whether to overwrite existing files.
+        :return: The path where the data file was written.
         :raises RuntimeError: If no data has been loaded yet.
         """
         if self.data is None:
@@ -202,19 +224,40 @@ class EEGSummarizedAnalyzer(LoggerMixin):
             return save_path
 
         np.save(save_path, self.data)
+
+        if self.filtered_df is not None:
+            resolved_metadata_path = (
+                Path(metadata_path)
+                if metadata_path is not None
+                else save_path.with_suffix(".metadata.csv")
+            )
+            resolved_metadata_path.parent.mkdir(parents=True, exist_ok=True)
+            self.filtered_df.to_csv(resolved_metadata_path, index=True)
+            self.logger.info(f"Metadata saved to {resolved_metadata_path}")
+
         self.logger.info(f"Data saved to {save_path}  (shape={self.data.shape})")
+
         return save_path
 
     def load_data(
         self,
         load_path: Optional[Path] = None,
+        metadata_path: Optional[Path] = None,
         info_filename: Optional[str] = None,
         resample_freq: float = 250.0,
     ) -> tuple[np.ndarray, mne.Info]:
         """
         Load a previously saved ``.npy`` data array from disk.
 
+        If a metadata CSV exists it is loaded into :attr:`filtered_df`,
+        including the :attr:`~src.definitions.fields.SingleDataMetadata.CONCATENATED_PERSON_INDEX` mapping.  The CSV is read from
+        *metadata_path* when provided; otherwise the default path in the
+        project's concatenated directory is tried (see
+        :meth:`_default_metadata_save_path`).
+
         :param load_path: Path to the ``.npy`` file.
+        :param metadata_path: Explicit path to the metadata CSV.  Defaults to
+            the project's concatenated directory.
         :param info_filename: Optional filename from the dataset metadata to use for
             loading ``mne.Info``. When provided, the Info object is populated from
             the corresponding processed file.
@@ -232,6 +275,18 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         self.data = np.load(load_path)
         self.logger.info(f"Data loaded from {load_path}  (shape={self.data.shape})")
 
+        if metadata_path is not None:
+            resolved_metadata_path = Path(metadata_path)
+        else:
+            # Derive metadata path from the resolved load_path (same directory and stem).
+            # This preserves behaviour for the default save path while correctly
+            # handling custom load locations.
+            resolved_metadata_path = load_path.with_suffix(".csv")
+        if resolved_metadata_path.exists():
+            self.filtered_df = pd.read_csv(resolved_metadata_path, index_col=0)
+            self._normalize_filtered_df_columns()
+            self.logger.info(f"Metadata loaded from {resolved_metadata_path}")
+
         if info_filename is not None:
             raw = self.dataset_handler.load_data_file(
                 info_filename,
@@ -245,6 +300,41 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         self.resample_freq = resample_freq
 
         return self.data, self.info
+
+    def _default_metadata_save_path(self) -> Path:
+        """
+        Build the default path for the metadata CSV in the concatenated directory.
+
+        The file is placed next to the default data array (see
+        :meth:`_default_save_path`), with a ``.metadata.csv`` suffix.
+        """
+        data_path = self._default_save_path()
+        return data_path.parent / f"{data_path.stem}.metadata.csv"
+
+    def _normalize_filtered_df_columns(self) -> None:
+        """
+        Normalise loaded metadata column names back to enum keys when possible.
+
+        Sidecar CSV round-trips can coerce enum column names to strings
+        (e.g. ``SingleDataMetadata.FILENAME``), which breaks lookups expecting
+        enum keys in existing workflows.
+        """
+        if self.filtered_df is None:
+            return
+
+        rename_map: dict[str, Enum] = {}
+        for metadata_field in SingleDataMetadata:
+            if metadata_field in self.filtered_df.columns:
+                continue
+
+            enum_repr = f"{metadata_field.__class__.__name__}.{metadata_field.name}"
+            for column_variant in (enum_repr, metadata_field.value):
+                if column_variant in self.filtered_df.columns:
+                    rename_map[column_variant] = metadata_field
+                    break
+
+        if rename_map:
+            self.filtered_df = self.filtered_df.rename(columns=rename_map)
 
     def _default_save_path(self) -> Path:
         """Build a default save path from the current filtered DataFrame."""
