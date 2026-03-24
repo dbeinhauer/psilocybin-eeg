@@ -38,9 +38,7 @@ class SingleDataMetadata(Enum):
     EXCLUSION_EXPLANATION = (
         "explanation"  # Explanation for exclusion of the data (if applicable).
     )
-    CONCATENATED_PERSONAL_INDEX = (
-        "concatenated_personal_index"  # Index of a person in the concatenated NumPy array.
-    )
+    CONCATENATED_PERSONAL_INDEX = "concatenated_personal_index"  # Index of a person in the concatenated NumPy array.
 
 
 class ExcludedICsMetadata(Enum):
