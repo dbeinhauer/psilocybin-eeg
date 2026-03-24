@@ -271,7 +271,7 @@ class EEGSummarizedAnalyzer(LoggerMixin):
     @staticmethod
     def _metadata_save_path(data_path: Path) -> Path:
         """Return sidecar CSV path used to persist filtered metadata."""
-        return data_path.with_suffix(".metadata.csv")
+        return data_path.parent / f"{data_path.name}.metadata.csv"
 
     def _default_save_path(self) -> Path:
         """Build a default save path from the current filtered DataFrame."""

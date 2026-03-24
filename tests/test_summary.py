@@ -67,7 +67,7 @@ class TestLoadAndPrepareData:
 class TestSaveLoadDataWithMetadata:
     @patch("src.analysis.summary.DatasetFilter.filter_dataset_by_all_categories")
     @patch("src.analysis.summary.DatasetHandler")
-    def test_load_data_restores_filtered_df_mapping_from_metadata_sidecar(
+    def test_metadata_persists_through_save_load_cycle(
         self, mock_dataset_handler_cls, mock_filter, tmp_path
     ):
         filtered_df = pd.DataFrame(
