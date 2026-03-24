@@ -78,6 +78,8 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         MNE Info object taken from the first loaded file.
     filtered_df : pd.DataFrame or None
         Metadata DataFrame of the last applied filter / load operation.
+        Includes ``data_axis0_index`` after :meth:`load_and_prepare_data`, mapping
+        each row to its subject index in :attr:`data`.
     """
 
     # ------------------------------------------------------------------ #
@@ -146,7 +148,8 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         )
 
         raws: list[mne.io.Raw] = []
-        for _, row in self.filtered_df.iterrows():
+        axis0_indices: list[int] = []
+        for axis0_index, (_, row) in enumerate(self.filtered_df.iterrows()):
             filename = row[SingleDataMetadata.FILENAME]
             raw = self.dataset_handler.load_data_file(
                 filename,
@@ -155,6 +158,10 @@ class EEGSummarizedAnalyzer(LoggerMixin):
                 preload=True,
             ).pick(["eeg"])
             raws.append(raw.resample(resample_freq, n_jobs=n_jobs))
+            axis0_indices.append(axis0_index)
+
+        self.filtered_df = self.filtered_df.copy()
+        self.filtered_df["data_axis0_index"] = axis0_indices
 
         # Store MNE Info from first file (before any resampling changes it)
         self._refresh_info(raws[0].info)
