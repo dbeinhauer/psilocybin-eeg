@@ -260,13 +260,15 @@ def load_analyzers(
 ) -> dict[str, EEGSummarizedAnalyzer]:
     """Load (or process & save) and normalise analysers for each music type.
 
-    Returns a dict keyed by the music-type *value* (e.g. ``"CLASSIC"``).
+    Returns a dict keyed by ``"{condition}_{music_type}"``
+    (e.g. ``"Placebo_CLASSIC"``), matching the naming convention used for
+    concatenated EEG data files.
     """
     from src.analysis.summary import EEGSummarizedAnalyzer
 
     analyzers: dict[str, EEGSummarizedAnalyzer] = {}
     for mt in music_types:
-        label = mt.value
+        label = f"{condition.value}_{mt.value}"
         analyzer = EEGSummarizedAnalyzer(
             experiment_name=ExperimentNames.PSILO_MUSIC,
             coordinate_system=CoordinateSystems.HYDROGEL_257_NO_FIDUCIALS,
