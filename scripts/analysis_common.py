@@ -578,9 +578,7 @@ def _wavelet_transform(
             f"Only 'power' and 'phase' wavelet representations are supported, got {representation!r}"
         )
     if reshape_frequency_dim and not keep_frequency_dim:
-        raise ValueError(
-            "reshape_frequency_dim=True requires keep_frequency_dim=True."
-        )
+        raise ValueError("reshape_frequency_dim=True requires keep_frequency_dim=True.")
 
     if wavelet_dir is not None:
         wavelet_dir.mkdir(parents=True, exist_ok=True)

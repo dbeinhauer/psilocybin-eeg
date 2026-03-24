@@ -324,7 +324,9 @@ class TestRunAnalysisWaveletReshapeArgPropagation:
             ),
             patch("scripts.analysis_common.run_isc_workflow"),
             patch("scripts.analysis_common.run_mean_variance_workflow"),
-            patch("scripts.analysis_common.run_wavelet_workflow") as run_wavelet_workflow,
+            patch(
+                "scripts.analysis_common.run_wavelet_workflow"
+            ) as run_wavelet_workflow,
             patch.object(
                 sys,
                 "argv",
@@ -338,11 +340,7 @@ class TestRunAnalysisWaveletReshapeArgPropagation:
             ),
         ):
             runpy.run_path(
-                str(
-                    Path(__file__).parent.parent
-                    / "scripts"
-                    / "run_analysis.py"
-                ),
+                str(Path(__file__).parent.parent / "scripts" / "run_analysis.py"),
                 run_name="__main__",
             )
 
