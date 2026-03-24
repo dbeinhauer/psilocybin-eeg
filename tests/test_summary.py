@@ -92,7 +92,8 @@ class TestSaveLoadDataWithMetadata:
         analyzer.data = np.arange(12).reshape(2, 2, 3)
         analyzer.filtered_df = filtered_df.assign(data_axis0_index=[0, 1])
         save_path = tmp_path / "concatenated.npy"
-        analyzer.save_data(save_path=save_path)
+        metadata_path = tmp_path / "concatenated.metadata.csv"
+        analyzer.save_data(save_path=save_path, metadata_path=metadata_path)
 
         restored = EEGSummarizedAnalyzer(
             experiment_name=ExperimentNames.PSILO_MUSIC,
@@ -101,7 +102,7 @@ class TestSaveLoadDataWithMetadata:
             conditions=[ConditionVariants.PLACEBO],
             exclusion_categories=[],
         )
-        restored.load_data(load_path=save_path)
+        restored.load_data(load_path=save_path, metadata_path=metadata_path)
 
         np.testing.assert_array_equal(restored.data, analyzer.data)
         assert "data_axis0_index" in restored.filtered_df.columns

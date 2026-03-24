@@ -182,22 +182,31 @@ class EEGSummarizedAnalyzer(LoggerMixin):
     # ------------------------------------------------------------------ #
 
     def save_data(
-        self, save_path: Optional[Path] = None, overwrite: bool = True
+        self,
+        save_path: Optional[Path] = None,
+        metadata_path: Optional[Path] = None,
+        overwrite: bool = True,
     ) -> Path:
         """
         Save :attr:`data` as a ``.npy`` file.
 
-        When :attr:`filtered_df` is available, a sidecar metadata file with
-        the same stem and ``.metadata.csv`` suffix is also stored, preserving
-        row ordering and ``data_axis0_index`` mapping.
+        When :attr:`filtered_df` is available, a metadata CSV is also stored
+        alongside the concatenated data, preserving row ordering and the
+        ``data_axis0_index`` mapping.
 
         If *save_path* is not given the file is placed in the project's
         ``processed/<experiment>/concatenated/`` directory with an auto-generated
         name derived from the last filter applied.
 
-        :param save_path: Explicit destination path (including filename).
-        :param overwrite: Whether to overwrite an existing file.
-        :return: The path where the file was written.
+        The metadata CSV is written to *metadata_path* when given.  When
+        omitted it defaults to the project's concatenated directory next to
+        the data array (see :meth:`_default_metadata_save_path`).
+
+        :param save_path: Explicit destination path for the ``.npy`` file.
+        :param metadata_path: Explicit destination path for the metadata CSV.
+            Defaults to the project's concatenated directory.
+        :param overwrite: Whether to overwrite existing files.
+        :return: The path where the data file was written.
         :raises RuntimeError: If no data has been loaded yet.
         """
         if self.data is None:
@@ -214,26 +223,40 @@ class EEGSummarizedAnalyzer(LoggerMixin):
             return save_path
 
         np.save(save_path, self.data)
+
         if self.filtered_df is not None:
-            metadata_path = self._metadata_save_path(save_path)
-            self.filtered_df.to_csv(metadata_path, index=True)
-            self.logger.info(f"Metadata saved to {metadata_path}")
+            resolved_metadata_path = (
+                Path(metadata_path)
+                if metadata_path is not None
+                else self._default_metadata_save_path()
+            )
+            resolved_metadata_path.parent.mkdir(parents=True, exist_ok=True)
+            self.filtered_df.to_csv(resolved_metadata_path, index=True)
+            self.logger.info(f"Metadata saved to {resolved_metadata_path}")
+
         self.logger.info(f"Data saved to {save_path}  (shape={self.data.shape})")
+
         return save_path
 
     def load_data(
         self,
         load_path: Optional[Path] = None,
+        metadata_path: Optional[Path] = None,
         info_filename: Optional[str] = None,
         resample_freq: float = 250.0,
     ) -> tuple[np.ndarray, mne.Info]:
         """
         Load a previously saved ``.npy`` data array from disk.
 
-        If a sidecar ``.metadata.csv`` file exists, it is loaded into
-        :attr:`filtered_df`, including the ``data_axis0_index`` mapping.
+        If a metadata CSV exists it is loaded into :attr:`filtered_df`,
+        including the ``data_axis0_index`` mapping.  The CSV is read from
+        *metadata_path* when provided; otherwise the default path in the
+        project's concatenated directory is tried (see
+        :meth:`_default_metadata_save_path`).
 
         :param load_path: Path to the ``.npy`` file.
+        :param metadata_path: Explicit path to the metadata CSV.  Defaults to
+            the project's concatenated directory.
         :param info_filename: Optional filename from the dataset metadata to use for
             loading ``mne.Info``. When provided, the Info object is populated from
             the corresponding processed file.
@@ -250,11 +273,16 @@ class EEGSummarizedAnalyzer(LoggerMixin):
 
         self.data = np.load(load_path)
         self.logger.info(f"Data loaded from {load_path}  (shape={self.data.shape})")
-        metadata_path = self._metadata_save_path(load_path)
-        if metadata_path.exists():
-            self.filtered_df = pd.read_csv(metadata_path, index_col=0)
+
+        resolved_metadata_path = (
+            Path(metadata_path)
+            if metadata_path is not None
+            else self._default_metadata_save_path()
+        )
+        if resolved_metadata_path.exists():
+            self.filtered_df = pd.read_csv(resolved_metadata_path, index_col=0)
             self._normalize_filtered_df_columns()
-            self.logger.info(f"Metadata loaded from {metadata_path}")
+            self.logger.info(f"Metadata loaded from {resolved_metadata_path}")
 
         if info_filename is not None:
             raw = self.dataset_handler.load_data_file(
@@ -270,9 +298,14 @@ class EEGSummarizedAnalyzer(LoggerMixin):
 
         return self.data, self.info
 
-    @staticmethod
-    def _metadata_save_path(data_path: Path) -> Path:
-        """Return sidecar CSV path used to persist filtered metadata."""
+    def _default_metadata_save_path(self) -> Path:
+        """
+        Build the default path for the metadata CSV in the concatenated directory.
+
+        The file is placed next to the default data array (see
+        :meth:`_default_save_path`), with a ``.metadata.csv`` suffix.
+        """
+        data_path = self._default_save_path()
         return data_path.parent / f"{data_path.stem}.metadata.csv"
 
     def _normalize_filtered_df_columns(self) -> None:
