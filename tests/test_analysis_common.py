@@ -4,6 +4,7 @@ Tests for scripts/analysis_common.py — argument parsing and workflow helpers.
 
 import argparse
 from unittest.mock import patch
+import runpy
 
 import numpy as np
 import pytest
@@ -153,6 +154,10 @@ class TestAddCommonArguments:
         args = parser.parse_args(["--wavelet_keep_frequency_dim"])
         assert args.wavelet_keep_frequency_dim is True
 
+    def test_wavelet_reshape_frequency_dim_flag(self, parser):
+        args = parser.parse_args(["--wavelet_reshape_frequency_dim"])
+        assert args.wavelet_reshape_frequency_dim is True
+
     def test_wavelet_freqs_linspace_construction(self, parser):
         """Check that wavelet_freq_{min,max,n_freqs} produce a valid linspace."""
         args = parser.parse_args(
@@ -247,3 +252,101 @@ class TestWaveletStorageBehavior:
         assert bool(loaded["keep_frequency_dim"]) is True
         assert loaded["data"].shape == (2, 3 * len(freqs), 120)
         assert "_freqdim1.npz" in saved[0].name
+
+
+class TestWaveletLoadShapeBehavior:
+    @pytest.fixture
+    def sample_dataset(self):
+        rng = np.random.default_rng(7)
+        return {
+            "TEST": AnalysisData(
+                data=rng.normal(size=(2, 3, 120)),
+                sfreq=120.0,
+                representation=DataRepresentation.TIME_DOMAIN,
+                label="TEST",
+                feature_names=["Fz", "Cz", "Pz"],
+            )
+        }
+
+    def test_wavelet_reuse_can_reshape_to_4d(self, tmp_path, sample_dataset):
+        freqs = np.linspace(4.0, 8.0, 3)
+        wavelet_dir = tmp_path / "wavelets"
+
+        _wavelet_transform(
+            sample_dataset,
+            freqs,
+            representation="power",
+            keep_frequency_dim=False,
+            wavelet_dir=wavelet_dir,
+            reuse_wavelets=False,
+        )
+
+        loaded = _wavelet_transform(
+            sample_dataset,
+            freqs,
+            representation="power",
+            keep_frequency_dim=True,
+            reshape_frequency_dim=True,
+            wavelet_dir=wavelet_dir,
+            reuse_wavelets=True,
+        )["TEST"]
+
+        assert loaded.data.shape == (2, 3, len(freqs), 120)
+        assert loaded.metadata["keep_frequency_dim"] is True
+
+    def test_wavelet_reshape_requires_keep_frequency_dim(self, sample_dataset):
+        freqs = np.linspace(4.0, 8.0, 3)
+        with pytest.raises(
+            ValueError,
+            match="reshape_frequency_dim=True requires keep_frequency_dim=True",
+        ):
+            _wavelet_transform(
+                sample_dataset,
+                freqs,
+                representation="power",
+                keep_frequency_dim=False,
+                reshape_frequency_dim=True,
+                wavelet_dir=None,
+                reuse_wavelets=False,
+            )
+
+
+class TestRunAnalysisWaveletReshapeArgPropagation:
+    def test_run_analysis_passes_reshape_frequency_dim(self):
+        with (
+            patch(
+                "scripts.analysis_common.load_analyzers",
+                return_value={"TEST": object()},
+            ),
+            patch(
+                "scripts.analysis_common.analyzers_to_datasets",
+                return_value={"TEST": object()},
+            ),
+            patch("scripts.analysis_common.run_isc_workflow"),
+            patch("scripts.analysis_common.run_mean_variance_workflow"),
+            patch("scripts.analysis_common.run_wavelet_workflow") as run_wavelet_workflow,
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "scripts/run_analysis.py",
+                    "--analysis",
+                    "wavelet_power",
+                    "--wavelet_keep_frequency_dim",
+                    "--wavelet_reshape_frequency_dim",
+                ],
+            ),
+        ):
+            runpy.run_path(
+                str(
+                    Path(__file__).parent.parent
+                    / "scripts"
+                    / "run_analysis.py"
+                ),
+                run_name="__main__",
+            )
+
+        assert run_wavelet_workflow.call_count == 1
+        call_kwargs = run_wavelet_workflow.call_args.kwargs
+        assert call_kwargs["keep_frequency_dim"] is True
+        assert call_kwargs["reshape_frequency_dim"] is True

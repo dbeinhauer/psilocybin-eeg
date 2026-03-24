@@ -234,6 +234,15 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
             "frequencies)."
         ),
     )
+    parser.add_argument(
+        "--wavelet_reshape_frequency_dim",
+        action="store_true",
+        default=False,
+        help=(
+            "When --wavelet_keep_frequency_dim is enabled, reshape wavelet output "
+            "to [n_individuals, n_channels, n_frequencies, n_times]."
+        ),
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -547,6 +556,7 @@ def _wavelet_transform(
     representation: str = "power",
     *,
     keep_frequency_dim: bool = False,
+    reshape_frequency_dim: bool = False,
     wavelet_dir: Path | None = None,
     reuse_wavelets: bool = False,
 ) -> dict[str, AnalysisData]:
@@ -556,6 +566,9 @@ def _wavelet_transform(
     :param freqs: Morlet frequencies (Hz).
     :param representation: Wavelet representation (``"power"`` or ``"phase"``).
     :param keep_frequency_dim: Keep frequency dimension instead of averaging it.
+    :param reshape_frequency_dim: When ``keep_frequency_dim`` is true, reshape
+        flattened ``(feature×frequency)`` output into
+        ``(n_items, n_features, n_freqs, n_samples)``.
     :param wavelet_dir: Optional directory for persisted wavelet outputs.
     :param reuse_wavelets: If true, reuse stored wavelet files when present.
     :returns: New dict of transformed datasets with the same keys.
@@ -563,6 +576,10 @@ def _wavelet_transform(
     if representation not in ("power", "phase"):
         raise ValueError(
             f"Only 'power' and 'phase' wavelet representations are supported, got {representation!r}"
+        )
+    if reshape_frequency_dim and not keep_frequency_dim:
+        raise ValueError(
+            "reshape_frequency_dim=True requires keep_frequency_dim=True."
         )
 
     if wavelet_dir is not None:
@@ -601,6 +618,32 @@ def _wavelet_transform(
             feature_names=base_feature_names,
             info=wavelet_ad.info,
             metadata={**wavelet_ad.metadata, "keep_frequency_dim": False},
+        )
+
+    def _reshape_frequency_dimension(
+        wavelet_ad: AnalysisData,
+        *,
+        base_feature_names: list[str] | None,
+    ) -> AnalysisData:
+        """Reshape flattened frequency-resolved wavelet output to 4D."""
+        n_freqs = len(wavelet_ad.metadata["freqs"])
+        n_items, n_features_flat, n_samples = wavelet_ad.data.shape
+        if n_features_flat % n_freqs != 0:
+            raise ValueError(
+                "Frequency-resolved wavelet data has invalid shape for "
+                f"reshape: n_features={n_features_flat}, n_freqs={n_freqs}"
+            )
+
+        n_features = n_features_flat // n_freqs
+        reshaped = wavelet_ad.data.reshape(n_items, n_features, n_freqs, n_samples)
+        return AnalysisData(
+            data=reshaped,
+            sfreq=wavelet_ad.sfreq,
+            representation=wavelet_ad.representation,
+            label=wavelet_ad.label,
+            feature_names=base_feature_names,
+            info=wavelet_ad.info,
+            metadata={**wavelet_ad.metadata, "keep_frequency_dim": True},
         )
 
     for label, ad in datasets.items():
@@ -651,6 +694,11 @@ def _wavelet_transform(
                         representation_kind=representation,
                         base_feature_names=ad.feature_names,
                     )
+                elif reshape_frequency_dim:
+                    transformed[label] = _reshape_frequency_dimension(
+                        transformed[label],
+                        base_feature_names=ad.feature_names,
+                    )
                 continue
 
             if (
@@ -685,21 +733,36 @@ def _wavelet_transform(
                         "loaded_from_wavelet_file": str(legacy_wavelet_file),
                     },
                 )
+                if not keep_frequency_dim:
+                    transformed[label] = _reduce_frequency_dimension(
+                        transformed[label],
+                        representation_kind=representation,
+                        base_feature_names=ad.feature_names,
+                    )
+                elif reshape_frequency_dim:
+                    transformed[label] = _reshape_frequency_dimension(
+                        transformed[label],
+                        base_feature_names=ad.feature_names,
+                    )
                 continue
 
         if representation == "power":
             wd_freq = to_wavelet_power(ad, freqs, keep_frequency_dim=True)
         else:
             wd_freq = to_wavelet_phase(ad, freqs, keep_frequency_dim=True)
-        transformed[label] = (
-            wd_freq
-            if keep_frequency_dim
-            else _reduce_frequency_dimension(
+        if keep_frequency_dim and reshape_frequency_dim:
+            transformed[label] = _reshape_frequency_dimension(
+                wd_freq,
+                base_feature_names=ad.feature_names,
+            )
+        elif keep_frequency_dim:
+            transformed[label] = wd_freq
+        else:
+            transformed[label] = _reduce_frequency_dimension(
                 wd_freq,
                 representation_kind=representation,
                 base_feature_names=ad.feature_names,
             )
-        )
         if wavelet_file is not None:
             feature_names = (
                 wd_freq.feature_names if wd_freq.feature_names is not None else []
@@ -846,6 +909,7 @@ def run_wavelet_workflow(
     wavelet_dir: Path | None = None,
     reuse_wavelets: bool = False,
     keep_frequency_dim: bool = False,
+    reshape_frequency_dim: bool = False,
     isc_threshold: float = 0.035,
     window_sec: float = 5.0,
     step_sec: float = 2.5,
@@ -877,6 +941,8 @@ def run_wavelet_workflow(
     :param wavelet_dir: Optional directory for persisted wavelet transforms.
     :param reuse_wavelets: Reuse stored wavelets from *wavelet_dir* when available.
     :param keep_frequency_dim: Keep frequency dimension in wavelet outputs.
+    :param reshape_frequency_dim: Reshape kept frequency output into explicit 4D
+        ``(n_items, n_channels, n_freqs, n_samples)`` format.
     :param isc_threshold: ISC significance threshold.
     :param window_sec: Sliding-window length in seconds.
     :param step_sec: Sliding-window step size in seconds.
@@ -911,6 +977,7 @@ def run_wavelet_workflow(
             freqs,
             representation,
             keep_frequency_dim=keep_frequency_dim,
+            reshape_frequency_dim=reshape_frequency_dim,
             wavelet_dir=(wavelet_dir / "broadband") if wavelet_dir else None,
             reuse_wavelets=reuse_wavelets,
         )
@@ -949,6 +1016,7 @@ def run_wavelet_workflow(
             band_freqs,
             representation,
             keep_frequency_dim=keep_frequency_dim,
+            reshape_frequency_dim=reshape_frequency_dim,
             wavelet_dir=(wavelet_dir / f"band_{band}") if wavelet_dir else None,
             reuse_wavelets=reuse_wavelets,
         )
