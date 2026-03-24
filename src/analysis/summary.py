@@ -229,7 +229,7 @@ class EEGSummarizedAnalyzer(LoggerMixin):
             resolved_metadata_path = (
                 Path(metadata_path)
                 if metadata_path is not None
-                else self._default_metadata_save_path()
+                else save_path.with_suffix(".metadata.csv")
             )
             resolved_metadata_path.parent.mkdir(parents=True, exist_ok=True)
             self.filtered_df.to_csv(resolved_metadata_path, index=True)
