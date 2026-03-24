@@ -60,11 +60,11 @@ class TestLoadAndPrepareData:
         np.testing.assert_array_equal(data[0], np.zeros((2, 3)))
         np.testing.assert_array_equal(data[1], np.ones((2, 3)))
         assert (
-            SingleDataMetadata.CONCATENATED_AXIS0_INDEX
+            SingleDataMetadata.CONCATENATED_PERSON_INDEX
             in analyzer.filtered_df.columns
         )
         assert analyzer.filtered_df[
-            SingleDataMetadata.CONCATENATED_AXIS0_INDEX
+            SingleDataMetadata.CONCATENATED_PERSON_INDEX
         ].tolist() == [0, 1]
         assert analyzer.filtered_df.index.tolist() == [10, 20]
 
@@ -96,7 +96,7 @@ class TestSaveLoadDataWithMetadata:
 
         analyzer.data = np.arange(12).reshape(2, 2, 3)
         analyzer.filtered_df = filtered_df.copy()
-        analyzer.filtered_df[SingleDataMetadata.CONCATENATED_AXIS0_INDEX] = [0, 1]
+        analyzer.filtered_df[SingleDataMetadata.CONCATENATED_PERSON_INDEX] = [0, 1]
         save_path = tmp_path / "concatenated.npy"
         metadata_path = tmp_path / "concatenated.metadata.csv"
         analyzer.save_data(save_path=save_path, metadata_path=metadata_path)
@@ -112,11 +112,11 @@ class TestSaveLoadDataWithMetadata:
 
         np.testing.assert_array_equal(restored.data, analyzer.data)
         assert (
-            SingleDataMetadata.CONCATENATED_AXIS0_INDEX
+            SingleDataMetadata.CONCATENATED_PERSON_INDEX
             in restored.filtered_df.columns
         )
         assert restored.filtered_df[
-            SingleDataMetadata.CONCATENATED_AXIS0_INDEX
+            SingleDataMetadata.CONCATENATED_PERSON_INDEX
         ].tolist() == [0, 1]
         assert restored.filtered_df[SingleDataMetadata.FILENAME].tolist() == [
             "first_raw.fif",

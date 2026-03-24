@@ -80,7 +80,7 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         MNE Info object taken from the first loaded file.
     filtered_df : pd.DataFrame or None
         Metadata DataFrame of the last applied filter / load operation.
-        Includes :attr:`~src.definitions.fields.SingleDataMetadata.CONCATENATED_AXIS0_INDEX`
+        Includes :attr:`~src.definitions.fields.SingleDataMetadata.CONCATENATED_PERSON_INDEX`
         after :meth:`load_and_prepare_data`, mapping
         each row to its subject index in :attr:`data`.
     """
@@ -163,7 +163,7 @@ class EEGSummarizedAnalyzer(LoggerMixin):
             raws.append(raw.resample(resample_freq, n_jobs=n_jobs))
             axis0_indices.append(axis0_index)
 
-        self.filtered_df[SingleDataMetadata.CONCATENATED_AXIS0_INDEX] = axis0_indices
+        self.filtered_df[SingleDataMetadata.CONCATENATED_PERSON_INDEX] = axis0_indices
 
         # Store MNE Info from first file (before any resampling changes it)
         self._refresh_info(raws[0].info)
@@ -193,7 +193,7 @@ class EEGSummarizedAnalyzer(LoggerMixin):
 
         When :attr:`filtered_df` is available, a metadata CSV is also stored
         alongside the concatenated data, preserving row ordering and the
-        :attr:`~src.definitions.fields.SingleDataMetadata.CONCATENATED_AXIS0_INDEX` mapping.
+        :attr:`~src.definitions.fields.SingleDataMetadata.CONCATENATED_PERSON_INDEX` mapping.
 
         If *save_path* is not given the file is placed in the project's
         ``processed/<experiment>/concatenated/`` directory with an auto-generated
@@ -250,7 +250,7 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         Load a previously saved ``.npy`` data array from disk.
 
         If a metadata CSV exists it is loaded into :attr:`filtered_df`,
-        including the :attr:`~src.definitions.fields.SingleDataMetadata.CONCATENATED_AXIS0_INDEX` mapping.  The CSV is read from
+        including the :attr:`~src.definitions.fields.SingleDataMetadata.CONCATENATED_PERSON_INDEX` mapping.  The CSV is read from
         *metadata_path* when provided; otherwise the default path in the
         project's concatenated directory is tried (see
         :meth:`_default_metadata_save_path`).
