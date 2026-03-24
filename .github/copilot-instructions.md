@@ -281,6 +281,7 @@ For large-scale processing on the Metacentrum HPC cluster:
 - [`docs/hpc_guide.md`](../docs/hpc_guide.md) — HPC job submission guide
 - [`data/README.md`](../data/README.md) — Data directory layout and naming
 - [`src/preprocessing/README.md`](../src/preprocessing/README.md) — Preprocessing details
+- [`src/analysis/README.md`](../src/analysis/README.md) — Analysis modules, data shape conventions, and ISC workflow
 
 ## Important Notes
 
