@@ -45,8 +45,6 @@ from src.analysis.data_representations import (
 from src.analysis.isc import (
     compute_loo_isc,
     compute_sliding_window_isc,
-    compute_mean_variance,
-    compute_sliding_window_mean_variance,
     FREQUENCY_BANDS,
 )
 from src.visualization.isc_plots import (
@@ -59,10 +57,6 @@ from src.visualization.isc_plots import (
     print_band_significant_intervals,
     plot_band_overlap,
     print_data_overview,
-    plot_mean_variance_distribution,
-    plot_sliding_window_mean_variance,
-    plot_band_mean_variance_distributions,
-    plot_band_sliding_window_mean_variance,
 )
 
 if TYPE_CHECKING:
@@ -96,12 +90,13 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--analysis",
         type=str,
         nargs="+",
-        default=[AnalysisVariants.ISC.value, AnalysisVariants.MEAN_VARIANCE.value],
+        default=[AnalysisVariants.ISC.value],
         choices=[analysis.value for analysis in AnalysisVariants],
         help=(
-            "Which analyses to run. Defaults to isc and mean_variance. "
-            "Use wavelet_power or wavelet_phase to additionally run ISC and "
-            "mean/variance on wavelet-transformed data."
+            "Which analyses to run. Defaults to isc. "
+            "Use wavelet_power or wavelet_phase to run ISC on "
+            "wavelet-transformed data. For mean-variance analysis use "
+            "scripts/run_mean_variance.py."
         ),
     )
     parser.add_argument(
@@ -430,110 +425,6 @@ def run_isc_workflow(
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Mean / variance workflow
-# ──────────────────────────────────────────────────────────────────────
-
-
-def run_mean_variance_workflow(
-    datasets: dict[str, AnalysisData],
-    analyzers: dict[str, EEGSummarizedAnalyzer],
-    *,
-    save_dir: Path,
-    window_sec: float = 5.0,
-    step_sec: float = 2.5,
-) -> None:
-    """Run the full mean-and-variance analysis and save figures.
-
-    Steps:
-    1. Data overview
-    2. Global mean & variance — distribution plot
-    3. Sliding-window mean & variance — time-resolved plot
-    4. Per-band global mean & variance — distribution plots
-    5. Per-band sliding-window mean & variance — time-resolved plots
-    """
-    save_dir.mkdir(parents=True, exist_ok=True)
-    _logger.info(f"Mean/variance figures will be saved to: {save_dir}")
-
-    print_data_overview(datasets)
-    _first_ad = next(iter(datasets.values()))
-
-    # ── Global mean & variance ────────────────────────────────────
-    _logger.info("=== Global Mean & Variance ===")
-    mean_var_results = {}
-    for label, ad in datasets.items():
-        mean_f, var_f = compute_mean_variance(ad.data)
-        mean_var_results[label] = (mean_f, var_f)
-        _logger.info(
-            f"[{label}]  mean range: [{mean_f.min():.4f}, {mean_f.max():.4f}]  "
-            f"var range: [{var_f.min():.4f}, {var_f.max():.4f}]"
-        )
-
-    plot_mean_variance_distribution(
-        mean_var_results,
-        feature_axis_label=(f"Number of {_first_ad.feature_axis_label.lower()}s"),
-        save_path=save_dir / "mean_variance_distribution.png",
-    )
-
-    # ── Sliding-window mean & variance ────────────────────────────
-    _logger.info("=== Sliding-Window Mean & Variance ===")
-    sw_mv_results = {}
-    for label, ad in datasets.items():
-        mean_tc, var_tc, sw_times = compute_sliding_window_mean_variance(
-            ad.data, window_sec=window_sec, step_sec=step_sec, sfreq=ad.sfreq
-        )
-        sw_mv_results[label] = (mean_tc, var_tc, sw_times)
-        _logger.info(
-            f"[{label}]  mean_tc: {mean_tc.shape}  var_tc: {var_tc.shape}  "
-            f"times: {sw_times.shape}"
-        )
-
-    plot_sliding_window_mean_variance(
-        sw_mv_results,
-        feature_axis_label=f"{_first_ad.feature_axis_label} index",
-        save_path=save_dir / "sliding_window_mean_variance.png",
-    )
-
-    # ── Per-band global mean & variance ───────────────────────────
-    _logger.info("=== Per-Band Mean & Variance ===")
-    band_mv_results = {}
-    for label, a in analyzers.items():
-        band_mv_results[label] = a.compute_band_mean_variance()
-        for band, (mf, vf) in band_mv_results[label].items():
-            _logger.info(
-                f"[{label}] {band:6s}  mean range: "
-                f"[{mf.min():.4f}, {mf.max():.4f}]  "
-                f"var range: [{vf.min():.4f}, {vf.max():.4f}]"
-            )
-
-    plot_band_mean_variance_distributions(
-        band_mv_results,
-        feature_axis_label=(f"Number of {_first_ad.feature_axis_label.lower()}s"),
-        save_path=save_dir / "band_mean_variance_distribution.png",
-    )
-
-    # ── Per-band sliding-window mean & variance ───────────────────
-    _logger.info("=== Per-Band Sliding-Window Mean & Variance ===")
-    band_sw_mv_results = {}
-    for label, a in analyzers.items():
-        band_sw_mv_results[label] = a.compute_band_sliding_window_mean_variance(
-            window_sec=window_sec, step_sec=step_sec
-        )
-        for band, (mtc, vtc, t) in band_sw_mv_results[label].items():
-            _logger.info(
-                f"[{label}] {band:6s}  mean_tc: {mtc.shape}  "
-                f"var_tc: {vtc.shape}  times: {t.shape}"
-            )
-
-    plot_band_sliding_window_mean_variance(
-        band_sw_mv_results,
-        feature_axis_label=f"{_first_ad.feature_axis_label} index",
-        save_path=save_dir / "band_sliding_window_mean_variance.png",
-    )
-
-    _logger.info("Mean & variance analysis complete.")
-
-
-# ──────────────────────────────────────────────────────────────────────
 # Wavelet workflow helpers
 # ──────────────────────────────────────────────────────────────────────
 
@@ -776,59 +667,6 @@ def _run_wavelet_isc(
     return loo_iscs, mean_loo_iscs, sw_results
 
 
-def _run_wavelet_mean_variance(
-    wavelet_ds: dict[str, AnalysisData],
-    save_dir: Path,
-    *,
-    window_sec: float,
-    step_sec: float,
-) -> tuple[dict, dict]:
-    """Global and sliding-window mean/variance on wavelet-transformed data.
-
-    :returns: ``(mean_var_results, sw_mv_results)`` — raw result dicts
-        keyed by label, suitable for building aggregated band-comparison
-        plots in :func:`run_wavelet_workflow`.
-    """
-    save_dir.mkdir(parents=True, exist_ok=True)
-    _first_wd = next(iter(wavelet_ds.values()))
-
-    # ── Global mean & variance ────────────────────────────────────
-    mean_var_results: dict = {}
-    for label, wd in wavelet_ds.items():
-        mean_f, var_f = compute_mean_variance(wd.data)
-        mean_var_results[label] = (mean_f, var_f)
-        _logger.info(
-            f"[{label}]  mean range: [{mean_f.min():.4f}, {mean_f.max():.4f}]  "
-            f"var range: [{var_f.min():.4f}, {var_f.max():.4f}]"
-        )
-
-    plot_mean_variance_distribution(
-        mean_var_results,
-        feature_axis_label=f"Number of {_first_wd.feature_axis_label.lower()}s",
-        save_path=save_dir / "mean_variance_distribution.png",
-    )
-
-    # ── Sliding-window mean & variance ────────────────────────────
-    sw_mv_results: dict = {}
-    for label, wd in wavelet_ds.items():
-        mean_tc, var_tc, sw_times = compute_sliding_window_mean_variance(
-            wd.data, window_sec=window_sec, step_sec=step_sec, sfreq=wd.sfreq
-        )
-        sw_mv_results[label] = (mean_tc, var_tc, sw_times)
-        _logger.info(
-            f"[{label}]  mean_tc={mean_tc.shape}  var_tc={var_tc.shape}  "
-            f"times={sw_times.shape}"
-        )
-
-    plot_sliding_window_mean_variance(
-        sw_mv_results,
-        feature_axis_label=f"{_first_wd.feature_axis_label} index",
-        save_path=save_dir / "sliding_window_mean_variance.png",
-    )
-
-    return mean_var_results, sw_mv_results
-
-
 # ──────────────────────────────────────────────────────────────────────
 # Wavelet workflow
 # ──────────────────────────────────────────────────────────────────────
@@ -894,7 +732,6 @@ def run_wavelet_workflow(
     _isc_kw: dict = dict(
         isc_threshold=isc_threshold, window_sec=window_sec, step_sec=step_sec
     )
-    _mv_kw: dict = dict(window_sec=window_sec, step_sec=step_sec)
 
     selected_band_names = list(FREQUENCY_BANDS.keys()) if bands is None else list(bands)
     selected_bands = {band: FREQUENCY_BANDS[band] for band in selected_band_names}
@@ -920,9 +757,6 @@ def run_wavelet_workflow(
         _, _, bb_sw_results = _run_wavelet_isc(
             broadband_ds, save_dir / "broadband" / "isc", **_isc_kw
         )
-        _run_wavelet_mean_variance(
-            broadband_ds, save_dir / "broadband" / "mean_variance", **_mv_kw
-        )
         del broadband_ds
 
     # ── Per-band wavelet analysis ─────────────────────────────────
@@ -931,8 +765,6 @@ def run_wavelet_workflow(
     # Accumulators for cross-band comparison plots.
     band_loo_iscs: dict[str, dict] = {label: {} for label in datasets}
     band_sw_iscs: dict[str, dict] = {label: {} for label in datasets}
-    band_mv_results: dict[str, dict] = {label: {} for label in datasets}
-    band_sw_mv_results: dict[str, dict] = {label: {} for label in datasets}
     feature_axis_label: str | None = None
 
     for band, (l_freq, h_freq) in selected_bands.items():
@@ -959,15 +791,10 @@ def run_wavelet_workflow(
         loo_iscs, mean_loo_iscs, sw_iscs = _run_wavelet_isc(
             band_ds, band_dir / "isc", **_isc_kw
         )
-        mv_res, sw_mv_res = _run_wavelet_mean_variance(
-            band_ds, band_dir / "mean_variance", **_mv_kw
-        )
 
         for label in datasets:
             band_loo_iscs[label][band] = (loo_iscs[label], mean_loo_iscs[label])
             band_sw_iscs[label][band] = sw_iscs[label]
-            band_mv_results[label][band] = mv_res[label]
-            band_sw_mv_results[label][band] = sw_mv_res[label]
         del band_ds
 
     # ── Cross-band comparison plots ───────────────────────────────
@@ -1019,17 +846,5 @@ def run_wavelet_workflow(
             broadband_threshold=isc_threshold,
             save_path=cmp_dir / "band_overlap.png",
         )
-    plot_band_mean_variance_distributions(
-        band_mv_results,
-        bands=selected_bands,
-        feature_axis_label=(f"Number of {feature_axis_label.lower()}s"),
-        save_path=cmp_dir / "band_mean_variance_distributions.png",
-    )
-    plot_band_sliding_window_mean_variance(
-        band_sw_mv_results,
-        bands=selected_bands,
-        feature_axis_label=f"{feature_axis_label} index",
-        save_path=cmp_dir / "band_sliding_window_mean_variance.png",
-    )
 
     _logger.info(f"Wavelet {representation} analysis complete.")

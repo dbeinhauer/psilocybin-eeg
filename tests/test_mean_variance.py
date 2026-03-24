@@ -1,15 +1,20 @@
 """
-Tests for the mean & variance computation functions in ``src.analysis.isc``
-and band-specific workflows.
+Tests for the intersubject mean-variance analysis functions in
+``src.analysis.mean_variance``.
 """
 
 import numpy as np
+import pandas as pd
 import pytest
 
-from src.analysis.isc import (
-    compute_mean_variance,
-    compute_sliding_window_mean_variance,
+from src.analysis.mean_variance import (
+    compute_intersubject_stats,
+    compute_windowed_stats,
+    compute_band_intersubject_stats,
+    compute_pairwise_isc_matrices,
+    FREQUENCY_BANDS,
 )
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -18,246 +23,286 @@ from src.analysis.isc import (
 
 @pytest.fixture
 def simple_data():
-    """3 items × 2 features × 100 samples of known values."""
+    """3 subjects × 2 channels × 100 time points of random values."""
     rng = np.random.default_rng(42)
     return rng.standard_normal((3, 2, 100))
 
 
 @pytest.fixture
 def constant_data():
-    """Data where every item/feature/sample is constant (=5)."""
+    """All values equal 5 — variance across subjects must be 0."""
     return np.full((4, 3, 200), 5.0)
 
 
 # ---------------------------------------------------------------------------
-# compute_mean_variance
+# compute_intersubject_stats
 # ---------------------------------------------------------------------------
 
 
-class TestComputeMeanVariance:
-    def test_output_shapes(self, simple_data):
-        mean_f, var_f = compute_mean_variance(simple_data)
-        n_features = simple_data.shape[1]
-        assert mean_f.shape == (n_features,)
-        assert var_f.shape == (n_features,)
+class TestComputeIntersubjectStats:
+    def test_output_keys(self, simple_data):
+        stats = compute_intersubject_stats(simple_data)
+        assert set(stats.keys()) == {
+            "inter_var",
+            "inter_mean",
+            "mean_t",
+            "var_t",
+            "std_t",
+            "mean_over_ch",
+        }
 
-    def test_constant_data(self, constant_data):
-        """Constant signal ⇒ variance is 0 and mean is the constant."""
-        mean_f, var_f = compute_mean_variance(constant_data)
-        np.testing.assert_allclose(mean_f, 5.0)
-        np.testing.assert_allclose(var_f, 0.0)
+    def test_output_shapes(self, simple_data):
+        n_subjects, n_channels, n_times = simple_data.shape
+        stats = compute_intersubject_stats(simple_data)
+        assert stats["inter_var"].shape == (n_channels, n_times)
+        assert stats["inter_mean"].shape == (n_channels, n_times)
+        assert stats["mean_t"].shape == (n_times,)
+        assert stats["var_t"].shape == (n_times,)
+        assert stats["std_t"].shape == (n_times,)
+        assert stats["mean_over_ch"].shape == (n_subjects, n_times)
+
+    def test_constant_data_zero_variance(self, constant_data):
+        """Constant signal → intersubject variance is 0 everywhere."""
+        stats = compute_intersubject_stats(constant_data)
+        np.testing.assert_allclose(stats["inter_var"], 0.0)
+        np.testing.assert_allclose(stats["var_t"], 0.0)
+        np.testing.assert_allclose(stats["std_t"], 0.0)
+
+    def test_constant_data_correct_mean(self, constant_data):
+        stats = compute_intersubject_stats(constant_data)
+        np.testing.assert_allclose(stats["inter_mean"], 5.0)
+        np.testing.assert_allclose(stats["mean_t"], 5.0)
 
     def test_known_values(self):
-        """Manually verify with a small hand-crafted array."""
-        # 2 items × 1 feature × 4 samples
+        """Hand-crafted 2×1×4 array — verify against manual calculation."""
+        # 2 subjects × 1 channel × 4 time points
         data = np.array(
             [
                 [[1.0, 2.0, 3.0, 4.0]],
                 [[3.0, 4.0, 5.0, 6.0]],
             ]
         )
-        mean_f, var_f = compute_mean_variance(data)
-        # mean across items: [2, 3, 4, 5]
-        # temporal mean = 3.5, var = 1.25
-        np.testing.assert_allclose(mean_f, [3.5])
-        np.testing.assert_allclose(var_f, [1.25])
+        stats = compute_intersubject_stats(data)
+
+        # inter_mean = [[2, 3, 4, 5]]  →  mean_t = [2, 3, 4, 5] (channel avg = itself)
+        np.testing.assert_allclose(stats["inter_mean"], [[2.0, 3.0, 4.0, 5.0]])
+        np.testing.assert_allclose(stats["mean_t"], [2.0, 3.0, 4.0, 5.0])
+
+        # inter_var at each time = var([1,3], [2,4], [3,5], [4,6]) = 1.0 each
+        np.testing.assert_allclose(stats["inter_var"], [[1.0, 1.0, 1.0, 1.0]])
+        np.testing.assert_allclose(stats["var_t"], [1.0, 1.0, 1.0, 1.0])
+
+    def test_std_t_is_sqrt_var_t(self, simple_data):
+        stats = compute_intersubject_stats(simple_data)
+        np.testing.assert_allclose(stats["std_t"], np.sqrt(stats["var_t"]))
+
+    def test_raises_on_2d_input(self):
+        with pytest.raises(ValueError, match="3D"):
+            compute_intersubject_stats(np.ones((3, 100)))
+
+    def test_raises_on_1d_input(self):
+        with pytest.raises(ValueError, match="3D"):
+            compute_intersubject_stats(np.ones(100))
+
+    def test_mean_over_ch_is_channel_mean(self, simple_data):
+        """mean_over_ch[s] should equal simple_data[s].mean(axis=0)."""
+        stats = compute_intersubject_stats(simple_data)
+        for s in range(simple_data.shape[0]):
+            np.testing.assert_allclose(
+                stats["mean_over_ch"][s], simple_data[s].mean(axis=0)
+            )
 
 
 # ---------------------------------------------------------------------------
-# compute_sliding_window_mean_variance
+# compute_windowed_stats
 # ---------------------------------------------------------------------------
 
 
-class TestComputeSlidingWindowMeanVariance:
-    def test_output_shapes(self, simple_data):
-        mean_tc, var_tc, times = compute_sliding_window_mean_variance(
-            simple_data, window_sec=0.2, step_sec=0.1, sfreq=100.0
-        )
-        n_features = simple_data.shape[1]
-        assert mean_tc.ndim == 2
-        assert var_tc.ndim == 2
-        assert times.ndim == 1
-        assert mean_tc.shape[0] == times.shape[0]
-        assert var_tc.shape[0] == times.shape[0]
-        assert mean_tc.shape[1] == n_features
-        assert var_tc.shape[1] == n_features
+class TestComputeWindowedStats:
+    def _make_stats(self, data: np.ndarray) -> dict[str, np.ndarray]:
+        return compute_intersubject_stats(data)
 
-    def test_constant_data(self, constant_data):
-        """Constant signal: every window mean=5, var=0."""
-        mean_tc, var_tc, times = compute_sliding_window_mean_variance(
-            constant_data, window_sec=0.1, step_sec=0.05, sfreq=100.0
-        )
-        np.testing.assert_allclose(mean_tc, 5.0)
-        np.testing.assert_allclose(var_tc, 0.0)
-        assert len(times) > 0
+    def test_output_is_dataframe(self, simple_data):
+        stats = self._make_stats(simple_data)
+        n_times = simple_data.shape[2]
+        df = compute_windowed_stats(stats, n_times=n_times, sfreq=100.0, window_sec=0.2)
+        assert isinstance(df, pd.DataFrame)
 
-    def test_window_times_are_centred(self, simple_data):
-        """Window centre times should sit at the expected positions."""
+    def test_expected_columns(self, simple_data):
+        stats = self._make_stats(simple_data)
+        n_times = simple_data.shape[2]
+        df = compute_windowed_stats(stats, n_times=n_times, sfreq=100.0, window_sec=0.2)
+        expected = {
+            "window",
+            "center",
+            "t_start",
+            "t_end",
+            "mean_signal",
+            "var_signal",
+            "mean_variance",
+            "sync_candidate",
+        }
+        assert set(df.columns) >= expected
+
+    def test_n_windows(self, simple_data):
+        n_times = simple_data.shape[2]  # 100
+        sfreq = 100.0
+        window_sec = 0.2  # 20 samples → 5 windows
+        stats = self._make_stats(simple_data)
+        df = compute_windowed_stats(
+            stats, n_times=n_times, sfreq=sfreq, window_sec=window_sec
+        )
+        expected_n = n_times // int(window_sec * sfreq)
+        assert len(df) == expected_n
+
+    def test_sync_candidate_is_bool(self, simple_data):
+        stats = self._make_stats(simple_data)
+        n_times = simple_data.shape[2]
+        df = compute_windowed_stats(stats, n_times=n_times, sfreq=100.0, window_sec=0.5)
+        assert df["sync_candidate"].dtype == bool
+
+    def test_sync_percentile_threshold(self, simple_data):
+        """Exactly sync_percentile % of windows below threshold on average."""
+        rng = np.random.default_rng(7)
+        large_data = rng.standard_normal((4, 3, 1000))
+        stats = self._make_stats(large_data)
+        for pct in (10.0, 25.0, 50.0):
+            df = compute_windowed_stats(
+                stats,
+                n_times=1000,
+                sfreq=100.0,
+                window_sec=0.2,
+                sync_percentile=pct,
+            )
+            threshold = np.percentile(stats["var_t"], pct)
+            # All sync_candidate windows must be strictly below threshold
+            assert (df.loc[df["sync_candidate"], "mean_variance"] < threshold).all()
+
+    def test_raises_on_zero_samples(self, simple_data):
+        stats = self._make_stats(simple_data)
+        with pytest.raises(ValueError, match="samples"):
+            compute_windowed_stats(stats, n_times=100, sfreq=1.0, window_sec=0.001)
+
+    def test_window_indices_non_overlapping(self, simple_data):
+        """t_start and t_end should tile the recording without gaps."""
+        stats = self._make_stats(simple_data)
+        n_times = simple_data.shape[2]
         sfreq = 100.0
         window_sec = 0.2
-        step_sec = 0.1
-        win_samples = int(round(window_sec * sfreq))
-        step_samples = int(round(step_sec * sfreq))
-        n_samples = simple_data.shape[2]
-        starts = np.arange(0, n_samples - win_samples + 1, step_samples)
-        expected_times = (starts + win_samples / 2) / sfreq
-
-        _, _, times = compute_sliding_window_mean_variance(
-            simple_data, window_sec=window_sec, step_sec=step_sec, sfreq=sfreq
+        df = compute_windowed_stats(
+            stats, n_times=n_times, sfreq=sfreq, window_sec=window_sec
         )
-        np.testing.assert_allclose(times, expected_times)
+        # Each window's t_start should equal previous window's t_end + 1/sfreq
+        t_starts = df["t_start"].values
+        for i in range(1, len(t_starts)):
+            np.testing.assert_allclose(
+                t_starts[i], t_starts[i - 1] + window_sec, atol=1e-9
+            )
 
-    def test_single_window_matches_global(self):
-        """When window covers the entire signal, result matches global."""
-        rng = np.random.default_rng(99)
-        data = rng.standard_normal((5, 4, 50))
-        sfreq = 50.0  # 1 second of data
-
-        mean_tc, var_tc, times = compute_sliding_window_mean_variance(
-            data, window_sec=1.0, step_sec=1.0, sfreq=sfreq
+    def test_constant_data_all_zero_mean_variance(self, constant_data):
+        """Constant signal → every window has mean_variance = 0."""
+        stats = self._make_stats(constant_data)
+        df = compute_windowed_stats(
+            stats, n_times=constant_data.shape[2], sfreq=100.0, window_sec=0.2
         )
-        mean_f, var_f = compute_mean_variance(data)
-
-        assert mean_tc.shape[0] == 1
-        np.testing.assert_allclose(mean_tc[0], mean_f, atol=1e-12)
-        np.testing.assert_allclose(var_tc[0], var_f, atol=1e-12)
+        np.testing.assert_allclose(df["mean_variance"].values, 0.0)
 
 
 # ---------------------------------------------------------------------------
-# Band mean & variance — per-band application of compute_mean_variance
+# compute_band_intersubject_stats — pure function simulation without MNE
 # ---------------------------------------------------------------------------
 
 
-class TestBandMeanVarianceWorkflow:
-    """Test that compute_mean_variance applied to multiple band-filtered
-    arrays gives the expected structure, without importing the analyzer.
-
-    This mirrors how TestBandIsc works in test_isc.py: we apply the pure
-    function independently to each 'band' and verify the aggregate dict.
+class TestComputeBandIntersubjectStats:
+    """Tests apply compute_intersubject_stats to pre-constructed band arrays
+    to mirror the logic inside compute_band_intersubject_stats without
+    requiring an MNE filter call (which needs mne installed).
     """
 
-    def _simulate_band_results(
+    def _simulate_band_stats(
         self,
         data: np.ndarray,
-        bands: dict[str, tuple[float, float]],
-    ) -> dict[str, tuple[np.ndarray, np.ndarray]]:
-        """Run compute_mean_variance on identical data for each band (no MNE)."""
-        return {name: compute_mean_variance(data) for name in bands}
+        bands: dict,
+    ) -> dict[str, dict[str, np.ndarray]]:
+        """Apply compute_intersubject_stats to the same data for each band."""
+        return {band: compute_intersubject_stats(data) for band in bands}
 
     def test_all_bands_present(self):
-        """Result has one entry per band."""
-        from src.analysis.isc import FREQUENCY_BANDS
-
         rng = np.random.default_rng(0)
         data = rng.standard_normal((4, 8, 200))
-        result = self._simulate_band_results(data, FREQUENCY_BANDS)
+        result = self._simulate_band_stats(data, FREQUENCY_BANDS)
         assert set(result.keys()) == set(FREQUENCY_BANDS.keys())
 
     def test_per_band_shapes(self):
-        """Each band entry contains (n_features,) arrays."""
         rng = np.random.default_rng(1)
-        n_features = 6
-        data = rng.standard_normal((3, n_features, 150))
-        bands = {"delta": (1.0, 4.0), "alpha": (8.0, 13.0), "gamma": (30.0, 70.0)}
-        result = self._simulate_band_results(data, bands)
-        for band, (mean_f, var_f) in result.items():
-            assert mean_f.shape == (n_features,), f"mean shape wrong for {band}"
-            assert var_f.shape == (n_features,), f"var shape wrong for {band}"
+        n_channels, n_times = 6, 150
+        data = rng.standard_normal((3, n_channels, n_times))
+        bands = {"delta": (1.0, 4.0), "alpha": (8.0, 13.0)}
+        result = self._simulate_band_stats(data, bands)
+        for band, stats in result.items():
+            assert stats["inter_var"].shape == (n_channels, n_times), band
+            assert stats["var_t"].shape == (n_times,), band
+            assert stats["mean_over_ch"].shape == (3, n_times), band
 
-    def test_constant_data_per_band(self):
-        """Constant signal gives var=0, mean=constant for every band."""
+    def test_constant_data_zero_variance(self):
         bands = {"theta": (4.0, 8.0), "beta": (13.0, 30.0)}
         data = np.full((2, 4, 100), 3.0)
-        result = self._simulate_band_results(data, bands)
-        for band, (mean_f, var_f) in result.items():
-            np.testing.assert_allclose(mean_f, 3.0, err_msg=f"mean wrong for {band}")
-            np.testing.assert_allclose(var_f, 0.0, err_msg=f"var wrong for {band}")
-
-    def test_independent_bands(self):
-        """Different synthetic band arrays produce different results."""
-        rng = np.random.default_rng(7)
-        n_features = 4
-        # Simulate two different 'filtered' signals for two bands
-        data_alpha = rng.standard_normal((3, n_features, 200))
-        data_beta = rng.standard_normal((3, n_features, 200)) * 10
-        result = {
-            "alpha": compute_mean_variance(data_alpha),
-            "beta": compute_mean_variance(data_beta),
-        }
-        # Beta has 10x larger scale so its variance should be much larger
-        assert result["beta"][1].mean() > result["alpha"][1].mean()
+        result = self._simulate_band_stats(data, bands)
+        for band, stats in result.items():
+            np.testing.assert_allclose(stats["var_t"], 0.0, err_msg=f"var_t non-zero for {band}")
 
 
 # ---------------------------------------------------------------------------
-# Band sliding-window mean & variance workflow
+# compute_pairwise_isc_matrices
 # ---------------------------------------------------------------------------
 
 
-class TestBandSlidingWindowMeanVarianceWorkflow:
-    """Test compute_sliding_window_mean_variance applied per band."""
+class TestComputePairwiseIscMatrices:
+    def test_output_shape(self):
+        rng = np.random.default_rng(10)
+        n_subjects, n_channels, n_times = 5, 4, 200
+        data = rng.standard_normal((n_subjects, n_channels, n_times))
+        band_data = {"delta": data, "alpha": data}
+        result = compute_pairwise_isc_matrices(band_data)
+        for band, mat in result.items():
+            assert mat.shape == (n_subjects, n_subjects), band
 
-    def _simulate_band_sw_results(
-        self,
-        data: np.ndarray,
-        bands: dict[str, tuple[float, float]],
-        window_sec: float = 0.2,
-        step_sec: float = 0.1,
-        sfreq: float = 100.0,
-    ) -> dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]:
-        return {
-            name: compute_sliding_window_mean_variance(
-                data, window_sec=window_sec, step_sec=step_sec, sfreq=sfreq
-            )
-            for name in bands
-        }
+    def test_keys_match_input(self):
+        rng = np.random.default_rng(11)
+        data = rng.standard_normal((3, 4, 100))
+        band_data = {"delta": data, "gamma": data}
+        result = compute_pairwise_isc_matrices(band_data)
+        assert set(result.keys()) == {"delta", "gamma"}
 
-    def test_all_bands_present(self):
-        from src.analysis.isc import FREQUENCY_BANDS
+    def test_symmetric(self):
+        rng = np.random.default_rng(12)
+        data = rng.standard_normal((4, 8, 300))
+        # z-score data so the mean-product equals Pearson r
+        from scipy.stats import zscore
+        data = zscore(data, axis=2)
+        result = compute_pairwise_isc_matrices({"alpha": data})
+        mat = result["alpha"]
+        np.testing.assert_allclose(mat, mat.T, atol=1e-12)
 
-        rng = np.random.default_rng(5)
-        data = rng.standard_normal((3, 4, 200))
-        result = self._simulate_band_sw_results(data, FREQUENCY_BANDS)
+    def test_identical_subjects_max_value(self):
+        """Two identical subjects → ISC = 1.0 (z-scored data)."""
+        rng = np.random.default_rng(13)
+        signal = rng.standard_normal((1, 4, 200))
+        from scipy.stats import zscore
+        signal = zscore(signal, axis=2)
+        # Stack the same signal for both subjects
+        data = np.concatenate([signal, signal], axis=0)
+        result = compute_pairwise_isc_matrices({"beta": data})
+        # Both diagonal and off-diagonal should be 1 (identical signals)
+        np.testing.assert_allclose(result["beta"][0, 0], 1.0, atol=1e-10)
+        np.testing.assert_allclose(result["beta"][0, 1], 1.0, atol=1e-10)
+
+    def test_all_bands_from_frequency_bands(self):
+        rng = np.random.default_rng(14)
+        n_subjects = 3
+        data = rng.standard_normal((n_subjects, 4, 100))
+        band_data = {band: data for band in FREQUENCY_BANDS}
+        result = compute_pairwise_isc_matrices(band_data)
         assert set(result.keys()) == set(FREQUENCY_BANDS.keys())
-
-    def test_per_band_shapes(self):
-        """Each band produces (n_windows, n_features) arrays and (n_windows,) times."""
-        rng = np.random.default_rng(6)
-        n_features = 5
-        data = rng.standard_normal((3, n_features, 300))
-        bands = {"delta": (1.0, 4.0), "alpha": (8.0, 13.0)}
-        result = self._simulate_band_sw_results(
-            data, bands, window_sec=0.5, step_sec=0.25, sfreq=100.0
-        )
-        for band, (mean_tc, var_tc, times) in result.items():
-            assert mean_tc.ndim == 2, f"mean_tc ndim wrong for {band}"
-            assert var_tc.ndim == 2, f"var_tc ndim wrong for {band}"
-            assert times.ndim == 1, f"times ndim wrong for {band}"
-            assert mean_tc.shape == var_tc.shape
-            assert mean_tc.shape[0] == times.shape[0]
-            assert mean_tc.shape[1] == n_features
-
-    def test_constant_data_per_band(self):
-        """Constant signal: every window, every band → mean=const, var=0."""
-        bands = {"theta": (4.0, 8.0), "gamma": (30.0, 70.0)}
-        data = np.full((2, 3, 200), 7.0)
-        result = self._simulate_band_sw_results(data, bands)
-        for band, (mean_tc, var_tc, _) in result.items():
-            np.testing.assert_allclose(
-                mean_tc, 7.0, err_msg=f"mean_tc wrong for {band}"
-            )
-            np.testing.assert_allclose(var_tc, 0.0, err_msg=f"var_tc wrong for {band}")
-
-    def test_consistent_times_across_bands(self):
-        """All bands computed from the same data → identical window_times."""
-        rng = np.random.default_rng(8)
-        data = rng.standard_normal((4, 6, 400))
-        bands = {"delta": (1.0, 4.0), "alpha": (8.0, 13.0), "beta": (13.0, 30.0)}
-        result = self._simulate_band_sw_results(
-            data, bands, window_sec=0.5, step_sec=0.25, sfreq=100.0
-        )
-        band_list = list(bands.keys())
-        times_ref = result[band_list[0]][2]
-        for band in band_list[1:]:
-            np.testing.assert_array_equal(
-                result[band][2], times_ref, err_msg=f"times differ for {band}"
-            )
+        for mat in result.values():
+            assert mat.shape == (n_subjects, n_subjects)
