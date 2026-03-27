@@ -1,17 +1,18 @@
 # EEG Analysis Package
 
 This package contains all analysis modules for the psilocybin-EEG dataset. It computes
-**Inter-Subject Correlation (ISC)** and related metrics from preprocessed, time-aligned EEG
-recordings and supports multiple data representations (raw channels, ICA activations, wavelet
-amplitudes, mean responses).
+**Inter-Subject Correlation (ISC)**, **intersubject mean-variance synchrony**, and related
+metrics from preprocessed, time-aligned EEG recordings, and supports multiple data
+representations (raw channels, ICA activations, wavelet amplitudes, mean responses).
 
 ## Module Overview
 
 | Module | Purpose |
 |--------|---------|
 | `data_representations.py` | `AnalysisData` container + adapters to convert raw EEG into wavelet, ICA, or mean-response representations |
-| `isc.py` | Pure ISC computation functions (leave-one-out, pairwise, sliding-window) and mean/variance helpers |
-| `summary.py` | `EEGSummarizedAnalyzer` — high-level orchestrator for loading data, running analyses, and persisting results |
+| `isc.py` | Pure ISC computation functions (leave-one-out, pairwise, sliding-window) and the `FREQUENCY_BANDS` constant |
+| `mean_variance.py` | Intersubject mean-variance synchrony analysis (notebook-based implementation) |
+| `summary.py` | `EEGSummarizedAnalyzer` — high-level orchestrator for loading data, running ISC analyses, and persisting results |
 
 ---
 
@@ -82,18 +83,52 @@ Pure functions — no side effects, no file I/O. All accept `data: np.ndarray` o
 | `compute_pairwise_isc_per_feature(data)` | Pairwise ISC kept per feature | `(n_items, n_items, n_features)` |
 | `compute_sliding_window_isc(data, window, step)` | LOO ISC in overlapping time windows | `(n_windows, n_items, n_features)` |
 
-### Mean/variance functions
-
-| Function | Description | Returns |
-|----------|-------------|---------|
-| `compute_mean_variance(data)` | Per-feature mean and variance across items | `(mean, variance)` each `(n_features,)` |
-| `compute_sliding_window_mean_variance(data, window, step)` | Mean/variance in overlapping windows | `(n_windows, n_features)` each |
-
 ### Frequency band constant
 
 ```python
 from src.analysis.isc import FREQUENCY_BANDS
 # {FrequencyBandNames.DELTA.value: (1.0, 4.0), ..., FrequencyBandNames.GAMMA.value: (30.0, 70.0)}
+```
+
+---
+
+## `mean_variance.py`
+
+Implements the intersubject mean-variance synchrony analysis demonstrated in
+`notebooks/01-raw-mean-variance-analysis/mean_variance_broadband.ipynb` and
+`notebooks/01-raw-mean-variance-analysis/mean_variance_bands.ipynb`.
+
+All functions work on z-scored data of shape `(n_subjects, n_channels, n_times)`.
+
+### Functions
+
+| Function | Description | Returns |
+|----------|-------------|---------|
+| `compute_intersubject_stats(data)` | Compute intersubject variance, mean, std, and per-subject channel-average | Dict with keys `inter_var`, `inter_mean`, `mean_t`, `var_t`, `std_t`, `mean_over_ch` |
+| `compute_windowed_stats(stats, n_times, sfreq, window_sec, sync_percentile)` | Non-overlapping windowed statistics with synchrony-candidate labelling | `pandas.DataFrame` with per-window statistics |
+| `compute_band_intersubject_stats(ad, bands)` | Apply `compute_intersubject_stats` to each frequency band after bandpass filtering | `{band_name: stats_dict}` |
+| `compute_pairwise_isc_matrices(band_data)` | Mean Pearson correlation matrix between every subject pair per band | `{band_name: (n_subjects, n_subjects) matrix}` |
+
+### Typical workflow
+
+```python
+from src.analysis.mean_variance import (
+    compute_intersubject_stats,
+    compute_windowed_stats,
+    compute_band_intersubject_stats,
+)
+
+# ad is an AnalysisData with z-scored data of shape (n_subjects, n_channels, n_times)
+stats = compute_intersubject_stats(ad.data)
+
+# Windowed analysis — 2-second windows, mark lowest-10% variance as sync candidates
+df_windows = compute_windowed_stats(
+    stats, n_times=ad.data.shape[2], sfreq=ad.sfreq,
+    window_sec=2.0, sync_percentile=10.0,
+)
+
+# Per-band stats
+band_stats = compute_band_intersubject_stats(ad)
 ```
 
 ---
@@ -143,15 +178,13 @@ analyzer.save_data(save_path)
 | `compute_sliding_window_isc(window, step)` | Sliding-window LOO ISC |
 | `compute_band_isc(band)` | Bandpass-filter then LOO ISC for a named frequency band |
 | `compute_band_sliding_window_isc(band, window, step)` | Sliding-window LOO ISC per band |
-| `compute_mean_variance()` | Per-channel mean and variance |
-| `compute_band_mean_variance(band)` | Mean/variance after bandpass filter |
 
 ---
 
 ## Adding a New Analysis
 
 1. **Sketch in a Jupyter notebook** — explore the data, prototype the computation, and validate results visually.
-2. Add the core computation as a **pure function** in `isc.py` (or a new module) — no file I/O, no side effects.
+2. Add the core computation as a **pure function** in `isc.py` (for ISC) or a new module — no file I/O, no side effects.
 3. Expose it through `EEGSummarizedAnalyzer` in `summary.py` if it needs data loading / persistence.
 4. Create a **CLI script** in `scripts/` and a corresponding **HPC job template** in `jobs/metacentrum/`.
 5. Write tests in `tests/test_<module>.py` targeting the pure function and the analyzer method.
@@ -163,7 +196,8 @@ This README is the authoritative reference for the analysis package. **When you 
 this package, update this file accordingly.** Specifically:
 
 - **New module added** → add a row to the Module Overview table and a dedicated section.
-- **New function in `isc.py`** → add a row to the relevant function table (ISC or mean/variance).
+- **New function in `isc.py`** → add a row to the ISC function table.
+- **New function in `mean_variance.py`** → add a row to the mean_variance function table.
 - **New method in `EEGSummarizedAnalyzer`** → add a row to the Key methods table and update the typical workflow if the usage pattern changes.
 - **New adapter in `data_representations.py`** → add a row to the Adapter functions table and update the `DataRepresentation` enum table if a new representation is introduced.
 - **Data shape convention changes** → update the shape table and any function signatures that reference it.
@@ -180,9 +214,14 @@ the same commit that changes the code — do not leave stale documentation behin
 # ISC analysis
 python scripts/run_analysis.py --analysis isc --condition Placebo --music_type CLASSIC
 
-# Mean/variance analysis
-python scripts/run_analysis.py --analysis mean_variance --condition Psilocybin --music_type PSYTRANCE
+# Mean-variance analysis (dedicated script)
+python scripts/run_mean_variance.py --condition Placebo --music_type CLASSIC PSYTRANCE
+
+# Mean-variance with custom window and sync percentile
+python scripts/run_mean_variance.py --condition Psilocybin --music_type PSYTRANCE \
+    --window_sec 3.0 --sync_percentile 10
 
 # Wavelet power analysis
-python scripts/run_analysis.py --analysis wavelet_power --wavelet_cache_dir data/processed/psilo_music/wavelets
+python scripts/run_analysis.py --analysis wavelet_power \
+    --wavelet_data_dir data/processed/psilo_music/wavelets
 ```
