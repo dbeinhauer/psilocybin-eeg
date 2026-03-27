@@ -99,7 +99,8 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         help=(
             "Which analyses to run. Defaults to isc. "
             "Use wavelet_power or wavelet_phase to run ISC on "
-            "wavelet-transformed data. For mean-variance analysis use "
+            "wavelet-transformed data. For ISC analysis use "
+            "scripts/run_isc.py. For mean-variance analysis use "
             "scripts/run_mean_variance.py."
         ),
     )

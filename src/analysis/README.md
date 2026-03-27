@@ -211,8 +211,12 @@ the same commit that changes the code — do not leave stale documentation behin
 ## Running the Analysis
 
 ```bash
-# ISC analysis
-python scripts/run_analysis.py --analysis isc --condition Placebo --music_type CLASSIC
+# ISC analysis (broadband + per-band, dedicated script)
+python scripts/run_isc.py --condition Placebo --music_type CLASSIC PSYTRANCE
+
+# ISC with custom window parameters
+python scripts/run_isc.py --condition Psilocybin --music_type CLASSIC \
+    --window_sec 10.0 --step_sec 5.0
 
 # Mean-variance analysis (dedicated script)
 python scripts/run_mean_variance.py --condition Placebo --music_type CLASSIC PSYTRANCE

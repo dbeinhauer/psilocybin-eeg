@@ -1,22 +1,22 @@
 """
-Unified script to run EEG analysis on preprocessed data.
+Unified script to run EEG wavelet analysis on preprocessed data.
 
-Supports **ISC** (Inter-Subject Correlation) and **wavelet** analyses.
-Select which analyses to run via the ``--analysis`` flag (defaults to ISC).
+Supports **wavelet** analyses (power and phase ISC).
+Select which analyses to run via the ``--analysis`` flag.
 
+For the ISC analysis use the dedicated script ``scripts/run_isc.py``.
 For the mean-variance analysis use the dedicated script
 ``scripts/run_mean_variance.py``.
 
 Usage examples::
 
-    # ISC analysis for all music types under Placebo
-    python scripts/run_analysis.py
-
-    # ISC only, single music type under Psilocybin
-    python scripts/run_analysis.py --condition Psilocybin --music_type CLASSIC
-
     # Wavelet power analysis
     python scripts/run_analysis.py --analysis wavelet_power \\
+        --wavelet_data_dir data/processed/psilo_music/wavelets
+
+    # Wavelet phase analysis, single music type
+    python scripts/run_analysis.py --analysis wavelet_phase \\
+        --condition Psilocybin --music_type CLASSIC \\
         --wavelet_data_dir data/processed/psilo_music/wavelets
 """
 
