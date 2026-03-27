@@ -222,7 +222,7 @@ FREQUENCY_BANDS = {
 6. Validate input data dimensions and types
 7. Return pandas DataFrame with proper metadata columns
 8. Create a CLI script in `scripts/` that exposes the analysis
-9. Add an HPC job template in `jobs/metacentrum/` for cluster execution
+9. Add an HPC job template in `jobs/metacentrum/NN-<kebab-case-analysis-name>/` (e.g. `jobs/metacentrum/01-raw-mean-variance-analysis/run_mean_variance.pbs`) matching the same numbered directory name used for notebooks
 10. Write tests in `tests/test_<module>.py`
 11. Run tests: `python -m pytest tests/test_<module>.py -v`
 
@@ -314,7 +314,8 @@ ruff format .
 ## HPC Execution
 
 For large-scale processing on the Metacentrum HPC cluster:
-- Job scripts in `jobs/metacentrum/`
+- Job scripts in `jobs/metacentrum/NN-<kebab-case-analysis-name>/` — use the **same numbered subdirectory name** as the corresponding notebooks directory (e.g. `jobs/metacentrum/01-raw-mean-variance-analysis/run_mean_variance.pbs`)
+- Legacy job scripts that predate this convention live directly in `jobs/metacentrum/` and should not be moved
 - Request appropriate resources (CPU, memory, GPU for ICA)
 - Use `--verbose` flags for detailed logging in HPC jobs
 - See `docs/hpc_guide.md` for resource requirements
