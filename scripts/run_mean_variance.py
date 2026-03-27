@@ -22,8 +22,8 @@ For each requested music type the script runs:
 
 All figures are saved under::
 
-    plots/MeanVarianceAnalysis/<condition>_<music_type>/raw/
-    plots/MeanVarianceAnalysis/<condition>_<music_type>/bands/
+    plots/01-raw-mean-variance-analysis/<condition>_<music_type>/raw/
+    plots/01-raw-mean-variance-analysis/<condition>_<music_type>/bands/
 
 Usage examples::
 
@@ -133,7 +133,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Root directory for output plots. "
-            "Defaults to plots/MeanVarianceAnalysis/."
+            "Defaults to plots/01-raw-mean-variance-analysis/."
         ),
     )
     parser.add_argument(
@@ -288,7 +288,7 @@ if __name__ == "__main__":
     save_root = (
         args.save_dir
         if args.save_dir is not None
-        else ProjectPaths.PLOTS_PATH / "MeanVarianceAnalysis"
+        else ProjectPaths.PLOTS_PATH / "01-raw-mean-variance-analysis"
     )
 
     _logger.info(

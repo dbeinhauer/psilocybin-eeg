@@ -62,13 +62,22 @@ notebooks/
 
 **Notebook structure (each notebook must follow this template):**
 1. **Title cell** (Markdown) — analysis name + scope + brief description of what is computed and visualised.
-2. **Setup cell** (code) — project-root resolver, imports from `src.*` and `scripts.*`; only import what is needed for this notebook's scope.
-3. **Configuration cell** (code) — all user-tunable parameters (condition, music types, window sizes, thresholds …) in one place.
+2. **Setup cell** (code) — project-root resolver (`_p`), `from pathlib import Path`, imports from `src.*` and `scripts.*`; only import what is needed for this notebook's scope.
+3. **Configuration cell** (code) — all user-tunable parameters (condition, music types, window sizes, thresholds …) in one place; also define `SAVE_PLOTS = True` and `PLOTS_DIR = Path(_p) / "notebooks" / "<notebook-dir>" / "plots" / "<scope>"`.
 4. **Data loading cell** (code) — load / process-and-save data via `load_analyzers` / `analyzers_to_datasets`.
 5. **Dataset selection cell** (code) — pick the active music-type label and derive dimension variables.
-6. **One cell per analysis step** — each step has a Markdown header explaining what is computed/plotted, followed by a single code cell that calls one `src.analysis.*` or `src.visualization.*` function and displays the result.
+6. **One cell per analysis step** — each step has a Markdown header explaining what is computed/plotted, followed by a single code cell that calls one `src.analysis.*` or `src.visualization.*` function and displays the result; pass `save_path=PLOTS_DIR / "filename.png" if SAVE_PLOTS else None` to each plot function.
 
 > When developing a new analysis, always create a new numbered subdirectory and at least one notebook following the structure above **before** writing production code in `src/`.
+
+### Plot Output Directories
+
+Plots are saved in two different locations depending on the context:
+
+- **Jupyter notebooks** — save figures to a `plots/` subdirectory *inside* the notebook's own directory. For example, notebooks under `notebooks/01-raw-mean-variance-analysis/` should save to `notebooks/01-raw-mean-variance-analysis/plots/`. Each notebook may organise plots into further subdirectories (e.g. `plots/broadband/`, `plots/bands/`).
+- **CLI scripts** — save figures to `plots/<notebook-directory-name>/`, where `<notebook-directory-name>` is the name of the corresponding numbered notebook subdirectory (e.g. `plots/01-raw-mean-variance-analysis/`). Within that root, scripts may use subdirectories such as `<condition>_<music_type>/raw/` and `<condition>_<music_type>/bands/`.
+
+This convention keeps all output organised in a consistent hierarchy and makes it easy to locate the figures that correspond to any given analysis.
 
 ## Directory Structure
 
@@ -202,14 +211,14 @@ FREQUENCY_BANDS = {
 1. **Create a numbered notebook subdirectory** — `notebooks/NN-<kebab-case-name>/` using the next available two-digit ID (e.g. `02-isc-analysis`).
 2. **Sketch in a Jupyter notebook** — follow the 6-cell template (title → setup → config → data loading → dataset selection → one cell per step); split into multiple notebooks if the analysis covers distinct sub-scopes.
 3. Create the implementation in the appropriate `src/analysis/` module
-3. Add comprehensive docstring with input/output specs; explain non-obvious logic
-4. Use type hints for all parameters and return values
-5. Validate input data dimensions and types
-6. Return pandas DataFrame with proper metadata columns
-7. Create a CLI script in `scripts/` that exposes the analysis
-8. Add an HPC job template in `jobs/metacentrum/` for cluster execution
-9. Write tests in `tests/test_<module>.py`
-10. Run tests: `python -m pytest tests/test_<module>.py -v`
+4. Add comprehensive docstring with input/output specs; explain non-obvious logic
+5. Use type hints for all parameters and return values
+6. Validate input data dimensions and types
+7. Return pandas DataFrame with proper metadata columns
+8. Create a CLI script in `scripts/` that exposes the analysis
+9. Add an HPC job template in `jobs/metacentrum/` for cluster execution
+10. Write tests in `tests/test_<module>.py`
+11. Run tests: `python -m pytest tests/test_<module>.py -v`
 
 ### Modifying Preprocessing Steps
 1. Edit the appropriate `src/preprocessing/` module
