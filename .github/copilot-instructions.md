@@ -62,11 +62,15 @@ notebooks/
 
 **Notebook structure (each notebook must follow this template):**
 1. **Title cell** (Markdown) — analysis name + scope + brief description of what is computed and visualised.
-2. **Setup cell** (code) — project-root resolver (`_p`), `from pathlib import Path`, imports from `src.*` and `scripts.*`; only import what is needed for this notebook's scope.
+2. **Setup cell** (code) — project-root resolver (`_p`), `from pathlib import Path`, imports from `src.*` and `scripts.*`; only import what is needed for this notebook's scope. **All imports must be placed here at the top level** — never import inside analysis cells.
 3. **Configuration cell** (code) — all user-tunable parameters (condition, music types, window sizes, thresholds …) in one place; also define `SAVE_PLOTS = True` and `PLOTS_DIR = ProjectPaths.NOTEBOOKS_DIR / "<notebook-dir>" / "plots" / "<scope>"` (import `ProjectPaths` in the setup cell).
 4. **Data loading cell** (code) — load / process-and-save data via `load_analyzers` / `analyzers_to_datasets`.
 5. **Dataset selection cell** (code) — pick the active music-type label and derive dimension variables.
 6. **One cell per analysis step** — each step has a Markdown header explaining what is computed/plotted, followed by a single code cell that calls one `src.analysis.*` or `src.visualization.*` function and displays the result; pass `save_path=PLOTS_DIR / "filename.png" if SAVE_PLOTS else None` to each plot function.
+
+**Notebook code style:**
+- All imports must be at the top level in the setup cell — never scatter imports across analysis cells.
+- Follow **Ruff** linting rules and **Black** formatting conventions in all notebook code cells (same as production code): use double quotes for strings, add trailing commas in multi-line collections, keep lines ≤ 88 characters, and avoid unused imports or variables.
 
 > When developing a new analysis, always create a new numbered subdirectory and at least one notebook following the structure above **before** writing production code in `src/`.
 
