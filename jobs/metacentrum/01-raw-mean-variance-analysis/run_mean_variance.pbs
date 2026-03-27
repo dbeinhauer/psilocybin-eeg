@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N PSILO_MEAN_VARIANCE
-#PBS -l walltime=4:00:00
+#PBS -l walltime=1:00:00
 #PBS -l select=1:ncpus=4:mem=60gb:scratch_local=60gb
 
 #PBS -m ae
