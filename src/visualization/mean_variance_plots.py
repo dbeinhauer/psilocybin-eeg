@@ -135,6 +135,7 @@ def plot_timeseries(
     plt.tight_layout()
     _save_fig(fig, save_path)
     plt.show()
+    plt.close(fig)
     return fig
 
 
