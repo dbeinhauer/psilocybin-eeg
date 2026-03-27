@@ -26,11 +26,11 @@ All figures are saved under::
 
 Usage examples::
 
-    # Placebo condition, both music types
+    # Placebo condition, both music types (default)
     python scripts/run_isc.py
 
-    # Psilocybin, classical only
-    python scripts/run_isc.py --condition Psilocybin --music_type CLASSIC
+    # Placebo, classical only
+    python scripts/run_isc.py --music_type CLASSIC
 
     # Custom window / step sizes
     python scripts/run_isc.py --window_sec 10.0 --step_sec 5.0

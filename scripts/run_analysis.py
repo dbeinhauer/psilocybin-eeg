@@ -10,13 +10,13 @@ For the mean-variance analysis use the dedicated script
 
 Usage examples::
 
-    # Wavelet power analysis
+    # Wavelet power analysis (Placebo condition)
     python scripts/run_analysis.py --analysis wavelet_power \\
         --wavelet_data_dir data/processed/psilo_music/wavelets
 
-    # Wavelet phase analysis, single music type
+    # Wavelet phase analysis, single music type (Placebo condition)
     python scripts/run_analysis.py --analysis wavelet_phase \\
-        --condition Psilocybin --music_type CLASSIC \\
+        --music_type CLASSIC \\
         --wavelet_data_dir data/processed/psilo_music/wavelets
 """
 
@@ -33,7 +33,6 @@ from scripts.analysis_common import (
     add_common_arguments,
     load_analyzers,
     analyzers_to_datasets,
-    run_isc_workflow,
     run_wavelet_workflow,
 )
 from src.definitions.fields import (
@@ -53,7 +52,7 @@ _logger = logging.getLogger(__name__)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description=("Run EEG analysis (ISC and/or wavelet) on preprocessed data."),
+        description=("Run EEG wavelet analysis on preprocessed data."),
     )
     add_common_arguments(parser)
 
@@ -78,7 +77,7 @@ if __name__ == "__main__":
         args.wavelet_freq_min, args.wavelet_freq_max, args.wavelet_n_freqs
     )
 
-    # ── Data loading (shared across analyses) ─────────────────────
+    # ── Data loading ──────────────────────────────────────────────
     analyzers = load_analyzers(
         music_types,
         condition,
@@ -87,23 +86,7 @@ if __name__ == "__main__":
         n_jobs=args.n_jobs,
         normalize_data=False,
     )
-    raw_datasets = (
-        analyzers_to_datasets(analyzers)
-        if run_wavelet or AnalysisVariants.ISC.value in analyses
-        else None
-    )
-
-    # ── ISC analysis ──────────────────────────────────────────────
-    if AnalysisVariants.ISC.value in analyses:
-        if raw_datasets is None:
-            raw_datasets = analyzers_to_datasets(analyzers)
-        run_isc_workflow(
-            raw_datasets,
-            save_dir=ProjectPaths.PLOTS_PATH / "OverallAnalysis",
-            isc_threshold=args.isc_threshold,
-            window_sec=WINDOW_SEC,
-            step_sec=STEP_SEC,
-        )
+    raw_datasets = analyzers_to_datasets(analyzers) if run_wavelet else None
 
     # ── Wavelet power analysis ────────────────────────────────────
     if run_wavelet_power:
