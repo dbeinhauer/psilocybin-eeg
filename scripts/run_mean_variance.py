@@ -314,9 +314,7 @@ if __name__ == "__main__":
             continue
 
         ad = datasets[label]
-        _logger.info(
-            f"Dataset [{label}]: shape={ad.data.shape}  sfreq={ad.sfreq} Hz"
-        )
+        _logger.info(f"Dataset [{label}]: shape={ad.data.shape}  sfreq={ad.sfreq} Hz")
 
         save_dir = save_root / f"{condition.value}_{label}"
 

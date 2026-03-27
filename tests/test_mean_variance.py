@@ -15,7 +15,6 @@ from src.analysis.mean_variance import (
     FREQUENCY_BANDS,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -284,7 +283,14 @@ class TestComputeBandIntersubjectStats:
         data = rng.standard_normal((2, 4, 80))
         ad = _StubAnalysisData(data)
         result = compute_band_intersubject_stats(ad, {"delta": (1.0, 4.0)})
-        expected_keys = {"inter_var", "inter_mean", "mean_t", "var_t", "std_t", "mean_over_ch"}
+        expected_keys = {
+            "inter_var",
+            "inter_mean",
+            "mean_t",
+            "var_t",
+            "std_t",
+            "mean_over_ch",
+        }
         assert set(result["delta"].keys()) == expected_keys
 
 
@@ -315,6 +321,7 @@ class TestComputePairwiseIscMatrices:
         data = rng.standard_normal((4, 8, 300))
         # z-score data so the mean-product equals Pearson r
         from scipy.stats import zscore
+
         data = zscore(data, axis=2)
         result = compute_pairwise_isc_matrices({"alpha": data})
         mat = result["alpha"]
@@ -325,6 +332,7 @@ class TestComputePairwiseIscMatrices:
         rng = np.random.default_rng(13)
         signal = rng.standard_normal((1, 4, 200))
         from scipy.stats import zscore
+
         signal = zscore(signal, axis=2)
         # Stack the same signal for both subjects
         data = np.concatenate([signal, signal], axis=0)

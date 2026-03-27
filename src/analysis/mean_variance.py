@@ -53,10 +53,10 @@ def compute_intersubject_stats(data: np.ndarray) -> dict[str, np.ndarray]:
             f"got shape {data.shape}."
         )
 
-    inter_var = data.var(axis=0)     # (n_channels, n_times)
-    inter_mean = data.mean(axis=0)   # (n_channels, n_times)
-    mean_t = inter_mean.mean(axis=0) # (n_times,)
-    var_t = inter_var.mean(axis=0)   # (n_times,)
+    inter_var = data.var(axis=0)  # (n_channels, n_times)
+    inter_mean = data.mean(axis=0)  # (n_channels, n_times)
+    mean_t = inter_mean.mean(axis=0)  # (n_times,)
+    var_t = inter_var.mean(axis=0)  # (n_times,)
 
     return {
         "inter_var": inter_var,

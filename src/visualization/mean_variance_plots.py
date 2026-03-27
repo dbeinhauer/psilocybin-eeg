@@ -293,12 +293,17 @@ def plot_windowed_analysis(
     bar_w = window_sec * 0.82
 
     # ── Figure 1: bar charts ─────────────────────────────────────
-    fig1, axes = plt.subplots(
-        2, 1, figsize=(max(14, n_windows * 0.18), 7), sharex=True
-    )
+    fig1, axes = plt.subplots(2, 1, figsize=(max(14, n_windows * 0.18), 7), sharex=True)
 
     ax = axes[0]
-    ax.bar(win_centers, win_mean_sig, width=bar_w, color=bar_colors_sig, alpha=0.85, edgecolor="none")
+    ax.bar(
+        win_centers,
+        win_mean_sig,
+        width=bar_w,
+        color=bar_colors_sig,
+        alpha=0.85,
+        edgecolor="none",
+    )
     ax.errorbar(
         win_centers,
         win_mean_sig,
@@ -319,7 +324,9 @@ def plot_windowed_analysis(
     )
     ax.set_ylabel("Mean signal (z-score)")
     ax.set_title(f"[{label}]  Per-window mean signal  (window = {window_sec:.1f} s)")
-    bar_patches = [Patch(color=c, alpha=0.85, label=lbl) for lbl, c in sig_palette.items()]
+    bar_patches = [
+        Patch(color=c, alpha=0.85, label=lbl) for lbl, c in sig_palette.items()
+    ]
     extra_h, extra_l = ax.get_legend_handles_labels()
     ax.legend(
         handles=bar_patches + extra_h,
@@ -329,7 +336,14 @@ def plot_windowed_analysis(
     )
 
     ax = axes[1]
-    ax.bar(win_centers, win_mean_var, width=bar_w, color=bar_colors_var, alpha=0.85, edgecolor="none")
+    ax.bar(
+        win_centers,
+        win_mean_var,
+        width=bar_w,
+        color=bar_colors_var,
+        alpha=0.85,
+        edgecolor="none",
+    )
     ax.axhline(
         sync_threshold,
         color=_C_GREEN,
@@ -347,7 +361,9 @@ def plot_windowed_analysis(
     ax.set_ylabel("Mean intersubject variance")
     ax.set_xlabel("Time (s)")
     ax.set_title("Per-window mean intersubject variance  |  green = sync candidates")
-    var_patches = [Patch(color=c, alpha=0.85, label=lbl) for lbl, c in var_palette.items()]
+    var_patches = [
+        Patch(color=c, alpha=0.85, label=lbl) for lbl, c in var_palette.items()
+    ]
     extra_h2, extra_l2 = ax.get_legend_handles_labels()
     ax.legend(
         handles=var_patches + extra_h2,
@@ -581,9 +597,7 @@ def plot_band_timeseries(
     n_subjects = next(iter(band_stats.values()))["mean_over_ch"].shape[0]
     time = np.arange(n_times) / sfreq
 
-    fig, axes = plt.subplots(
-        n_bands, 2, figsize=(16, 3.5 * n_bands), sharex=True
-    )
+    fig, axes = plt.subplots(n_bands, 2, figsize=(16, 3.5 * n_bands), sharex=True)
     if n_bands == 1:
         axes = np.array([axes])
 
@@ -832,9 +846,7 @@ def plot_isc_matrices(
         ax.set_xticklabels(subject_labels, fontsize=7, rotation=45, ha="right")
         ax.set_yticks(range(n_subjects))
         ax.set_yticklabels(subject_labels, fontsize=7)
-        ax.set_title(
-            f"{band.upper()}\n({l_freq:.0f}–{h_freq:.0f} Hz)", fontsize=9
-        )
+        ax.set_title(f"{band.upper()}\n({l_freq:.0f}–{h_freq:.0f} Hz)", fontsize=9)
         plt.colorbar(im, ax=ax, shrink=0.8, label="Mean ISC")
 
     fig.suptitle(
@@ -962,8 +974,21 @@ def plot_band_windowed_analysis(
         is_sync_win = df_w["sync_candidate"].values
 
         ax = axes_sum[row]
-        ax.step(time, win_var_step, where="post", color=c, linewidth=1.8, label=f"{band.upper()} windowed var")
-        ax.axhline(sync_thr, color=_C_GREEN, linestyle="--", linewidth=1.0, label=f"Sync thr — {sync_percentile}th pct")
+        ax.step(
+            time,
+            win_var_step,
+            where="post",
+            color=c,
+            linewidth=1.8,
+            label=f"{band.upper()} windowed var",
+        )
+        ax.axhline(
+            sync_thr,
+            color=_C_GREEN,
+            linestyle="--",
+            linewidth=1.0,
+            label=f"Sync thr — {sync_percentile}th pct",
+        )
         _first = True
         for w in np.where(is_sync_win)[0]:
             t_s = time[w * win_samples]

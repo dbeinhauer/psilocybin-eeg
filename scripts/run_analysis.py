@@ -53,9 +53,7 @@ _logger = logging.getLogger(__name__)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description=(
-            "Run EEG analysis (ISC and/or wavelet) on preprocessed data."
-        ),
+        description=("Run EEG analysis (ISC and/or wavelet) on preprocessed data."),
     )
     add_common_arguments(parser)
 
