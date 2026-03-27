@@ -1,7 +1,7 @@
 #!/bin/bash
-#PBS -N PSILO_ANALYSIS
-#PBS -l walltime=8:00:00
-#PBS -l select=1:ncpus=8:mem=100gb:scratch_local=100gb
+#PBS -N PSILO_MEAN_VARIANCE
+#PBS -l walltime=1:00:00
+#PBS -l select=1:ncpus=4:mem=60gb:scratch_local=60gb
 
 #PBS -m ae
 #PBS -j oe
@@ -40,10 +40,11 @@ cd "$SCRATCHDIR"
 cat << 'EOF' > run_inside.sh
 #!/bin/bash
 source /opt/myproject/.venv/bin/activate
-python /mnt/scripts/run_analysis.py \
---analysis isc \
+python /mnt/scripts/run_mean_variance.py \
 --condition Placebo \
 --music_type CLASSIC PSYTRANCE \
+--window_sec 2.0 \
+--sync_percentile 10 \
 --n_jobs -1
 EOF
 

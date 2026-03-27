@@ -41,6 +41,50 @@ The analysis workflow follows three principles:
 2. **Statistical plots in Seaborn** — use Seaborn for all statistical visualizations where possible; fall back to Matplotlib only for EEG topomaps and other domain-specific plots.
 3. **Reproducible production pipeline** — every analysis must have a structured CLI script (`scripts/`) and a corresponding HPC job template (`jobs/metacentrum/`) so it can be run on the cluster for large-scale processing.
 
+### Notebook Organisation
+
+All exploration notebooks live under `notebooks/` in numbered subdirectories:
+
+```
+notebooks/
+├── 01-raw-mean-variance-analysis/   # Mean-variance synchrony analysis
+│   ├── mean_variance_broadband.ipynb   # Part 1 — broadband (z-scored raw)
+│   └── mean_variance_bands.ipynb       # Part 2 — per-frequency-band
+├── 02-<analysis-name>/              # Next analysis (use next available 2-digit ID)
+│   └── ...
+└── ...                              # Legacy / unorganised notebooks (do not move)
+```
+
+**Naming rules:**
+- Subdirectory: `NN-<kebab-case-analysis-name>` where `NN` is a two-digit zero-padded integer starting at `01` (e.g. `01-raw-mean-variance-analysis`, `02-isc-analysis`).
+- Notebook files: descriptive `snake_case` names that reflect the scope (e.g. `mean_variance_broadband.ipynb`, `mean_variance_bands.ipynb`).
+- When a single analysis covers multiple distinct sub-scopes (e.g. broadband vs per-band), **split into separate notebooks** — one notebook per logical sub-scope.
+
+**Notebook structure (each notebook must follow this template):**
+1. **Setup cell** (code) — **must be the very first cell**. Contains the project-root resolver (`_p`) and **all** imports from `sys`, `os`, `pathlib`, third-party libraries (`numpy`, `matplotlib`, `seaborn`, `pandas`), `src.*`, and `scripts.*`. Imports that follow non-import code (e.g. the `sys.path.insert` resolver loop) must carry `# noqa: E402` so the CI linter passes. Only import what is needed for this notebook's scope. **Never import inside analysis cells.**
+2. **Title cell** (Markdown) — analysis name + scope + brief description of what is computed and visualised.
+3. **Configuration cell** (code) — all user-tunable parameters (condition, music types, window sizes, thresholds …) in one place; also define `SAVE_PLOTS = True` and `PLOTS_DIR = ProjectPaths.NOTEBOOKS_DIR / "<notebook-dir>" / "plots" / "<scope>"` (import `ProjectPaths` in the setup cell).
+4. **Data loading cell** (code) — load / process-and-save data via `load_analyzers` / `analyzers_to_datasets`.
+5. **Dataset selection cell** (code) — pick the active music-type label and derive dimension variables.
+6. **One cell per analysis step** — each step has a Markdown header explaining what is computed/plotted, followed by a single code cell that calls one `src.analysis.*` or `src.visualization.*` function and displays the result; pass `save_path=PLOTS_DIR / "filename.png" if SAVE_PLOTS else None` to each plot function.
+
+**Notebook code style:**
+- The setup cell must be the **first cell** in the notebook (cell index 0). The title/description markdown can come after it.
+- All imports must be at the top level in the setup cell — never scatter imports across analysis cells.
+- Imports that follow a `sys.path.insert` block in the setup cell must have `# noqa: E402` to satisfy Ruff's E402 rule.
+- Follow **Ruff** linting rules and **Black** formatting conventions in all notebook code cells (same as production code): use double quotes for strings, add trailing commas in multi-line collections, keep lines ≤ 88 characters, and avoid unused imports or variables.
+
+> When developing a new analysis, always create a new numbered subdirectory and at least one notebook following the structure above **before** writing production code in `src/`.
+
+### Plot Output Directories
+
+Plots are saved in two different locations depending on the context:
+
+- **Jupyter notebooks** — save figures to a `plots/` subdirectory *inside* the notebook's own directory. For example, notebooks under `notebooks/01-raw-mean-variance-analysis/` should save to `notebooks/01-raw-mean-variance-analysis/plots/`. Each notebook may organise plots into further subdirectories (e.g. `plots/broadband/`, `plots/bands/`).
+- **CLI scripts** — save figures to `plots/<notebook-directory-name>/`, where `<notebook-directory-name>` is the name of the corresponding numbered notebook subdirectory (e.g. `plots/01-raw-mean-variance-analysis/`). Within that root, scripts may use subdirectories such as `<condition>_<music_type>/raw/` and `<condition>_<music_type>/bands/`.
+
+This convention keeps all output organised in a consistent hierarchy and makes it easy to locate the figures that correspond to any given analysis.
+
 ## Directory Structure
 
 ```
@@ -59,7 +103,7 @@ psilocybin-eeg/
 │   ├── filtering/                 # Metadata filtering utilities
 │   └── utils/                     # Logging helpers
 ├── scripts/                       # CLI entry points
-├── notebooks/                     # Jupyter notebooks for exploration
+├── notebooks/                     # Jupyter notebooks for exploration (numbered subdirs: NN-<name>/)
 ├── tests/                         # pytest test suite
 ├── jobs/                          # HPC job scripts (Metacentrum)
 └── docs/                          # Extended documentation
@@ -170,16 +214,17 @@ FREQUENCY_BANDS = {
 ## Common Workflows
 
 ### Adding a New Analysis
-1. **Sketch in a Jupyter notebook** — explore the data, prototype the computation, and validate results visually
-2. Create the implementation in the appropriate `src/analysis/` module
-3. Add comprehensive docstring with input/output specs; explain non-obvious logic
-4. Use type hints for all parameters and return values
-5. Validate input data dimensions and types
-6. Return pandas DataFrame with proper metadata columns
-7. Create a CLI script in `scripts/` that exposes the analysis
-8. Add an HPC job template in `jobs/metacentrum/` for cluster execution
-9. Write tests in `tests/test_<module>.py`
-10. Run tests: `python -m pytest tests/test_<module>.py -v`
+1. **Create a numbered notebook subdirectory** — `notebooks/NN-<kebab-case-name>/` using the next available two-digit ID (e.g. `02-isc-analysis`).
+2. **Sketch in a Jupyter notebook** — follow the 6-cell template (title → setup → config → data loading → dataset selection → one cell per step); split into multiple notebooks if the analysis covers distinct sub-scopes.
+3. Create the implementation in the appropriate `src/analysis/` module
+4. Add comprehensive docstring with input/output specs; explain non-obvious logic
+5. Use type hints for all parameters and return values
+6. Validate input data dimensions and types
+7. Return pandas DataFrame with proper metadata columns
+8. Create a CLI script in `scripts/` that exposes the analysis
+9. Add an HPC job template in `jobs/metacentrum/NN-<kebab-case-analysis-name>/` (e.g. `jobs/metacentrum/01-raw-mean-variance-analysis/run_mean_variance.pbs`) matching the same numbered directory name used for notebooks
+10. Write tests in `tests/test_<module>.py`
+11. Run tests: `python -m pytest tests/test_<module>.py -v`
 
 ### Modifying Preprocessing Steps
 1. Edit the appropriate `src/preprocessing/` module
@@ -226,7 +271,7 @@ python scripts/run_analysis.py --analysis wavelet_power --wavelet_cache_dir data
 ✓ Preserve metadata through all pipeline stages
 ✓ Validate input data dimensions early
 ✓ Return pandas DataFrames from analysis functions
-✓ Sketch new analyses in a Jupyter notebook before implementing them
+✓ Sketch new analyses in a Jupyter notebook before implementing them (use the numbered subdirectory structure in `notebooks/`)
 ✓ Run linter and tests before committing (`ruff check .`, `pytest tests/ -v`)
 ✓ **Keep documentation in sync with code** — update `src/analysis/README.md`, `src/preprocessing/README.md`, `docs/preprocessing_steps.md`, and this file whenever you add, rename, or remove modules, functions, classes, or CLI flags
 
@@ -269,7 +314,8 @@ ruff format .
 ## HPC Execution
 
 For large-scale processing on the Metacentrum HPC cluster:
-- Job scripts in `jobs/metacentrum/`
+- Job scripts in `jobs/metacentrum/NN-<kebab-case-analysis-name>/` — use the **same numbered subdirectory name** as the corresponding notebooks directory (e.g. `jobs/metacentrum/01-raw-mean-variance-analysis/run_mean_variance.pbs`)
+- Legacy job scripts that predate this convention live directly in `jobs/metacentrum/` and should not be moved
 - Request appropriate resources (CPU, memory, GPU for ICA)
 - Use `--verbose` flags for detailed logging in HPC jobs
 - See `docs/hpc_guide.md` for resource requirements
