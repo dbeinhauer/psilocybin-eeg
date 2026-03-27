@@ -60,6 +60,9 @@ from scripts.analysis_common import (  # noqa: E402
 from src.analysis.isc import (  # noqa: E402
     FREQUENCY_BANDS,
     compute_loo_isc,
+    compute_mean_field_loo_isc,
+    compute_mean_field_pairwise_isc,
+    compute_mean_field_sliding_window_isc,
     compute_sliding_window_isc,
 )
 from src.definitions.constants import ProjectPaths  # noqa: E402
@@ -74,6 +77,9 @@ from src.visualization.isc_plots import (  # noqa: E402
     plot_band_overlap,
     plot_band_sliding_window_isc,
     plot_loo_isc_distribution,
+    plot_mean_field_loo_isc,
+    plot_mean_field_pairwise_isc,
+    plot_mean_field_vs_channel_avg_isc,
     plot_sliding_window_isc,
     print_band_significant_intervals,
     print_data_overview,
@@ -274,6 +280,59 @@ def _run_band_analysis(
     )
 
 
+def _run_mean_field_analysis(
+    ad: "AnalysisData",  # noqa: F821
+    label: str,
+    save_dir: Path,
+    isc_threshold: float,
+    window_sec: float,
+) -> None:
+    """Run mean-field ISC analysis (non-overlapping windows) for one dataset."""
+    mf_dir = save_dir / "mean_field"
+    mf_dir.mkdir(parents=True, exist_ok=True)
+
+    # LOO-ISC
+    _logger.info(f"[{label}] Computing mean-field LOO-ISC …")
+    loo_mf_pearson, loo_mf_spearman = compute_mean_field_loo_isc(ad.data)
+    _logger.info(
+        f"[{label}]  Pearson mean={loo_mf_pearson.mean():.4f}  "
+        f"Spearman mean={loo_mf_spearman.mean():.4f}"
+    )
+    plot_mean_field_loo_isc(
+        {label: loo_mf_pearson},
+        {label: loo_mf_spearman},
+        save_path=mf_dir / "mean_field_loo_isc.png",
+    )
+
+    # Pairwise ISC
+    _logger.info(f"[{label}] Computing mean-field pairwise ISC …")
+    pair_mf = compute_mean_field_pairwise_isc(ad.data)
+    plot_mean_field_pairwise_isc(
+        {label: pair_mf},
+        save_path=mf_dir / "mean_field_pairwise_isc.png",
+    )
+
+    # Sliding-window ISC (non-overlapping, step=window)
+    _logger.info(f"[{label}] Computing mean-field sliding-window ISC …")
+    isc_mf_tc, _ = compute_mean_field_sliding_window_isc(
+        ad.data, window_sec, window_sec, ad.sfreq
+    )
+
+    # Channel-average non-overlapping ISC for comparison
+    sw_isc_ca, _ = compute_sliding_window_isc(
+        ad.data, window_sec, window_sec, ad.sfreq
+    )
+    channel_avg_tc = sw_isc_ca.mean(axis=1)
+
+    plot_mean_field_vs_channel_avg_isc(
+        {label: isc_mf_tc},
+        {label: channel_avg_tc},
+        isc_threshold=isc_threshold,
+        window_sec=window_sec,
+        save_path=mf_dir / "mean_field_vs_channel_avg_isc.png",
+    )
+
+
 if __name__ == "__main__":
     parser = _build_arg_parser()
     args = parser.parse_args()
@@ -338,6 +397,14 @@ if __name__ == "__main__":
             isc_threshold=args.isc_threshold,
             window_sec=args.window_sec,
             step_sec=args.step_sec,
+        )
+
+        _run_mean_field_analysis(
+            ad,
+            label=label,
+            save_dir=save_dir,
+            isc_threshold=args.isc_threshold,
+            window_sec=args.window_sec,
         )
 
     _logger.info("ISC analysis complete.")
