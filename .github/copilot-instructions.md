@@ -63,7 +63,7 @@ notebooks/
 **Notebook structure (each notebook must follow this template):**
 1. **Title cell** (Markdown) — analysis name + scope + brief description of what is computed and visualised.
 2. **Setup cell** (code) — project-root resolver (`_p`), `from pathlib import Path`, imports from `src.*` and `scripts.*`; only import what is needed for this notebook's scope.
-3. **Configuration cell** (code) — all user-tunable parameters (condition, music types, window sizes, thresholds …) in one place; also define `SAVE_PLOTS = True` and `PLOTS_DIR = Path(_p) / "notebooks" / "<notebook-dir>" / "plots" / "<scope>"`.
+3. **Configuration cell** (code) — all user-tunable parameters (condition, music types, window sizes, thresholds …) in one place; also define `SAVE_PLOTS = True` and `PLOTS_DIR = ProjectPaths.NOTEBOOKS_DIR / "<notebook-dir>" / "plots" / "<scope>"` (import `ProjectPaths` in the setup cell).
 4. **Data loading cell** (code) — load / process-and-save data via `load_analyzers` / `analyzers_to_datasets`.
 5. **Dataset selection cell** (code) — pick the active music-type label and derive dimension variables.
 6. **One cell per analysis step** — each step has a Markdown header explaining what is computed/plotted, followed by a single code cell that calls one `src.analysis.*` or `src.visualization.*` function and displays the result; pass `save_path=PLOTS_DIR / "filename.png" if SAVE_PLOTS else None` to each plot function.
