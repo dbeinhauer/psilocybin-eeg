@@ -95,7 +95,8 @@ from src.analysis.isc import FREQUENCY_BANDS
 ## `mean_variance.py`
 
 Implements the intersubject mean-variance synchrony analysis demonstrated in
-`notebooks/mean_variance_raw.ipynb` and `notebooks/mean_variance_bands.ipynb`.
+`notebooks/01-raw-mean-variance-analysis/mean_variance_broadband.ipynb` and
+`notebooks/01-raw-mean-variance-analysis/mean_variance_bands.ipynb`.
 
 All functions work on z-scored data of shape `(n_subjects, n_channels, n_times)`.
 

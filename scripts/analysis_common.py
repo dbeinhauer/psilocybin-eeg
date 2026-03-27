@@ -91,7 +91,11 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         type=str,
         nargs="+",
         default=[AnalysisVariants.ISC.value],
-        choices=[analysis.value for analysis in AnalysisVariants],
+        choices=[
+            analysis.value
+            for analysis in AnalysisVariants
+            if analysis != AnalysisVariants.MEAN_VARIANCE
+        ],
         help=(
             "Which analyses to run. Defaults to isc. "
             "Use wavelet_power or wavelet_phase to run ISC on "

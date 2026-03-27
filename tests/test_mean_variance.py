@@ -183,6 +183,13 @@ class TestComputeWindowedStats:
         with pytest.raises(ValueError, match="samples"):
             compute_windowed_stats(stats, n_times=100, sfreq=1.0, window_sec=0.001)
 
+    def test_raises_when_window_longer_than_recording(self, simple_data):
+        """window_sec longer than recording duration must raise ValueError."""
+        stats = self._make_stats(simple_data)
+        with pytest.raises(ValueError, match="longer than"):
+            # 100 samples at 100 Hz = 1 s recording; window of 5 s is too long
+            compute_windowed_stats(stats, n_times=100, sfreq=100.0, window_sec=5.0)
+
     def test_window_indices_non_overlapping(self, simple_data):
         """t_start and t_end should tile the recording without gaps."""
         stats = self._make_stats(simple_data)
@@ -213,43 +220,72 @@ class TestComputeWindowedStats:
 # ---------------------------------------------------------------------------
 
 
-class TestComputeBandIntersubjectStats:
-    """Tests apply compute_intersubject_stats to pre-constructed band arrays
-    to mirror the logic inside compute_band_intersubject_stats without
-    requiring an MNE filter call (which needs mne installed).
-    """
+class _StubFilteredData:
+    """Minimal stub that mimics AnalysisData.filter_to_band() return value."""
 
-    def _simulate_band_stats(
-        self,
-        data: np.ndarray,
-        bands: dict,
-    ) -> dict[str, dict[str, np.ndarray]]:
-        """Apply compute_intersubject_stats to the same data for each band."""
-        return {band: compute_intersubject_stats(data) for band in bands}
+    def __init__(self, data: np.ndarray) -> None:
+        self.data = data
+
+
+class _StubAnalysisData:
+    """Stub AnalysisData object whose filter_to_band ignores frequency arguments."""
+
+    def __init__(self, data: np.ndarray) -> None:
+        self._data = data
+
+    def filter_to_band(self, l_freq: float, h_freq: float) -> _StubFilteredData:  # noqa: ARG002
+        return _StubFilteredData(self._data)
+
+
+class TestComputeBandIntersubjectStats:
+    """Tests for compute_band_intersubject_stats using a lightweight stub that
+    avoids real MNE bandpass filtering.
+    """
 
     def test_all_bands_present(self):
         rng = np.random.default_rng(0)
         data = rng.standard_normal((4, 8, 200))
-        result = self._simulate_band_stats(data, FREQUENCY_BANDS)
+        ad = _StubAnalysisData(data)
+        result = compute_band_intersubject_stats(ad, FREQUENCY_BANDS)
         assert set(result.keys()) == set(FREQUENCY_BANDS.keys())
 
     def test_per_band_shapes(self):
         rng = np.random.default_rng(1)
-        n_channels, n_times = 6, 150
-        data = rng.standard_normal((3, n_channels, n_times))
+        n_subjects, n_channels, n_times = 3, 6, 150
+        data = rng.standard_normal((n_subjects, n_channels, n_times))
         bands = {"delta": (1.0, 4.0), "alpha": (8.0, 13.0)}
-        result = self._simulate_band_stats(data, bands)
+        ad = _StubAnalysisData(data)
+        result = compute_band_intersubject_stats(ad, bands)
         for band, stats in result.items():
             assert stats["inter_var"].shape == (n_channels, n_times), band
             assert stats["var_t"].shape == (n_times,), band
-            assert stats["mean_over_ch"].shape == (3, n_times), band
+            assert stats["mean_over_ch"].shape == (n_subjects, n_times), band
 
     def test_constant_data_zero_variance(self):
         bands = {"theta": (4.0, 8.0), "beta": (13.0, 30.0)}
         data = np.full((2, 4, 100), 3.0)
-        result = self._simulate_band_stats(data, bands)
+        ad = _StubAnalysisData(data)
+        result = compute_band_intersubject_stats(ad, bands)
         for band, stats in result.items():
-            np.testing.assert_allclose(stats["var_t"], 0.0, err_msg=f"var_t non-zero for {band}")
+            np.testing.assert_allclose(
+                stats["var_t"], 0.0, err_msg=f"var_t non-zero for {band}"
+            )
+
+    def test_default_bands_used_when_none(self):
+        """When bands=None, the function should use FREQUENCY_BANDS."""
+        rng = np.random.default_rng(2)
+        data = rng.standard_normal((3, 4, 100))
+        ad = _StubAnalysisData(data)
+        result = compute_band_intersubject_stats(ad, None)
+        assert set(result.keys()) == set(FREQUENCY_BANDS.keys())
+
+    def test_stats_dict_keys(self):
+        rng = np.random.default_rng(3)
+        data = rng.standard_normal((2, 4, 80))
+        ad = _StubAnalysisData(data)
+        result = compute_band_intersubject_stats(ad, {"delta": (1.0, 4.0)})
+        expected_keys = {"inter_var", "inter_mean", "mean_t", "var_t", "std_t", "mean_over_ch"}
+        assert set(result["delta"].keys()) == expected_keys
 
 
 # ---------------------------------------------------------------------------

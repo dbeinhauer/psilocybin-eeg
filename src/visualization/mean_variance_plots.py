@@ -212,12 +212,8 @@ def plot_variance_distribution(
     fig.tight_layout()
     _save_fig(fig, save_path)
     plt.show()
+    plt.close(fig)
     return fig
-
-
-# ---------------------------------------------------------------------------
-# Raw notebook — Section 4: windowed analysis (bar + overlay)
-# ---------------------------------------------------------------------------
 
 
 def plot_windowed_analysis(
@@ -364,6 +360,7 @@ def plot_windowed_analysis(
     fig1.tight_layout()
     _save_fig(fig1, save_path_bar)
     plt.show()
+    plt.close(fig1)
 
     # ── Figure 2: continuous overlay + heatmap ──────────────────
     ds = max(1, n_times // 8000)
@@ -535,6 +532,7 @@ def plot_windowed_analysis(
     fig2.tight_layout()
     _save_fig(fig2, save_path_overlay)
     plt.show()
+    plt.close(fig2)
 
     return fig1, fig2
 
@@ -669,6 +667,7 @@ def plot_band_timeseries(
     fig.tight_layout()
     _save_fig(fig, save_path)
     plt.show()
+    plt.close(fig)
     return fig
 
 
@@ -777,6 +776,7 @@ def plot_band_variance_distributions(
     fig.tight_layout()
     _save_fig(fig, save_path)
     plt.show()
+    plt.close(fig)
     return fig
 
 
@@ -845,6 +845,7 @@ def plot_isc_matrices(
     fig.tight_layout()
     _save_fig(fig, save_path)
     plt.show()
+    plt.close(fig)
     return fig
 
 
@@ -901,7 +902,18 @@ def plot_band_windowed_analysis(
     time = np.arange(n_times) / sfreq
 
     win_samples = int(window_sec * sfreq)
+    if win_samples < 1:
+        raise ValueError(
+            f"window_sec={window_sec} is too small for sfreq={sfreq}. "
+            "The resulting window length in samples must be at least 1."
+        )
     n_windows = n_times // win_samples
+    if n_windows < 1:
+        total_duration = n_times / sfreq
+        raise ValueError(
+            f"window_sec={window_sec} is longer than the total recording "
+            f"duration ({total_duration:.3f} seconds). Choose a shorter window."
+        )
 
     # Pre-compute windowed stats for each band
     band_win_stats: dict[str, dict] = {}
@@ -978,6 +990,7 @@ def plot_band_windowed_analysis(
     fig_sum.tight_layout()
     _save_fig(fig_sum, save_path_summary)
     plt.show()
+    plt.close(fig_sum)
 
     # ── Per-band detailed figures ─────────────────────────────────────
     per_band_figs: list[Figure] = []
@@ -1100,6 +1113,7 @@ def plot_band_windowed_analysis(
             save_path_per_band_dir = Path(save_path_per_band_dir)
             _save_fig(fig_b, save_path_per_band_dir / f"{band}.png")
         plt.show()
+        plt.close(fig_b)
         per_band_figs.append(fig_b)
 
     return fig_sum, per_band_figs

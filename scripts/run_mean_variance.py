@@ -2,8 +2,8 @@
 Standalone script to run the intersubject mean-variance analysis.
 
 Implements the production version of the workflows demonstrated in
-``notebooks/mean_variance_raw.ipynb`` and
-``notebooks/mean_variance_bands.ipynb``.
+``notebooks/01-raw-mean-variance-analysis/mean_variance_broadband.ipynb`` and
+``notebooks/01-raw-mean-variance-analysis/mean_variance_bands.ipynb``.
 
 For each requested music type the script runs:
 

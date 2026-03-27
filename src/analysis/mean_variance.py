@@ -7,7 +7,8 @@ per-band equivalents.  All functions operate on 3D NumPy arrays of shape
 ``(n_subjects, n_channels, n_times)``.
 
 This module implements the analysis demonstrated in
-``notebooks/mean_variance_raw.ipynb`` and ``notebooks/mean_variance_bands.ipynb``.
+``notebooks/01-raw-mean-variance-analysis/mean_variance_broadband.ipynb`` and
+``notebooks/01-raw-mean-variance-analysis/mean_variance_bands.ipynb``.
 """
 
 from __future__ import annotations
@@ -91,7 +92,8 @@ def compute_windowed_stats(
     :return: :class:`pandas.DataFrame` with columns ``window``, ``center``,
         ``t_start``, ``t_end``, ``mean_signal``, ``var_signal``,
         ``mean_variance``, ``sync_candidate``.
-    :raises ValueError: If *window_sec* produces zero samples.
+    :raises ValueError: If *window_sec* produces zero samples or if the window
+        is longer than the total recording.
     """
     var_t = stats["var_t"]
     mean_over_ch = stats["mean_over_ch"]
@@ -104,6 +106,12 @@ def compute_windowed_stats(
             f"{win_samples} samples — must be at least 1."
         )
     n_windows = n_times // win_samples
+    if n_windows < 1:
+        total_duration = n_times / sfreq
+        raise ValueError(
+            f"window_sec={window_sec} is longer than the total recording "
+            f"duration ({total_duration:.3f} seconds). Choose a shorter window."
+        )
     sync_threshold = np.percentile(var_t, sync_percentile)
 
     records = []
@@ -176,7 +184,9 @@ def compute_pairwise_isc_matrices(
         n_subjects = data.shape[0]
         mat = np.zeros((n_subjects, n_subjects))
         for i in range(n_subjects):
-            for j in range(n_subjects):
-                mat[i, j] = float(np.mean((data[i] * data[j]).mean(axis=1)))
+            for j in range(i, n_subjects):
+                val = float(np.mean((data[i] * data[j]).mean(axis=1)))
+                mat[i, j] = val
+                mat[j, i] = val
         results[band] = mat
     return results
