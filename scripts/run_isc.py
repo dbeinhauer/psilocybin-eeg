@@ -166,8 +166,7 @@ def _run_broadband_analysis(
     _logger.info(f"[{label}] Computing broadband LOO-ISC …")
     loo_isc, mean_loo_isc = compute_loo_isc(ad.data)
     _logger.info(
-        f"[{label}]  loo_isc: {loo_isc.shape}  "
-        f"mean_loo_isc: {mean_loo_isc.mean():.4f}"
+        f"[{label}]  loo_isc: {loo_isc.shape}  mean_loo_isc: {mean_loo_isc.mean():.4f}"
     )
     plot_loo_isc_distribution(
         {label: mean_loo_isc},
@@ -183,9 +182,7 @@ def _run_broadband_analysis(
         step_sec=step_sec,
         sfreq=ad.sfreq,
     )
-    _logger.info(
-        f"[{label}]  sw_isc: {sw_isc.shape}  sw_times: {sw_times.shape}"
-    )
+    _logger.info(f"[{label}]  sw_isc: {sw_isc.shape}  sw_times: {sw_times.shape}")
     plot_sliding_window_isc(
         {label: (sw_isc, sw_times)},
         isc_threshold=isc_threshold,
@@ -217,9 +214,7 @@ def _run_band_analysis(
         filtered = ad.filter_to_band(l_freq, h_freq)
         loo, mean_isc = compute_loo_isc(filtered.data)
         band_iscs[band] = (loo, mean_isc)
-        _logger.info(
-            f"  {band:6s}  loo_isc={loo.shape}  mean={mean_isc.mean():.4f}"
-        )
+        _logger.info(f"  {band:6s}  loo_isc={loo.shape}  mean={mean_isc.mean():.4f}")
 
     plot_band_isc_distributions(
         {label: band_iscs},
