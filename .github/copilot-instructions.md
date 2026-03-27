@@ -41,6 +41,35 @@ The analysis workflow follows three principles:
 2. **Statistical plots in Seaborn** — use Seaborn for all statistical visualizations where possible; fall back to Matplotlib only for EEG topomaps and other domain-specific plots.
 3. **Reproducible production pipeline** — every analysis must have a structured CLI script (`scripts/`) and a corresponding HPC job template (`jobs/metacentrum/`) so it can be run on the cluster for large-scale processing.
 
+### Notebook Organisation
+
+All exploration notebooks live under `notebooks/` in numbered subdirectories:
+
+```
+notebooks/
+├── 01-raw-mean-variance-analysis/   # Mean-variance synchrony analysis
+│   ├── mean_variance_broadband.ipynb   # Part 1 — broadband (z-scored raw)
+│   └── mean_variance_bands.ipynb       # Part 2 — per-frequency-band
+├── 02-<analysis-name>/              # Next analysis (use next available 2-digit ID)
+│   └── ...
+└── ...                              # Legacy / unorganised notebooks (do not move)
+```
+
+**Naming rules:**
+- Subdirectory: `NN-<kebab-case-analysis-name>` where `NN` is a two-digit zero-padded integer starting at `01` (e.g. `01-raw-mean-variance-analysis`, `02-isc-analysis`).
+- Notebook files: descriptive `snake_case` names that reflect the scope (e.g. `mean_variance_broadband.ipynb`, `mean_variance_bands.ipynb`).
+- When a single analysis covers multiple distinct sub-scopes (e.g. broadband vs per-band), **split into separate notebooks** — one notebook per logical sub-scope.
+
+**Notebook structure (each notebook must follow this template):**
+1. **Title cell** (Markdown) — analysis name + scope + brief description of what is computed and visualised.
+2. **Setup cell** (code) — project-root resolver, imports from `src.*` and `scripts.*`; only import what is needed for this notebook's scope.
+3. **Configuration cell** (code) — all user-tunable parameters (condition, music types, window sizes, thresholds …) in one place.
+4. **Data loading cell** (code) — load / process-and-save data via `load_analyzers` / `analyzers_to_datasets`.
+5. **Dataset selection cell** (code) — pick the active music-type label and derive dimension variables.
+6. **One cell per analysis step** — each step has a Markdown header explaining what is computed/plotted, followed by a single code cell that calls one `src.analysis.*` or `src.visualization.*` function and displays the result.
+
+> When developing a new analysis, always create a new numbered subdirectory and at least one notebook following the structure above **before** writing production code in `src/`.
+
 ## Directory Structure
 
 ```
@@ -59,7 +88,7 @@ psilocybin-eeg/
 │   ├── filtering/                 # Metadata filtering utilities
 │   └── utils/                     # Logging helpers
 ├── scripts/                       # CLI entry points
-├── notebooks/                     # Jupyter notebooks for exploration
+├── notebooks/                     # Jupyter notebooks for exploration (numbered subdirs: NN-<name>/)
 ├── tests/                         # pytest test suite
 ├── jobs/                          # HPC job scripts (Metacentrum)
 └── docs/                          # Extended documentation
@@ -170,8 +199,9 @@ FREQUENCY_BANDS = {
 ## Common Workflows
 
 ### Adding a New Analysis
-1. **Sketch in a Jupyter notebook** — explore the data, prototype the computation, and validate results visually
-2. Create the implementation in the appropriate `src/analysis/` module
+1. **Create a numbered notebook subdirectory** — `notebooks/NN-<kebab-case-name>/` using the next available two-digit ID (e.g. `02-isc-analysis`).
+2. **Sketch in a Jupyter notebook** — follow the 6-cell template (title → setup → config → data loading → dataset selection → one cell per step); split into multiple notebooks if the analysis covers distinct sub-scopes.
+3. Create the implementation in the appropriate `src/analysis/` module
 3. Add comprehensive docstring with input/output specs; explain non-obvious logic
 4. Use type hints for all parameters and return values
 5. Validate input data dimensions and types
@@ -226,7 +256,7 @@ python scripts/run_analysis.py --analysis wavelet_power --wavelet_cache_dir data
 ✓ Preserve metadata through all pipeline stages
 ✓ Validate input data dimensions early
 ✓ Return pandas DataFrames from analysis functions
-✓ Sketch new analyses in a Jupyter notebook before implementing them
+✓ Sketch new analyses in a Jupyter notebook before implementing them (use the numbered subdirectory structure in `notebooks/`)
 ✓ Run linter and tests before committing (`ruff check .`, `pytest tests/ -v`)
 ✓ **Keep documentation in sync with code** — update `src/analysis/README.md`, `src/preprocessing/README.md`, `docs/preprocessing_steps.md`, and this file whenever you add, rename, or remove modules, functions, classes, or CLI flags
 
