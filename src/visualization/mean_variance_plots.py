@@ -1,9 +1,10 @@
 """
 Visualisation functions for the intersubject mean-variance analysis.
 
-Each function mirrors a section from ``notebooks/mean_variance_raw.ipynb``
-or ``notebooks/mean_variance_bands.ipynb`` and produces publication-ready
-Matplotlib/Seaborn figures.
+Each function mirrors a section from
+``notebooks/01-raw-mean-variance-analysis/mean_variance_broadband.ipynb``
+or ``notebooks/01-raw-mean-variance-analysis/mean_variance_bands.ipynb``
+and produces publication-ready Matplotlib/Seaborn figures.
 
 All functions accept an optional *save_path*; when provided the figure is
 saved before being displayed.
