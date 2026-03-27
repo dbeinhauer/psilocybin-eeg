@@ -6,14 +6,17 @@ All ISC functions operate on 3D numpy arrays: (n_items, n_features, n_samples).
 
 import pytest
 import numpy as np
-from scipy.stats import pearsonr
+from scipy.stats import pearsonr, spearmanr
 
 from src.analysis.isc import (
     FREQUENCY_BANDS,
     compute_loo_isc,
+    compute_loo_isc_spearman,
     compute_pairwise_isc,
     compute_pairwise_isc_per_feature,
+    compute_pairwise_isc_spearman,
     compute_sliding_window_isc,
+    compute_sliding_window_isc_spearman,
 )
 
 
@@ -159,3 +162,109 @@ class TestComputeSlidingWindowISC:
             data, window_sec=0.5, step_sec=0.25, sfreq=100.0
         )
         np.testing.assert_allclose(isc_tc, 1.0, atol=1e-10)
+
+
+class TestComputeLooISCSpearman:
+    """Test leave-one-out ISC using Spearman correlation."""
+
+    def test_output_shapes(self):
+        rng = np.random.default_rng(20)
+        data = rng.normal(size=(4, 3, 100))
+        loo_isc, mean_isc = compute_loo_isc_spearman(data)
+        assert loo_isc.shape == (4, 3)
+        assert mean_isc.shape == (3,)
+
+    def test_identical_items_perfect_correlation(self):
+        """Identical items should yield Spearman ISC ~1.0."""
+        rng = np.random.default_rng(21)
+        signal = rng.normal(size=(1, 2, 100))
+        data = np.repeat(signal, 5, axis=0)
+        loo_isc, mean_isc = compute_loo_isc_spearman(data)
+        np.testing.assert_allclose(mean_isc, 1.0, atol=1e-10)
+
+    def test_two_items_matches_spearmanr(self):
+        """With two items, LOO-ISC should equal pairwise spearmanr."""
+        rng = np.random.default_rng(22)
+        data = rng.normal(size=(2, 1, 80))
+        loo_isc, _ = compute_loo_isc_spearman(data)
+        expected_r = float(spearmanr(data[0, 0], data[1, 0])[0])
+        np.testing.assert_allclose(loo_isc[0, 0], expected_r, atol=1e-10)
+        np.testing.assert_allclose(loo_isc[1, 0], expected_r, atol=1e-10)
+
+    def test_mean_isc_is_mean_of_loo(self):
+        rng = np.random.default_rng(23)
+        data = rng.normal(size=(4, 3, 80))
+        loo_isc, mean_isc = compute_loo_isc_spearman(data)
+        np.testing.assert_allclose(mean_isc, loo_isc.mean(axis=0))
+
+
+class TestComputePairwiseISCSpearman:
+    """Test pairwise ISC using Spearman correlation."""
+
+    def test_output_shape(self):
+        rng = np.random.default_rng(30)
+        data = rng.normal(size=(5, 2, 80))
+        result = compute_pairwise_isc_spearman(data)
+        assert result.shape == (5, 5)
+
+    def test_diagonal_is_one(self):
+        rng = np.random.default_rng(31)
+        data = rng.normal(size=(4, 2, 80))
+        result = compute_pairwise_isc_spearman(data)
+        np.testing.assert_allclose(np.diag(result), 1.0)
+
+    def test_symmetric(self):
+        rng = np.random.default_rng(32)
+        data = rng.normal(size=(4, 2, 80))
+        result = compute_pairwise_isc_spearman(data)
+        np.testing.assert_allclose(result, result.T)
+
+    def test_identical_items(self):
+        rng = np.random.default_rng(33)
+        signal = rng.normal(size=(1, 2, 80))
+        data = np.repeat(signal, 3, axis=0)
+        result = compute_pairwise_isc_spearman(data)
+        np.testing.assert_allclose(result, 1.0, atol=1e-10)
+
+
+class TestComputeSlidingWindowISCSpearman:
+    """Test time-resolved sliding-window ISC using Spearman correlation."""
+
+    def test_output_shapes(self):
+        rng = np.random.default_rng(40)
+        data = rng.normal(size=(3, 2, 500))
+        isc_tc, times = compute_sliding_window_isc_spearman(
+            data, window_sec=1.0, step_sec=0.5, sfreq=100.0
+        )
+        assert isc_tc.shape[1] == 2
+        assert len(times) == isc_tc.shape[0]
+
+    def test_window_times_are_monotonic(self):
+        rng = np.random.default_rng(41)
+        data = rng.normal(size=(3, 1, 300))
+        _, times = compute_sliding_window_isc_spearman(
+            data, window_sec=0.5, step_sec=0.25, sfreq=100.0
+        )
+        assert all(times[i] < times[i + 1] for i in range(len(times) - 1))
+
+    def test_identical_signals_high_isc(self):
+        """Identical items in each window → Spearman ISC near 1."""
+        rng = np.random.default_rng(42)
+        signal = rng.normal(size=(1, 1, 200))
+        data = np.repeat(signal, 4, axis=0)
+        isc_tc, _ = compute_sliding_window_isc_spearman(
+            data, window_sec=0.5, step_sec=0.25, sfreq=100.0
+        )
+        np.testing.assert_allclose(isc_tc, 1.0, atol=1e-10)
+
+    def test_same_window_count_as_pearson(self):
+        """Spearman and Pearson sliding-window should produce same number of windows."""
+        rng = np.random.default_rng(43)
+        data = rng.normal(size=(3, 2, 400))
+        _, times_p = compute_sliding_window_isc(
+            data, window_sec=1.0, step_sec=0.5, sfreq=100.0
+        )
+        _, times_s = compute_sliding_window_isc_spearman(
+            data, window_sec=1.0, step_sec=0.5, sfreq=100.0
+        )
+        assert len(times_p) == len(times_s)
