@@ -329,7 +329,7 @@ def plot_windowed_analysis(
         label=f"Grand mean ({win_mean_sig.mean():.3f})",
     )
     ax.set_ylabel("Mean signal (z-score)")
-    ax.set_title(f"[{label}]  Per-window mean signal  (window = {window_sec:.1f} s)")
+    ax.set_title(f"[{label}]  Per-window mean signal  (win = {window_sec:.1f} s, step = {step_sec_eff:.1f} s)")
     bar_patches = [
         Patch(color=c, alpha=0.85, label=lbl) for lbl, c in sig_palette.items()
     ]
@@ -465,7 +465,7 @@ def plot_windowed_analysis(
     ax.set_ylabel("Signal (z-score)")
     ax.set_title(
         f"[{label}]  Continuous vs. windowed mean signal / variance + "
-        f"per-electrode heatmap  (window = {window_sec:.1f} s)"
+        f"per-electrode heatmap  (win = {window_sec:.1f} s, step = {step_sec_eff:.1f} s)"
     )
     ax.legend(frameon=False, fontsize=9)
     plt.setp(ax.get_xticklabels(), visible=False)
@@ -882,17 +882,23 @@ def plot_band_windowed_analysis(
     step_sec: float | None = None,
     band_colors: Optional[dict[str, str]] = None,
     bands: Optional[dict[str, tuple[float, float]]] = None,
+    save_path_bar: Optional[Path] = None,
     save_path_summary: Optional[Path] = None,
     save_path_per_band_dir: Optional[Path] = None,
-) -> tuple[Figure, list[Figure]]:
+) -> tuple[Figure, Figure, list[Figure]]:
     """
     Windowed synchrony analysis per frequency band (bands Section 4).
 
     Produces:
 
-    1. **Summary figure** — all bands in a single multi-row plot showing
-       windowed mean variance and synchrony candidate spans.
-    2. **Per-band detailed figures** (one per band) — continuous variance
+    1. **Bar-chart figure** — per-band bar charts showing per-window mean
+       variance at ``step_sec``-spaced positions (green = sync candidates).
+       The narrow bars and dense spacing make the 50 % overlap immediately
+       visible, mirroring the broadband bar chart from
+       :func:`plot_windowed_analysis`.
+    2. **Summary figure** — all bands in a single multi-row plot showing
+       windowed mean variance step function and synchrony candidate spans.
+    3. **Per-band detailed figures** (one per band) — continuous variance
        with windowed step, sync threshold, and per-electrode heatmap.
 
     :param band_stats: ``{band_name: stats_dict}`` — output of
@@ -905,10 +911,11 @@ def plot_band_windowed_analysis(
         ``window_sec / 2`` (50 % overlap).
     :param band_colors: Optional colour mapping per band.
     :param bands: Band definitions for axis labels.
+    :param save_path_bar: Optional path to save the bar-chart figure.
     :param save_path_summary: Optional path to save the summary figure.
     :param save_path_per_band_dir: Optional directory in which to save each
         per-band figure as ``<band>.png``.
-    :return: ``(fig_summary, per_band_figs)``.
+    :return: ``(fig_bar, fig_summary, per_band_figs)``.
     """
     sns.set_theme(style="whitegrid", palette="muted", font_scale=1.0)
 
@@ -971,6 +978,71 @@ def plot_band_windowed_analysis(
             )[:n_times],
         }
 
+    # ── Bar-chart figure (mirrors broadband fig_bar) ────────────────────
+    muted = sns.color_palette("muted")
+    C_ORANGE = muted[1]
+    bar_w = step_sec_eff * 0.82
+
+    fig_bar_b, axes_bar = plt.subplots(
+        n_bands, 1, figsize=(max(14, n_windows * 0.18), 3.5 * n_bands), sharex=True
+    )
+    if n_bands == 1:
+        axes_bar = [axes_bar]
+
+    for row, band in enumerate(band_names):
+        l_freq, h_freq = bands.get(band, (0, 0))
+        c = band_colors.get(band, "steelblue")
+        bws = band_win_stats[band]
+        df_w = bws["df"]
+        sync_thr = bws["sync_thr"]
+        is_sync_win = df_w["sync_candidate"].values
+        win_centers = df_w["center"].values
+        win_mean_var = df_w["mean_variance"].values
+
+        bar_colors = [_C_GREEN if s else C_ORANGE for s in is_sync_win]
+
+        ax = axes_bar[row]
+        ax.bar(
+            win_centers,
+            win_mean_var,
+            width=bar_w,
+            color=bar_colors,
+            alpha=0.85,
+            edgecolor="none",
+        )
+        ax.axhline(
+            sync_thr,
+            color=_C_GREEN,
+            linestyle="--",
+            linewidth=1.1,
+            label=f"Sync thr — {sync_percentile}th pct ({sync_thr:.3f})",
+        )
+        ax.axhline(
+            win_mean_var.mean(),
+            color=".2",
+            linestyle=":",
+            linewidth=1.1,
+            label=f"Grand mean ({win_mean_var.mean():.3f})",
+        )
+        ax.set_ylabel("Mean var", fontsize=8)
+        band_label = f"{band.upper()} ({l_freq:.0f}–{h_freq:.0f} Hz)"
+        ax.set_title(band_label, fontsize=9, loc="left")
+        ax.legend(frameon=False, fontsize=7, loc="upper right")
+
+    axes_bar[-1].set_xlabel("Time (s)")
+    fig_bar_b.suptitle(
+        f"[{label}]  Per-window mean intersubject variance per band"
+        f"  (win = {window_sec:.1f} s, step = {step_sec_eff:.1f} s)  |"
+        f"  green = sync candidates",
+        fontsize=11,
+        y=1.01,
+    )
+    sns.despine(fig=fig_bar_b, left=False, bottom=False)
+    fig_bar_b.tight_layout()
+    _save_fig(fig_bar_b, save_path_bar)
+    plt.show()
+    plt.close(fig_bar_b)
+
     # ── Summary figure ────────────────────────────────────────────────
     fig_sum, axes_sum = plt.subplots(
         n_bands, 1, figsize=(15, 3.0 * n_bands), sharex=True
@@ -1022,7 +1094,8 @@ def plot_band_windowed_analysis(
 
     axes_sum[-1].set_xlabel("Time (s)")
     fig_sum.suptitle(
-        f"[{label}]  Windowed synchrony analysis per band  (window = {window_sec:.1f} s)",
+        f"[{label}]  Windowed synchrony analysis per band"
+        f"  (win = {window_sec:.1f} s, step = {step_sec_eff:.1f} s)",
         fontsize=12,
         y=1.01,
     )
@@ -1105,7 +1178,7 @@ def plot_band_windowed_analysis(
         ax_top.set_ylabel("Intersubject variance")
         ax_top.set_title(
             f"[{label}]  {band.upper()} ({l_freq:.0f}–{h_freq:.0f} Hz)  "
-            f"windowed synchrony  (window = {window_sec:.1f} s)"
+            f"windowed synchrony  (win = {window_sec:.1f} s, step = {step_sec_eff:.1f} s)"
         )
         ax_top.legend(frameon=False, fontsize=9)
         plt.setp(ax_top.get_xticklabels(), visible=False)
@@ -1155,4 +1228,4 @@ def plot_band_windowed_analysis(
         plt.close(fig_b)
         per_band_figs.append(fig_b)
 
-    return fig_sum, per_band_figs
+    return fig_bar_b, fig_sum, per_band_figs

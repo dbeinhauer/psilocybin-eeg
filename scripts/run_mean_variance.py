@@ -278,6 +278,7 @@ def _run_band_analysis(
         sync_percentile=sync_percentile,
         step_sec=step_sec,
         bands=FREQUENCY_BANDS,
+        save_path_bar=bands_dir / "band_windowed_bar.png",
         save_path_summary=bands_dir / "band_windowed_summary.png",
         save_path_per_band_dir=per_band_dir,
     )
