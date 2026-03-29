@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -N PSILO_EEF_DATASET_PREPROCESSING
+#PBS -N PSILO_EEG_DATASET_PREPROCESSING
 #PBS -l walltime=8:00:00
 #PBS -l select=1:ncpus=4:mem=100gb:scratch_local=100gb
 
