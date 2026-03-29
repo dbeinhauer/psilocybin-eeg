@@ -35,12 +35,9 @@ class TestAddCommonArguments:
 
     # ── --analysis ────────────────────────────────────────────────
 
-    def test_analysis_defaults_to_isc_and_mean_variance(self, parser):
+    def test_analysis_defaults_to_wavelet_power(self, parser):
         args = parser.parse_args([])
-        assert set(args.analysis) == {
-            AnalysisVariants.ISC.value,
-            AnalysisVariants.MEAN_VARIANCE.value,
-        }
+        assert set(args.analysis) == {AnalysisVariants.WAVELET_POWER.value}
 
     def test_analysis_accepts_wavelet_power(self, parser):
         args = parser.parse_args(["--analysis", AnalysisVariants.WAVELET_POWER.value])
@@ -54,18 +51,22 @@ class TestAddCommonArguments:
         args = parser.parse_args(
             [
                 "--analysis",
-                AnalysisVariants.ISC.value,
-                AnalysisVariants.MEAN_VARIANCE.value,
                 AnalysisVariants.WAVELET_POWER.value,
                 AnalysisVariants.WAVELET_PHASE.value,
             ]
         )
         assert set(args.analysis) == {
-            AnalysisVariants.ISC.value,
-            AnalysisVariants.MEAN_VARIANCE.value,
             AnalysisVariants.WAVELET_POWER.value,
             AnalysisVariants.WAVELET_PHASE.value,
         }
+
+    def test_analysis_rejects_isc(self, parser):
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--analysis", AnalysisVariants.ISC.value])
+
+    def test_analysis_rejects_mean_variance(self, parser):
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--analysis", AnalysisVariants.MEAN_VARIANCE.value])
 
     def test_analysis_rejects_invalid_choice(self, parser):
         with pytest.raises(SystemExit):
@@ -322,8 +323,6 @@ class TestRunAnalysisWaveletReshapeArgPropagation:
                 "scripts.analysis_common.analyzers_to_datasets",
                 return_value={"TEST": object()},
             ),
-            patch("scripts.analysis_common.run_isc_workflow"),
-            patch("scripts.analysis_common.run_mean_variance_workflow"),
             patch(
                 "scripts.analysis_common.run_wavelet_workflow"
             ) as run_wavelet_workflow,
