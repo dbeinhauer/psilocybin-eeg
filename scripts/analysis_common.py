@@ -90,17 +90,18 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--analysis",
         type=str,
         nargs="+",
-        default=[AnalysisVariants.ISC.value],
+        default=[AnalysisVariants.WAVELET_POWER.value],
         choices=[
             analysis.value
             for analysis in AnalysisVariants
-            if analysis != AnalysisVariants.MEAN_VARIANCE
+            # ISC is handled by scripts/run_isc.py; mean_variance by run_mean_variance.py
+            if analysis not in (AnalysisVariants.MEAN_VARIANCE, AnalysisVariants.ISC)
         ],
         help=(
-            "Which analyses to run. Defaults to isc. "
-            "Use wavelet_power or wavelet_phase to run ISC on "
-            "wavelet-transformed data. For mean-variance analysis use "
-            "scripts/run_mean_variance.py."
+            "Which analyses to run. Defaults to wavelet_power. "
+            "Use wavelet_power or wavelet_phase to run wavelet-based analyses. "
+            "For ISC analysis use scripts/run_isc.py. "
+            "For mean-variance analysis use scripts/run_mean_variance.py."
         ),
     )
     parser.add_argument(

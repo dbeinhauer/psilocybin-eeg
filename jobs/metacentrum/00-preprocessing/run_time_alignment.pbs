@@ -1,6 +1,6 @@
 #!/bin/bash
-#PBS -N PSILO_MEAN_VARIANCE
-#PBS -l walltime=1:00:00
+#PBS -N PSILO_TIME_ALIGNMENT
+#PBS -l walltime=4:00:00
 #PBS -l select=1:ncpus=4:mem=60gb:scratch_local=60gb
 
 #PBS -m ae
@@ -20,7 +20,7 @@ echo "Task started at $(date)"
 PROJECT_NAME="psilocybin-eeg"
 SERVER_LOCATION="praha1"
 DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
-SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music.sif"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music.sif"  # or .sandbox
 
 export TMPDIR=$SCRATCHDIR
 
@@ -40,13 +40,21 @@ cd "$SCRATCHDIR"
 cat << 'EOF' > run_inside.sh
 #!/bin/bash
 source /opt/myproject/.venv/bin/activate
-python /mnt/scripts/run_mean_variance.py \
+python /mnt/scripts/run_time_alignment.py \
 --condition Placebo \
---music_type CLASSIC PSYTRANCE \
---window_sec 2.0 \
---step_sec 1.0 \
---sync_percentile 10 \
---n_jobs -1
+--music_type CLASSIC
+
+python /mnt/scripts/run_time_alignment.py \
+--condition Placebo \
+--music_type PSYTRANCE
+
+python /mnt/scripts/run_time_alignment.py \
+--condition Psilocybin \
+--music_type CLASSIC
+
+python /mnt/scripts/run_time_alignment.py \
+--condition Psilocybin \
+--music_type PSYTRANCE
 EOF
 
 chmod +x run_inside.sh

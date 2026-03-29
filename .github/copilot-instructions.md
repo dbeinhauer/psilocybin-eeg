@@ -47,6 +47,9 @@ All exploration notebooks live under `notebooks/` in numbered subdirectories:
 
 ```
 notebooks/
+├── 00-preprocessing/                # Preprocessing inspection and time alignment
+│   ├── eeg_data_inspection.ipynb   # Inspect raw EEG at different pipeline stages
+│   └── time_alignment.ipynb        # Time alignment, cross-correlation, TAG overlay
 ├── 01-raw-mean-variance-analysis/   # Mean-variance synchrony analysis
 │   ├── mean_variance_broadband.ipynb   # Part 1 — broadband (z-scored raw)
 │   └── mean_variance_bands.ipynb       # Part 2 — per-frequency-band
@@ -56,7 +59,7 @@ notebooks/
 ```
 
 **Naming rules:**
-- Subdirectory: `NN-<kebab-case-analysis-name>` where `NN` is a two-digit zero-padded integer starting at `01` (e.g. `01-raw-mean-variance-analysis`, `02-isc-analysis`).
+- Subdirectory: `NN-<kebab-case-analysis-name>` where `NN` is a two-digit zero-padded integer. Use `00` for preprocessing notebooks (e.g. `00-preprocessing`) and start analysis notebooks at `01` (e.g. `01-raw-mean-variance-analysis`, `02-isc-analysis`).
 - Notebook files: descriptive `snake_case` names that reflect the scope (e.g. `mean_variance_broadband.ipynb`, `mean_variance_bands.ipynb`).
 - When a single analysis covers multiple distinct sub-scopes (e.g. broadband vs per-band), **split into separate notebooks** — one notebook per logical sub-scope.
 
@@ -104,6 +107,8 @@ psilocybin-eeg/
 │   └── utils/                     # Logging helpers
 ├── scripts/                       # CLI entry points
 ├── notebooks/                     # Jupyter notebooks for exploration (numbered subdirs: NN-<name>/)
+│   │                              #   00-preprocessing/ — preprocessing inspection and time alignment
+│   │                              #   01-<analysis>/ and higher — analysis notebooks
 ├── tests/                         # pytest test suite
 ├── jobs/                          # HPC job scripts (Metacentrum)
 └── docs/                          # Extended documentation
@@ -250,13 +255,13 @@ python scripts/run_preprocessing.py --raw_processing --plot_results
 # Time alignment
 python scripts/run_time_alignment.py --condition Placebo --music_type CLASSIC
 
-# Analysis (ISC)
-python scripts/run_analysis.py --analysis isc --condition Placebo --music_type CLASSIC
+# ISC analysis (dedicated script — Placebo condition by default)
+python scripts/run_isc.py --music_type CLASSIC PSYTRANCE
 
-# Analysis (mean/variance)
-python scripts/run_analysis.py --analysis mean_variance --condition Psilocybin --music_type PSYTRANCE
+# Mean-variance analysis (Placebo condition by default)
+python scripts/run_mean_variance.py --music_type CLASSIC PSYTRANCE
 
-# Wavelet analysis
+# Wavelet analysis (Placebo condition by default)
 python scripts/run_analysis.py --analysis wavelet_power --wavelet_cache_dir data/processed/psilo_music/wavelets
 ```
 
@@ -274,6 +279,7 @@ python scripts/run_analysis.py --analysis wavelet_power --wavelet_cache_dir data
 ✓ Sketch new analyses in a Jupyter notebook before implementing them (use the numbered subdirectory structure in `notebooks/`)
 ✓ Run linter and tests before committing (`ruff check .`, `pytest tests/ -v`)
 ✓ **Keep documentation in sync with code** — update `src/analysis/README.md`, `src/preprocessing/README.md`, `docs/preprocessing_steps.md`, and this file whenever you add, rename, or remove modules, functions, classes, or CLI flags
+✓ **Default to Placebo condition** — all new analyses, notebooks, CLI scripts, and HPC jobs must use `ConditionVariants.PLACEBO` as the default/only condition unless explicitly instructed otherwise
 
 ### Don't
 ✗ Hardcode categorical values as strings (use Enums instead)
@@ -287,6 +293,7 @@ python scripts/run_analysis.py --analysis wavelet_power --wavelet_cache_dir data
 ✗ Mutate input data without copying first
 ✗ Use global state or class-level mutable defaults
 ✗ Leave documentation stale — if you find an error or omission in any README or doc file, correct it in the same commit
+✗ **Run analysis on Psilocybin data** unless explicitly instructed — all analyses default to Placebo only
 
 ## Testing Requirements
 
@@ -315,6 +322,7 @@ ruff format .
 
 For large-scale processing on the Metacentrum HPC cluster:
 - Job scripts in `jobs/metacentrum/NN-<kebab-case-analysis-name>/` — use the **same numbered subdirectory name** as the corresponding notebooks directory (e.g. `jobs/metacentrum/01-raw-mean-variance-analysis/run_mean_variance.pbs`)
+- Preprocessing job scripts live in `jobs/metacentrum/00-preprocessing/` (matching the `notebooks/00-preprocessing/` convention)
 - Legacy job scripts that predate this convention live directly in `jobs/metacentrum/` and should not be moved
 - Request appropriate resources (CPU, memory, GPU for ICA)
 - Use `--verbose` flags for detailed logging in HPC jobs
