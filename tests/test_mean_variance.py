@@ -202,6 +202,26 @@ class TestComputeWindowedStats:
         with pytest.raises(ValueError, match="samples"):
             compute_windowed_stats(stats, n_times=100, sfreq=1.0, window_sec=0.001)
 
+    def test_raises_on_nonpositive_window_sec(self, simple_data):
+        """window_sec <= 0 must raise ValueError."""
+        stats = self._make_stats(simple_data)
+        with pytest.raises(ValueError, match="positive"):
+            compute_windowed_stats(stats, n_times=100, sfreq=100.0, window_sec=0.0)
+        with pytest.raises(ValueError, match="positive"):
+            compute_windowed_stats(stats, n_times=100, sfreq=100.0, window_sec=-1.0)
+
+    def test_raises_on_nonpositive_step_sec(self, simple_data):
+        """step_sec <= 0 must raise ValueError."""
+        stats = self._make_stats(simple_data)
+        with pytest.raises(ValueError, match="positive"):
+            compute_windowed_stats(
+                stats, n_times=100, sfreq=100.0, window_sec=0.2, step_sec=0.0
+            )
+        with pytest.raises(ValueError, match="positive"):
+            compute_windowed_stats(
+                stats, n_times=100, sfreq=100.0, window_sec=0.2, step_sec=-0.1
+            )
+
     def test_raises_when_window_longer_than_recording(self, simple_data):
         """window_sec longer than recording duration must raise ValueError."""
         stats = self._make_stats(simple_data)

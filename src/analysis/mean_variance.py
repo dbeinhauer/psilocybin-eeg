@@ -96,22 +96,34 @@ def compute_windowed_stats(
     :return: :class:`pandas.DataFrame` with columns ``window``, ``center``,
         ``t_start``, ``t_end``, ``mean_signal``, ``var_signal``,
         ``mean_variance``, ``sync_candidate``.
-    :raises ValueError: If *window_sec* produces zero samples or if the window
-        is longer than the total recording.
+    :raises ValueError: If *window_sec* or *step_sec* is non-positive, if
+        either produces zero samples at *sfreq*, or if the window is longer
+        than the total recording.
     """
     var_t = stats["var_t"]
     mean_over_ch = stats["mean_over_ch"]
     time = np.arange(n_times) / sfreq
 
+    if window_sec <= 0:
+        raise ValueError(f"window_sec must be positive, got {window_sec}.")
+
     if step_sec is None:
         step_sec = window_sec / 2
 
+    if step_sec <= 0:
+        raise ValueError(f"step_sec must be positive, got {step_sec}.")
+
     win_samples = int(round(window_sec * sfreq))
-    step_samples = max(1, int(round(step_sec * sfreq)))
+    step_samples = int(round(step_sec * sfreq))
     if win_samples < 1:
         raise ValueError(
             f"window_sec={window_sec} at sfreq={sfreq} Hz produces "
             f"{win_samples} samples — must be at least 1."
+        )
+    if step_samples < 1:
+        raise ValueError(
+            f"step_sec={step_sec} at sfreq={sfreq} Hz produces "
+            f"{step_samples} samples — must be at least 1."
         )
     starts = np.arange(0, n_times - win_samples + 1, step_samples)
     n_windows = len(starts)
