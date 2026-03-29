@@ -94,6 +94,7 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         choices=[
             analysis.value
             for analysis in AnalysisVariants
+            # ISC is handled by scripts/run_isc.py; mean_variance by run_mean_variance.py
             if analysis not in (AnalysisVariants.MEAN_VARIANCE, AnalysisVariants.ISC)
         ],
         help=(

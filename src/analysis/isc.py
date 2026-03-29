@@ -328,7 +328,12 @@ def compute_mean_field_sliding_window_isc(
             "window_sec and sfreq must define a window of at least one sample; "
             f"got window_sec={window_sec}, sfreq={sfreq}, win_samples={win_samples}."
         )
-    step_samples = max(1, int(round(step_sec * sfreq)))
+    step_samples = int(round(step_sec * sfreq))
+    if step_samples < 1:
+        raise ValueError(
+            f"step_sec must correspond to at least one sample; "
+            f"got step_sec={step_sec}, step_samples={step_samples}, sfreq={sfreq}."
+        )
     starts = np.arange(0, n_samples - win_samples + 1, step_samples)
     isc_tc = np.zeros(len(starts))
     for w_idx, start in enumerate(starts):
