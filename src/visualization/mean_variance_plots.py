@@ -329,7 +329,9 @@ def plot_windowed_analysis(
         label=f"Grand mean ({win_mean_sig.mean():.3f})",
     )
     ax.set_ylabel("Mean signal (z-score)")
-    ax.set_title(f"[{label}]  Per-window mean signal  (win = {window_sec:.1f} s, step = {step_sec_eff:.1f} s)")
+    ax.set_title(
+        f"[{label}]  Per-window mean signal  (win = {window_sec:.1f} s, step = {step_sec_eff:.1f} s)"
+    )
     bar_patches = [
         Patch(color=c, alpha=0.85, label=lbl) for lbl, c in sig_palette.items()
     ]

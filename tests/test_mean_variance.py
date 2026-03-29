@@ -295,7 +295,9 @@ class _StubAnalysisData:
     def __init__(self, data: np.ndarray) -> None:
         self._data = data
 
-    def filter_to_band(self, l_freq: float, h_freq: float) -> _StubFilteredData:  # noqa: ARG002
+    def filter_to_band(
+        self, l_freq: float, h_freq: float
+    ) -> _StubFilteredData:  # noqa: ARG002
         return _StubFilteredData(self._data)
 
 

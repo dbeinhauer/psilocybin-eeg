@@ -114,6 +114,21 @@ def compute_sliding_window_isc(
     n_items, n_features, n_samples = data.shape
     win_samples = int(round(window_sec * sfreq))
     step_samples = int(round(step_sec * sfreq))
+    if window_sec <= 0 or win_samples < 1:
+        raise ValueError(
+            f"window_sec must be positive and at least one sample long; "
+            f"got window_sec={window_sec}, win_samples={win_samples}, sfreq={sfreq}."
+        )
+    if step_sec <= 0 or step_samples < 1:
+        raise ValueError(
+            f"step_sec must be positive and correspond to at least one sample; "
+            f"got step_sec={step_sec}, step_samples={step_samples}, sfreq={sfreq}."
+        )
+    if win_samples > n_samples:
+        raise ValueError(
+            f"Window size {win_samples} samples is larger than data length "
+            f"{n_samples} samples."
+        )
     starts = np.arange(0, n_samples - win_samples + 1, step_samples)
     n_windows = len(starts)
 
@@ -200,6 +215,21 @@ def compute_sliding_window_isc_spearman(
     n_items, n_features, n_samples = data.shape
     win_samples = int(round(window_sec * sfreq))
     step_samples = int(round(step_sec * sfreq))
+    if window_sec <= 0 or win_samples < 1:
+        raise ValueError(
+            f"window_sec must be positive and at least one sample long; "
+            f"got window_sec={window_sec}, win_samples={win_samples}, sfreq={sfreq}."
+        )
+    if step_sec <= 0 or step_samples < 1:
+        raise ValueError(
+            f"step_sec must be positive and correspond to at least one sample; "
+            f"got step_sec={step_sec}, step_samples={step_samples}, sfreq={sfreq}."
+        )
+    if win_samples > n_samples:
+        raise ValueError(
+            f"Window size {win_samples} samples is larger than data length "
+            f"{n_samples} samples."
+        )
     starts = np.arange(0, n_samples - win_samples + 1, step_samples)
     isc_tc = np.zeros((len(starts), n_features))
     for w_idx, start in enumerate(starts):
@@ -288,8 +318,17 @@ def compute_mean_field_sliding_window_isc(
     """
     n_items, _, n_samples = data.shape
     mean_field = data.mean(axis=1)  # (n_items, n_samples)
+    if window_sec <= 0:
+        raise ValueError(f"window_sec must be positive, got {window_sec}.")
+    if step_sec <= 0:
+        raise ValueError(f"step_sec must be positive, got {step_sec}.")
     win_samples = int(round(window_sec * sfreq))
-    step_samples = int(round(step_sec * sfreq))
+    if win_samples < 1:
+        raise ValueError(
+            "window_sec and sfreq must define a window of at least one sample; "
+            f"got window_sec={window_sec}, sfreq={sfreq}, win_samples={win_samples}."
+        )
+    step_samples = max(1, int(round(step_sec * sfreq)))
     starts = np.arange(0, n_samples - win_samples + 1, step_samples)
     isc_tc = np.zeros(len(starts))
     for w_idx, start in enumerate(starts):
