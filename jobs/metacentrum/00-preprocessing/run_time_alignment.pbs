@@ -47,6 +47,14 @@ python /mnt/scripts/run_time_alignment.py \
 python /mnt/scripts/run_time_alignment.py \
 --condition Placebo \
 --music_type PSYTRANCE
+
+python /mnt/scripts/run_time_alignment.py \
+--condition Psilocybin \
+--music_type CLASSIC
+
+python /mnt/scripts/run_time_alignment.py \
+--condition Psilocybin \
+--music_type PSYTRANCE
 EOF
 
 chmod +x run_inside.sh
