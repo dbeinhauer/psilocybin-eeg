@@ -906,9 +906,7 @@ def plot_mean_field_pairwise_isc(
         mean_off = float(mat[off_diag_mask].mean())
         subj_labels = [f"S{i + 1:02d}" for i in range(n_subjects)]
 
-        im = ax.imshow(
-            mat_display, cmap="RdBu_r", vmin=-vmax, vmax=vmax, aspect="auto"
-        )
+        im = ax.imshow(mat_display, cmap="RdBu_r", vmin=-vmax, vmax=vmax, aspect="auto")
         plt.colorbar(im, ax=ax, label="ISC (r)", shrink=0.85)
         ax.set_xticks(range(n_subjects))
         ax.set_yticks(range(n_subjects))

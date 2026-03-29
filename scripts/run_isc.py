@@ -327,9 +327,7 @@ def _run_mean_field_analysis(
     )
 
     # Channel-average ISC for comparison
-    sw_isc_ca, _ = compute_sliding_window_isc(
-        ad.data, window_sec, step_sec, ad.sfreq
-    )
+    sw_isc_ca, _ = compute_sliding_window_isc(ad.data, window_sec, step_sec, ad.sfreq)
     channel_avg_tc = sw_isc_ca.mean(axis=1)
 
     plot_mean_field_vs_channel_avg_isc(

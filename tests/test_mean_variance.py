@@ -150,7 +150,10 @@ class TestComputeWindowedStats:
         stats = self._make_stats(simple_data)
         # Non-overlapping (step = window): 100 // 20 = 5 windows
         df = compute_windowed_stats(
-            stats, n_times=n_times, sfreq=sfreq, window_sec=window_sec,
+            stats,
+            n_times=n_times,
+            sfreq=sfreq,
+            window_sec=window_sec,
             step_sec=window_sec,
         )
         expected_n = n_times // int(window_sec * sfreq)
@@ -213,7 +216,10 @@ class TestComputeWindowedStats:
         sfreq = 100.0
         window_sec = 0.2
         df = compute_windowed_stats(
-            stats, n_times=n_times, sfreq=sfreq, window_sec=window_sec,
+            stats,
+            n_times=n_times,
+            sfreq=sfreq,
+            window_sec=window_sec,
             step_sec=window_sec,
         )
         t_starts = df["t_start"].values
@@ -230,7 +236,10 @@ class TestComputeWindowedStats:
         window_sec = 0.2
         step_sec = 0.1  # 50% overlap
         df = compute_windowed_stats(
-            stats, n_times=n_times, sfreq=sfreq, window_sec=window_sec,
+            stats,
+            n_times=n_times,
+            sfreq=sfreq,
+            window_sec=window_sec,
             step_sec=step_sec,
         )
         t_starts = df["t_start"].values
