@@ -16,13 +16,20 @@ For each requested music type the script runs:
 
    - Per-band LOO-ISC distributions
    - Per-band mean ISC bar chart
-   - Per-band sliding-window ISC
+   - Per-band sliding-window ISC (50% overlapping windows, step = window / 2)
    - Band-overlap raster
+
+3. **Mean-field analysis** (spatial mean across all electrodes first)
+
+   - Mean-field LOO-ISC per subject (Pearson + Spearman)
+   - Mean-field pairwise ISC heatmap
+   - Mean-field vs. channel-average ISC time course
 
 All figures are saved under::
 
     plots/02-isc-broadband-analysis/<condition>_<music_type>/broadband/
     plots/02-isc-broadband-analysis/<condition>_<music_type>/bands/
+    plots/02-isc-broadband-analysis/<condition>_<music_type>/mean_field/
 
 Usage examples::
 

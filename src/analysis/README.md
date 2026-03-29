@@ -74,14 +74,35 @@ ad = AnalysisData(
 Pure functions — no side effects, no file I/O. All accept `data: np.ndarray` of shape
 `(n_items, n_features, n_samples)`.
 
-### ISC functions
+### Pearson ISC functions
 
 | Function | Description | Returns |
 |----------|-------------|---------|
 | `compute_loo_isc(data)` | Leave-one-out ISC: each subject vs mean of the rest | `(loo_isc, mean_loo_isc)` shapes `(n_items, n_features)` and `(n_features,)` |
 | `compute_pairwise_isc(data)` | Mean-across-features Pearson r for every subject pair | Symmetric `(n_items, n_items)` matrix |
 | `compute_pairwise_isc_per_feature(data)` | Pairwise ISC kept per feature | `(n_items, n_items, n_features)` |
-| `compute_sliding_window_isc(data, window, step)` | LOO ISC in overlapping time windows | `(n_windows, n_items, n_features)` |
+| `compute_sliding_window_isc(data, window_sec, step_sec, sfreq)` | LOO-ISC in overlapping time windows (mean across subjects) | `(isc_timecourse, window_times)` shapes `(n_windows, n_features)` and `(n_windows,)` |
+
+### Spearman ISC functions
+
+| Function | Description | Returns |
+|----------|-------------|---------|
+| `compute_loo_isc_spearman(data)` | Leave-one-out ISC using Spearman rank correlation | `(loo_isc, mean_loo_isc)` shapes `(n_items, n_features)` and `(n_features,)` |
+| `compute_pairwise_isc_spearman(data)` | Mean-across-features Spearman r for every subject pair | Symmetric `(n_items, n_items)` matrix |
+| `compute_sliding_window_isc_spearman(data, window_sec, step_sec, sfreq)` | Spearman LOO-ISC in overlapping time windows | `(isc_timecourse, window_times)` shapes `(n_windows, n_features)` and `(n_windows,)` |
+
+### Mean-field ISC functions
+
+These functions first average the signal across all channels to obtain a single global
+mean-field time series per subject, then compute ISC on those 1-D signals.
+`ISC(mean(channels))` can differ substantially from `mean(ISC(channel_i))` when
+synchrony is spatially heterogeneous.
+
+| Function | Description | Returns |
+|----------|-------------|---------|
+| `compute_mean_field_loo_isc(data)` | LOO-ISC on the spatial mean-field (Pearson + Spearman) | `(loo_pearson, loo_spearman)` each shape `(n_items,)` |
+| `compute_mean_field_pairwise_isc(data)` | Pearson pairwise ISC on the mean-field | Symmetric `(n_items, n_items)` matrix |
+| `compute_mean_field_sliding_window_isc(data, window_sec, step_sec, sfreq)` | Time-resolved mean-field LOO-ISC | `(isc_timecourse, window_times)` shapes `(n_windows,)` and `(n_windows,)` |
 
 ### Frequency band constant
 
@@ -211,18 +232,17 @@ the same commit that changes the code — do not leave stale documentation behin
 ## Running the Analysis
 
 ```bash
-# ISC analysis (broadband + per-band, dedicated script)
-python scripts/run_isc.py --condition Placebo --music_type CLASSIC PSYTRANCE
+# ISC analysis (broadband + per-band + mean-field, Placebo condition, both music types)
+python scripts/run_isc.py --music_type CLASSIC PSYTRANCE
 
-# ISC with custom window parameters
-python scripts/run_isc.py --condition Psilocybin --music_type CLASSIC \
-    --window_sec 10.0 --step_sec 5.0
+# ISC with custom window / step sizes (50% overlap by default: step = window / 2)
+python scripts/run_isc.py --music_type CLASSIC --window_sec 10.0 --step_sec 5.0
 
 # Mean-variance analysis (dedicated script)
-python scripts/run_mean_variance.py --condition Placebo --music_type CLASSIC PSYTRANCE
+python scripts/run_mean_variance.py --music_type CLASSIC PSYTRANCE
 
 # Mean-variance with custom window and sync percentile
-python scripts/run_mean_variance.py --condition Psilocybin --music_type PSYTRANCE \
+python scripts/run_mean_variance.py --music_type PSYTRANCE \
     --window_sec 3.0 --sync_percentile 10
 
 # Wavelet power analysis
