@@ -4,7 +4,7 @@
 
 This directory contains exploratory notebooks for analysing
 **wavelet-transformed EEG data** produced by the wavelet persistence pipeline
-(`scripts/run_analysis.py --analysis wavelet_power|wavelet_phase --reuse_wavelets`).
+(`scripts/run_analysis.py --analysis wavelet_power` or `wavelet_phase` with `--reuse_wavelets`).
 
 Wavelet transforms provide a **time–frequency representation** of each
 subject's EEG, enabling analyses that the raw broadband signal cannot support.
