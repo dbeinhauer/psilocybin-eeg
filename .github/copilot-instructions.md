@@ -255,13 +255,13 @@ python scripts/run_preprocessing.py --raw_processing --plot_results
 # Time alignment
 python scripts/run_time_alignment.py --condition Placebo --music_type CLASSIC
 
-# Analysis (ISC)
-python scripts/run_analysis.py --analysis isc --condition Placebo --music_type CLASSIC
+# ISC analysis (dedicated script — Placebo condition by default)
+python scripts/run_isc.py --music_type CLASSIC PSYTRANCE
 
-# Analysis (mean/variance)
-python scripts/run_analysis.py --analysis mean_variance --condition Psilocybin --music_type PSYTRANCE
+# Mean-variance analysis (Placebo condition by default)
+python scripts/run_mean_variance.py --music_type CLASSIC PSYTRANCE
 
-# Wavelet analysis
+# Wavelet analysis (Placebo condition by default)
 python scripts/run_analysis.py --analysis wavelet_power --wavelet_cache_dir data/processed/psilo_music/wavelets
 ```
 
@@ -279,6 +279,7 @@ python scripts/run_analysis.py --analysis wavelet_power --wavelet_cache_dir data
 ✓ Sketch new analyses in a Jupyter notebook before implementing them (use the numbered subdirectory structure in `notebooks/`)
 ✓ Run linter and tests before committing (`ruff check .`, `pytest tests/ -v`)
 ✓ **Keep documentation in sync with code** — update `src/analysis/README.md`, `src/preprocessing/README.md`, `docs/preprocessing_steps.md`, and this file whenever you add, rename, or remove modules, functions, classes, or CLI flags
+✓ **Default to Placebo condition** — all new analyses, notebooks, CLI scripts, and HPC jobs must use `ConditionVariants.PLACEBO` as the default/only condition unless explicitly instructed otherwise
 
 ### Don't
 ✗ Hardcode categorical values as strings (use Enums instead)
@@ -292,6 +293,7 @@ python scripts/run_analysis.py --analysis wavelet_power --wavelet_cache_dir data
 ✗ Mutate input data without copying first
 ✗ Use global state or class-level mutable defaults
 ✗ Leave documentation stale — if you find an error or omission in any README or doc file, correct it in the same commit
+✗ **Run analysis on Psilocybin data** unless explicitly instructed — all analyses default to Placebo only
 
 ## Testing Requirements
 

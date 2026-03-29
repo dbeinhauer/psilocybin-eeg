@@ -20,6 +20,8 @@ from typing import Optional, Union
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
+import pandas as pd
+import seaborn as sns
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 from matplotlib.patches import Patch, Rectangle
@@ -819,6 +821,195 @@ def plot_band_overlap(
         y=1.01,
     )
     plt.tight_layout()
+    _save_fig(fig, save_path)
+    plt.show()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# 8. Mean-field ISC
+# ---------------------------------------------------------------------------
+
+
+def plot_mean_field_loo_isc(
+    loo_pearson: dict[str, np.ndarray],
+    loo_spearman: dict[str, np.ndarray],
+    *,
+    save_path: Optional[Path] = None,
+) -> Figure:
+    """
+    Per-subject bar chart comparing Pearson and Spearman mean-field LOO-ISC.
+
+    :param loo_pearson: ``{label: array(n_subjects,)}`` Pearson LOO-ISC per subject.
+    :param loo_spearman: ``{label: array(n_subjects,)}`` Spearman LOO-ISC per subject.
+    """
+    labels = list(loo_pearson.keys())
+    n_figs = len(labels)
+    fig, axes = plt.subplots(1, n_figs, figsize=(max(8, n_figs * 9), 4), squeeze=False)
+
+    for col, label in enumerate(labels):
+        ax = axes[0, col]
+        lp = loo_pearson[label]
+        ls = loo_spearman[label]
+        n_subjects = len(lp)
+        subj_labels = [f"S{i + 1:02d}" for i in range(n_subjects)]
+        df = pd.DataFrame(
+            {
+                "subject": subj_labels * 2,
+                "loo_isc": np.concatenate([lp, ls]),
+                "method": ["Pearson"] * n_subjects + ["Spearman"] * n_subjects,
+            }
+        )
+        sns.barplot(
+            data=df,
+            x="subject",
+            y="loo_isc",
+            hue="method",
+            palette={"Pearson": "steelblue", "Spearman": "darkorange"},
+            ax=ax,
+        )
+        ax.axhline(0, color="gray", ls="--", lw=0.8)
+        ax.set_xlabel("Subject")
+        ax.set_ylabel("LOO-ISC (r)")
+        ax.set_title(f"[{label}]  Mean-field LOO-ISC per subject")
+        ax.legend(frameon=False, fontsize=9, title="Method")
+        sns.despine(ax=ax)
+
+    fig.tight_layout()
+    _save_fig(fig, save_path)
+    plt.show()
+    return fig
+
+
+def plot_mean_field_pairwise_isc(
+    pairwise: dict[str, np.ndarray],
+    *,
+    save_path: Optional[Path] = None,
+) -> Figure:
+    """
+    Heatmap of mean-field pairwise Pearson ISC matrix.
+
+    :param pairwise: ``{label: array(n_subjects, n_subjects)}``.
+    """
+    labels = list(pairwise.keys())
+    n_figs = len(labels)
+    fig, axes = plt.subplots(1, n_figs, figsize=(7 * n_figs, 6), squeeze=False)
+
+    for col, label in enumerate(labels):
+        ax = axes[0, col]
+        mat = pairwise[label]
+        n_subjects = mat.shape[0]
+        mat_display = mat.copy()
+        np.fill_diagonal(mat_display, np.nan)
+        vmax = max(float(np.nanmax(np.abs(mat_display))), 0.01)
+        off_diag_mask = ~np.eye(n_subjects, dtype=bool)
+        mean_off = float(mat[off_diag_mask].mean())
+        subj_labels = [f"S{i + 1:02d}" for i in range(n_subjects)]
+
+        im = ax.imshow(mat_display, cmap="RdBu_r", vmin=-vmax, vmax=vmax, aspect="auto")
+        plt.colorbar(im, ax=ax, label="ISC (r)", shrink=0.85)
+        ax.set_xticks(range(n_subjects))
+        ax.set_yticks(range(n_subjects))
+        ax.set_xticklabels(subj_labels, rotation=90, fontsize=7)
+        ax.set_yticklabels(subj_labels, fontsize=7)
+        ax.set_title(
+            f"[{label}]  Mean-field pairwise ISC (Pearson)\n"
+            f"mean off-diagonal r = {mean_off:.4f}"
+        )
+
+    fig.tight_layout()
+    _save_fig(fig, save_path)
+    plt.show()
+    return fig
+
+
+def plot_mean_field_vs_channel_avg_isc(
+    mf_tc: dict[str, np.ndarray],
+    channel_avg_tc: dict[str, np.ndarray],
+    *,
+    isc_threshold: float = 0.035,
+    window_sec: float = 5.0,
+    step_sec: float = 2.5,
+    save_path: Optional[Path] = None,
+) -> Figure:
+    """
+    Time course comparison: mean-field ISC vs channel-average ISC.
+
+    :param mf_tc: ``{label: isc_timecourse}`` shape ``(n_windows,)`` — mean-field.
+    :param channel_avg_tc: ``{label: isc_timecourse}`` shape ``(n_windows,)`` — channel average.
+    :param isc_threshold: Significance threshold.
+    :param window_sec: Window size used to compute the time courses (for axis label).
+    :param step_sec: Step size used to compute the time courses (for time axis and label).
+    """
+    labels = list(mf_tc.keys())
+    n_figs = len(labels)
+    fig, axes = plt.subplots(1, n_figs, figsize=(14 * n_figs, 4), squeeze=False)
+
+    C_NEG = "#e57373"
+    C_THRESH = "tomato"
+
+    for col, label in enumerate(labels):
+        ax = axes[0, col]
+        mf = mf_tc[label]
+        ca = channel_avg_tc[label]
+        n_len = min(len(mf), len(ca))
+        t = np.arange(n_len) * step_sec + window_sec / 2
+
+        ax.step(
+            t,
+            ca[:n_len],
+            where="post",
+            color="steelblue",
+            lw=2.0,
+            label=f"Channel-avg ISC ({window_sec:.0f} s / {step_sec:.1f} s step)",
+        )
+        ax.step(
+            t,
+            mf[:n_len],
+            where="post",
+            color="seagreen",
+            lw=2.0,
+            ls="--",
+            label=f"Mean-field ISC ({window_sec:.0f} s / {step_sec:.1f} s step)",
+        )
+        ax.fill_between(
+            t,
+            0,
+            np.clip(mf[:n_len], 0, None),
+            step="post",
+            alpha=0.12,
+            color="seagreen",
+        )
+        ax.fill_between(
+            t,
+            np.clip(mf[:n_len], None, 0),
+            0,
+            step="post",
+            alpha=0.22,
+            color=C_NEG,
+        )
+        ax.axhline(
+            isc_threshold,
+            color=C_THRESH,
+            ls="--",
+            lw=1.0,
+            label=f"Threshold r = {isc_threshold}",
+        )
+        ax.axhline(0, color="gray", ls="-", lw=0.6, alpha=0.4)
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("LOO-ISC (r)")
+        ax.set_title(
+            f"[{label}]  Mean-field vs. channel-average ISC  ({window_sec:.0f} s / {step_sec:.1f} s step)"
+        )
+        ax.legend(frameon=False, fontsize=9)
+        sns.despine(ax=ax)
+
+        corr_between = float(np.corrcoef(ca[:n_len], mf[:n_len])[0, 1])
+        _logger.info(
+            f"[{label}] Correlation channel-avg vs mean-field ISC: r = {corr_between:.4f}"
+        )
+
+    fig.tight_layout()
     _save_fig(fig, save_path)
     plt.show()
     return fig
