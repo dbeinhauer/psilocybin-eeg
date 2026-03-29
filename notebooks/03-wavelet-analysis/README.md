@@ -21,7 +21,7 @@ Two representations are explored:
 
 | Notebook | Scope | Key analyses |
 |---|---|---|
-| `wavelet_power_exploration.ipynb` | Broadband + per-band | Spectral profile, time–frequency maps, band power time courses, intersubject variance, wavelet-domain LOO-ISC |
+| `wavelet_power_exploration.ipynb` | Broadband + per-band | Spectral profile, time–frequency maps, band power time courses, intersubject variance, wavelet-domain LOO-ISC, topographic mapping, time–frequency ISC, sliding-window ISC, cross-frequency coupling, power–phase joint analysis |
 | `wavelet_phase_exploration.ipynb` | Broadband + per-band | Phase distribution check, ITPC spectrum, time–frequency ITPC map, per-band ITPC time course, phase-based LOO-ISC, ITPC vs ISC comparison |
 
 ## HPC job scripts
@@ -88,6 +88,49 @@ distribution across channels and the per-band mean.
 **Why:** Provides a direct wavelet-domain counterpart to the broadband ISC
 in `02-*`.  We expect bands that track stimulus features (e.g. delta/theta for
 rhythm, alpha for attentional modulation) to show higher ISC.
+
+#### 6. Topographic mapping
+
+**What:** Project per-channel mean LOO-ISC for each frequency band onto the
+scalp montage using MNE topomaps.
+
+**Why:** Reveals which brain regions show the strongest frequency-specific
+synchrony, adding a spatial dimension to the per-band ISC results.
+
+#### 7. Time–frequency ISC
+
+**What:** Reshape broadband data to `(n_subjects, n_channels × n_freqs,
+n_times)` and compute LOO-ISC per frequency to obtain a channel-averaged
+ISC-vs-frequency profile.
+
+**Why:** Provides a continuous frequency-resolved view of synchrony without
+committing to discrete band boundaries.
+
+#### 8. Sliding-window wavelet ISC
+
+**What:** For each band, collapse the frequency dimension and compute LOO-ISC
+in successive time windows, yielding a time-resolved ISC trace per band.
+
+**Why:** Combines the sliding-window temporal resolution of `02-*` with the
+frequency specificity of the wavelet representation.
+
+#### 9. Cross-frequency coupling
+
+**What:** Compute the Pearson correlation between every pair of bands'
+channel-averaged, subject-mean power time courses, yielding a band × band
+correlation matrix.
+
+**Why:** Identifies co-modulation patterns between frequency bands, which can
+indicate nested oscillatory dynamics driven by the stimulus.
+
+#### 10. Power–phase joint analysis
+
+**What:** Overlay per-band power LOO-ISC and phase LOO-ISC (computed via
+`cos(phase)` projection from the phase wavelet cache) in a grouped bar chart.
+
+**Why:** Distinguishes bands where both amplitude and timing are synchronised
+from bands where only one modality is synchronised, providing a more complete
+picture of inter-subject coherence.
 
 ### Phase analyses (`wavelet_phase_exploration.ipynb`)
 
@@ -157,26 +200,6 @@ into a full production pipeline:
    wavelets are available for both conditions, overlay or statistically compare
    spectral profiles, ISC curves, and variance time courses.
 
-2. **Topographic mapping** — project per-channel band power or ISC onto the
-   scalp montage using MNE topomaps to reveal spatial patterns of
-   frequency-specific synchrony.
-
-3. **Time–frequency ISC** — instead of averaging within a band and then
-   computing ISC, compute ISC at every `(frequency, time)` cell to build a
-   2-D ISC spectrogram.
-
-4. **Statistical testing** — apply permutation-based tests (e.g. circular
+2. **Statistical testing** — apply permutation-based tests (e.g. circular
    shift surrogates) to assess whether observed ISC values exceed chance
    levels.
-
-5. **Sliding-window wavelet ISC** — combine the sliding-window approach of
-   `02-*` Section 3 with frequency-resolved wavelet data for time-resolved,
-   band-specific ISC.
-
-6. **Cross-frequency coupling** — explore whether power in one band predicts
-   the phase or power in another band, which would indicate nested oscillatory
-   dynamics.
-
-7. **Power–phase joint analysis** — overlay per-band power ISC and phase ISC
-   results to identify bands where both amplitude and timing are synchronised
-   vs. bands where only one modality is synchronised.
