@@ -146,13 +146,30 @@ class TestComputeWindowedStats:
     def test_n_windows(self, simple_data):
         n_times = simple_data.shape[2]  # 100
         sfreq = 100.0
-        window_sec = 0.2  # 20 samples → 5 windows
+        window_sec = 0.2  # 20 samples
+        stats = self._make_stats(simple_data)
+        # Non-overlapping (step = window): 100 // 20 = 5 windows
+        df = compute_windowed_stats(
+            stats, n_times=n_times, sfreq=sfreq, window_sec=window_sec,
+            step_sec=window_sec,
+        )
+        expected_n = n_times // int(window_sec * sfreq)
+        assert len(df) == expected_n
+
+    def test_n_windows_overlapping(self, simple_data):
+        """50% overlap doubles the window count compared to non-overlapping."""
+        n_times = simple_data.shape[2]  # 100
+        sfreq = 100.0
+        window_sec = 0.2  # 20 samples, step = 10 samples → 9 windows
         stats = self._make_stats(simple_data)
         df = compute_windowed_stats(
             stats, n_times=n_times, sfreq=sfreq, window_sec=window_sec
         )
-        expected_n = n_times // int(window_sec * sfreq)
-        assert len(df) == expected_n
+        # starts: 0, 10, 20, 30, 40, 50, 60, 70, 80 → 9 windows (start+20 ≤ 100)
+        step_samples = int(round(window_sec / 2 * sfreq))
+        win_samples = int(round(window_sec * sfreq))
+        expected_starts = np.arange(0, n_times - win_samples + 1, step_samples)
+        assert len(df) == len(expected_starts)
 
     def test_sync_candidate_is_bool(self, simple_data):
         stats = self._make_stats(simple_data)
@@ -190,19 +207,36 @@ class TestComputeWindowedStats:
             compute_windowed_stats(stats, n_times=100, sfreq=100.0, window_sec=5.0)
 
     def test_window_indices_non_overlapping(self, simple_data):
-        """t_start and t_end should tile the recording without gaps."""
+        """t_start should advance by window_sec when step_sec == window_sec."""
         stats = self._make_stats(simple_data)
         n_times = simple_data.shape[2]
         sfreq = 100.0
         window_sec = 0.2
         df = compute_windowed_stats(
-            stats, n_times=n_times, sfreq=sfreq, window_sec=window_sec
+            stats, n_times=n_times, sfreq=sfreq, window_sec=window_sec,
+            step_sec=window_sec,
         )
-        # Each window's t_start should equal previous window's t_end + 1/sfreq
         t_starts = df["t_start"].values
         for i in range(1, len(t_starts)):
             np.testing.assert_allclose(
                 t_starts[i], t_starts[i - 1] + window_sec, atol=1e-9
+            )
+
+    def test_window_indices_overlapping(self, simple_data):
+        """t_start should advance by step_sec for 50% overlapping windows."""
+        stats = self._make_stats(simple_data)
+        n_times = simple_data.shape[2]
+        sfreq = 100.0
+        window_sec = 0.2
+        step_sec = 0.1  # 50% overlap
+        df = compute_windowed_stats(
+            stats, n_times=n_times, sfreq=sfreq, window_sec=window_sec,
+            step_sec=step_sec,
+        )
+        t_starts = df["t_start"].values
+        for i in range(1, len(t_starts)):
+            np.testing.assert_allclose(
+                t_starts[i], t_starts[i - 1] + step_sec, atol=1e-9
             )
 
     def test_constant_data_all_zero_mean_variance(self, constant_data):

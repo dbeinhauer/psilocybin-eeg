@@ -74,14 +74,15 @@ def compute_windowed_stats(
     sfreq: float,
     window_sec: float = 2.0,
     sync_percentile: float = 10.0,
+    step_sec: float | None = None,
 ) -> pd.DataFrame:
     """
     Compute per-window statistics and label synchrony candidates.
 
-    The recording is divided into non-overlapping windows of *window_sec*
-    seconds.  A window is labelled a *synchrony candidate* when its mean
-    intersubject variance falls below the ``sync_percentile``-th percentile
-    of the full ``var_t`` distribution.
+    The recording is divided into overlapping windows of *window_sec* seconds
+    advanced by *step_sec* seconds per step.  A window is labelled a
+    *synchrony candidate* when its mean intersubject variance falls below the
+    ``sync_percentile``-th percentile of the full ``var_t`` distribution.
 
     :param stats: Output of :func:`compute_intersubject_stats`.
     :param n_times: Number of time points in the original data.
@@ -89,6 +90,9 @@ def compute_windowed_stats(
     :param window_sec: Window length in seconds.
     :param sync_percentile: Percentile of ``var_t`` used as the synchrony
         detection threshold.
+    :param step_sec: Step between successive windows in seconds.  Defaults to
+        ``window_sec / 2`` (50 % overlap).  Pass ``step_sec=window_sec`` for
+        non-overlapping windows.
     :return: :class:`pandas.DataFrame` with columns ``window``, ``center``,
         ``t_start``, ``t_end``, ``mean_signal``, ``var_signal``,
         ``mean_variance``, ``sync_candidate``.
@@ -99,13 +103,18 @@ def compute_windowed_stats(
     mean_over_ch = stats["mean_over_ch"]
     time = np.arange(n_times) / sfreq
 
-    win_samples = int(window_sec * sfreq)
+    if step_sec is None:
+        step_sec = window_sec / 2
+
+    win_samples = int(round(window_sec * sfreq))
+    step_samples = max(1, int(round(step_sec * sfreq)))
     if win_samples < 1:
         raise ValueError(
             f"window_sec={window_sec} at sfreq={sfreq} Hz produces "
             f"{win_samples} samples — must be at least 1."
         )
-    n_windows = n_times // win_samples
+    starts = np.arange(0, n_times - win_samples + 1, step_samples)
+    n_windows = len(starts)
     if n_windows < 1:
         total_duration = n_times / sfreq
         raise ValueError(
@@ -115,15 +124,15 @@ def compute_windowed_stats(
     sync_threshold = np.percentile(var_t, sync_percentile)
 
     records = []
-    for w in range(n_windows):
-        sl = slice(w * win_samples, (w + 1) * win_samples)
+    for w, start in enumerate(starts):
+        sl = slice(start, start + win_samples)
         subj_mean = mean_over_ch[:, sl].mean(axis=1)  # (n_subjects,)
         records.append(
             {
                 "window": w + 1,
-                "center": time[w * win_samples + win_samples // 2],
-                "t_start": time[w * win_samples],
-                "t_end": time[min((w + 1) * win_samples - 1, n_times - 1)],
+                "center": time[start + win_samples // 2],
+                "t_start": time[start],
+                "t_end": time[min(start + win_samples - 1, n_times - 1)],
                 "mean_signal": float(subj_mean.mean()),
                 "var_signal": float(subj_mean.var()),
                 "mean_variance": float(var_t[sl].mean()),

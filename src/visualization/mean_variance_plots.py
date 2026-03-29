@@ -224,6 +224,7 @@ def plot_windowed_analysis(
     window_sec: float,
     sync_percentile: float,
     *,
+    step_sec: float | None = None,
     save_path_bar: Optional[Path] = None,
     save_path_overlay: Optional[Path] = None,
 ) -> tuple[Figure, Figure]:
@@ -245,6 +246,9 @@ def plot_windowed_analysis(
     :param label: Dataset label used in figure titles.
     :param window_sec: Window length in seconds (for axis labels).
     :param sync_percentile: Percentile used as sync threshold (for labels).
+    :param step_sec: Step between windows in seconds.  Defaults to
+        ``window_sec / 2`` (50 % overlap).  Used for bar width and step
+        function rendering.
     :param save_path_bar: Optional path to save the bar-chart figure.
     :param save_path_overlay: Optional path to save the overlay figure.
     :return: ``(fig_bar, fig_overlay)``.
@@ -260,7 +264,8 @@ def plot_windowed_analysis(
     time = np.arange(n_times) / sfreq
 
     sync_threshold = np.percentile(var_t, sync_percentile)
-    win_samples = int(window_sec * sfreq)
+    step_sec_eff = step_sec if step_sec is not None else window_sec / 2
+    step_samples = max(1, int(round(step_sec_eff * sfreq)))
     n_windows = len(df_wins)
 
     win_centers = df_wins["center"].values
@@ -269,14 +274,15 @@ def plot_windowed_analysis(
     win_mean_var = df_wins["mean_variance"].values
     is_sync_win = df_wins["sync_candidate"].values
 
-    # Step-function arrays padded to n_times
-    _pad = n_times - n_windows * win_samples
+    # Step-function arrays padded to n_times (each window held for step_samples)
+    _total = n_windows * step_samples
+    _pad = max(0, n_times - _total)
     win_mean_sig_step = np.pad(
-        np.repeat(win_mean_sig, win_samples), (0, _pad), mode="edge"
-    )
+        np.repeat(win_mean_sig, step_samples), (0, _pad), mode="edge"
+    )[:n_times]
     win_mean_var_step = np.pad(
-        np.repeat(win_mean_var, win_samples), (0, _pad), mode="edge"
-    )
+        np.repeat(win_mean_var, step_samples), (0, _pad), mode="edge"
+    )[:n_times]
 
     sync_label = f"Sync candidate (var < {sync_percentile}th pct)"
     norm_label = "Normal window"
@@ -290,7 +296,7 @@ def plot_windowed_analysis(
 
     bar_colors_sig = [_C_GREEN if s else C_BLUE for s in is_sync_win]
     bar_colors_var = [_C_GREEN if s else C_ORANGE for s in is_sync_win]
-    bar_w = window_sec * 0.82
+    bar_w = step_sec_eff * 0.82
 
     # ── Figure 1: bar charts ─────────────────────────────────────
     fig1, axes = plt.subplots(2, 1, figsize=(max(14, n_windows * 0.18), 7), sharex=True)
@@ -445,8 +451,8 @@ def plot_windowed_analysis(
     )
     _first_s = True
     for w in np.where(is_sync_win)[0]:
-        t_s = time[w * win_samples]
-        t_e = time[min((w + 1) * win_samples - 1, n_times - 1)]
+        t_s = df_wins.iloc[w]["t_start"]
+        t_e = df_wins.iloc[w]["t_end"]
         ax.axvspan(
             t_s,
             t_e,
@@ -495,8 +501,8 @@ def plot_windowed_analysis(
     )
     _first_s = True
     for w in np.where(is_sync_win)[0]:
-        t_s = time[w * win_samples]
-        t_e = time[min((w + 1) * win_samples - 1, n_times - 1)]
+        t_s = df_wins.iloc[w]["t_start"]
+        t_e = df_wins.iloc[w]["t_end"]
         ax.axvspan(
             t_s,
             t_e,
@@ -531,8 +537,8 @@ def plot_windowed_analysis(
     fig2.colorbar(pcm, cax=cax, label="Intersubject variance")
     _first_s = True
     for w in np.where(is_sync_win)[0]:
-        t_s = time[w * win_samples]
-        t_e = time[min((w + 1) * win_samples - 1, n_times - 1)]
+        t_s = df_wins.iloc[w]["t_start"]
+        t_e = df_wins.iloc[w]["t_end"]
         ax_hm.axvspan(
             t_s,
             t_e,
@@ -873,6 +879,7 @@ def plot_band_windowed_analysis(
     window_sec: float,
     sync_percentile: float,
     *,
+    step_sec: float | None = None,
     band_colors: Optional[dict[str, str]] = None,
     bands: Optional[dict[str, tuple[float, float]]] = None,
     save_path_summary: Optional[Path] = None,
@@ -894,6 +901,8 @@ def plot_band_windowed_analysis(
     :param label: Dataset label used in figure titles.
     :param window_sec: Window length in seconds.
     :param sync_percentile: Percentile for synchrony detection.
+    :param step_sec: Step between successive windows in seconds.  Defaults to
+        ``window_sec / 2`` (50 % overlap).
     :param band_colors: Optional colour mapping per band.
     :param bands: Band definitions for axis labels.
     :param save_path_summary: Optional path to save the summary figure.
@@ -913,13 +922,16 @@ def plot_band_windowed_analysis(
     n_times = len(next(iter(band_stats.values()))["mean_t"])
     time = np.arange(n_times) / sfreq
 
-    win_samples = int(window_sec * sfreq)
+    win_samples = int(round(window_sec * sfreq))
     if win_samples < 1:
         raise ValueError(
             f"window_sec={window_sec} is too small for sfreq={sfreq}. "
             "The resulting window length in samples must be at least 1."
         )
-    n_windows = n_times // win_samples
+    step_sec_eff = step_sec if step_sec is not None else window_sec / 2
+    step_samples = max(1, int(round(step_sec_eff * sfreq)))
+    starts = np.arange(0, n_times - win_samples + 1, step_samples)
+    n_windows = len(starts)
     if n_windows < 1:
         total_duration = n_times / sfreq
         raise ValueError(
@@ -934,27 +946,29 @@ def plot_band_windowed_analysis(
         var_t_b = st["var_t"]
         sync_thr = np.percentile(var_t_b, sync_percentile)
         records = []
-        for w in range(n_windows):
-            sl = slice(w * win_samples, (w + 1) * win_samples)
+        for w, start in enumerate(starts):
+            sl = slice(start, start + win_samples)
             records.append(
                 {
                     "window": w + 1,
-                    "center": time[w * win_samples + win_samples // 2],
-                    "t_start": time[w * win_samples],
-                    "t_end": time[min((w + 1) * win_samples - 1, n_times - 1)],
+                    "center": time[start + win_samples // 2],
+                    "t_start": time[start],
+                    "t_end": time[min(start + win_samples - 1, n_times - 1)],
                     "mean_variance": float(var_t_b[sl].mean()),
                 }
             )
         df_w = pd.DataFrame(records)
         df_w["sync_candidate"] = df_w["mean_variance"] < sync_thr
+        _total = n_windows * step_samples
+        _pad = max(0, n_times - _total)
         band_win_stats[band] = {
             "df": df_w,
             "sync_thr": sync_thr,
             "win_var_step": np.pad(
-                np.repeat(df_w["mean_variance"].values, win_samples),
-                (0, n_times - n_windows * win_samples),
+                np.repeat(df_w["mean_variance"].values, step_samples),
+                (0, _pad),
                 mode="edge",
-            ),
+            )[:n_times],
         }
 
     # ── Summary figure ────────────────────────────────────────────────
@@ -991,8 +1005,8 @@ def plot_band_windowed_analysis(
         )
         _first = True
         for w in np.where(is_sync_win)[0]:
-            t_s = time[w * win_samples]
-            t_e = time[min((w + 1) * win_samples - 1, n_times - 1)]
+            t_s = df_w.iloc[w]["t_start"]
+            t_e = df_w.iloc[w]["t_end"]
             ax.axvspan(
                 t_s,
                 t_e,
@@ -1078,8 +1092,8 @@ def plot_band_windowed_analysis(
         )
         _first = True
         for w in np.where(is_sync_win)[0]:
-            t_s = time[w * win_samples]
-            t_e = time[min((w + 1) * win_samples - 1, n_times - 1)]
+            t_s = df_w.iloc[w]["t_start"]
+            t_e = df_w.iloc[w]["t_end"]
             ax_top.axvspan(
                 t_s,
                 t_e,
@@ -1118,8 +1132,8 @@ def plot_band_windowed_analysis(
         fig_b.colorbar(pcm, cax=cax_b, label="Intersubject variance")
         _first = True
         for w in np.where(is_sync_win)[0]:
-            t_s = time[w * win_samples]
-            t_e = time[min((w + 1) * win_samples - 1, n_times - 1)]
+            t_s = df_w.iloc[w]["t_start"]
+            t_e = df_w.iloc[w]["t_end"]
             ax_hm.axvspan(
                 t_s,
                 t_e,

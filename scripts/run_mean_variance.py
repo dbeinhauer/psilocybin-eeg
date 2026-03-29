@@ -27,12 +27,11 @@ All figures are saved under::
 
 Usage examples::
 
-    # Placebo condition, both music types
+    # Placebo condition, both music types (default)
     python scripts/run_mean_variance.py
 
-    # Psilocybin, classical only, 3-second windows
-    python scripts/run_mean_variance.py --condition Psilocybin \\
-        --music_type CLASSIC --window_sec 3.0
+    # Classical only, 3-second windows with 1.5 s step (50% overlap)
+    python scripts/run_mean_variance.py --music_type CLASSIC --window_sec 3.0
 
     # Process and save .npy cache first, then analyse
     python scripts/run_mean_variance.py --process_and_save
@@ -102,7 +101,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--window_sec",
         type=float,
         default=2.0,
-        help="Non-overlapping window length in seconds for windowed analysis.",
+        help="Window length in seconds for windowed analysis.",
+    )
+    parser.add_argument(
+        "--step_sec",
+        type=float,
+        default=None,
+        help=(
+            "Step between successive windows in seconds. "
+            "Defaults to window_sec / 2 (50%% overlap)."
+        ),
     )
     parser.add_argument(
         "--sync_percentile",
@@ -150,6 +158,7 @@ def _run_raw_analysis(
     save_dir: Path,
     window_sec: float,
     sync_percentile: float,
+    step_sec: float | None = None,
 ) -> None:
     """Run all raw (broadband) mean-variance sections for one dataset."""
     raw_dir = save_dir / "raw"
@@ -185,6 +194,7 @@ def _run_raw_analysis(
         sfreq=sfreq,
         window_sec=window_sec,
         sync_percentile=sync_percentile,
+        step_sec=step_sec,
     )
     n_sync = df_wins["sync_candidate"].sum()
     _logger.info(
@@ -198,6 +208,7 @@ def _run_raw_analysis(
         label,
         window_sec=window_sec,
         sync_percentile=sync_percentile,
+        step_sec=step_sec,
         save_path_bar=raw_dir / "windowed_bar.png",
         save_path_overlay=raw_dir / "windowed_overlay.png",
     )
@@ -209,6 +220,7 @@ def _run_band_analysis(
     save_dir: Path,
     window_sec: float,
     sync_percentile: float,
+    step_sec: float | None = None,
 ) -> None:
     """Run all per-band mean-variance sections for one dataset."""
     bands_dir = save_dir / "bands"
@@ -264,6 +276,7 @@ def _run_band_analysis(
         label,
         window_sec=window_sec,
         sync_percentile=sync_percentile,
+        step_sec=step_sec,
         bands=FREQUENCY_BANDS,
         save_path_summary=bands_dir / "band_windowed_summary.png",
         save_path_per_band_dir=per_band_dir,
@@ -324,6 +337,7 @@ if __name__ == "__main__":
             save_dir=save_dir,
             window_sec=args.window_sec,
             sync_percentile=args.sync_percentile,
+            step_sec=args.step_sec,
         )
 
         _run_band_analysis(
@@ -332,6 +346,7 @@ if __name__ == "__main__":
             save_dir=save_dir,
             window_sec=args.window_sec,
             sync_percentile=args.sync_percentile,
+            step_sec=args.step_sec,
         )
 
     _logger.info("Mean-variance analysis complete.")

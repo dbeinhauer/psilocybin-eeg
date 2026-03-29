@@ -126,7 +126,7 @@ All functions work on z-scored data of shape `(n_subjects, n_channels, n_times)`
 | Function | Description | Returns |
 |----------|-------------|---------|
 | `compute_intersubject_stats(data)` | Compute intersubject variance, mean, std, and per-subject channel-average | Dict with keys `inter_var`, `inter_mean`, `mean_t`, `var_t`, `std_t`, `mean_over_ch` |
-| `compute_windowed_stats(stats, n_times, sfreq, window_sec, sync_percentile)` | Non-overlapping windowed statistics with synchrony-candidate labelling | `pandas.DataFrame` with per-window statistics |
+| `compute_windowed_stats(stats, n_times, sfreq, window_sec, sync_percentile, step_sec)` | Windowed statistics with synchrony-candidate labelling (50% overlap by default; pass `step_sec=window_sec` for non-overlapping) | `pandas.DataFrame` with per-window statistics |
 | `compute_band_intersubject_stats(ad, bands)` | Apply `compute_intersubject_stats` to each frequency band after bandpass filtering | `{band_name: stats_dict}` |
 | `compute_pairwise_isc_matrices(band_data)` | Mean Pearson correlation matrix between every subject pair per band | `{band_name: (n_subjects, n_subjects) matrix}` |
 
