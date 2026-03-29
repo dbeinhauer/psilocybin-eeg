@@ -286,8 +286,9 @@ def _run_mean_field_analysis(
     save_dir: Path,
     isc_threshold: float,
     window_sec: float,
+    step_sec: float,
 ) -> None:
-    """Run mean-field ISC analysis (non-overlapping windows) for one dataset."""
+    """Run mean-field ISC analysis for one dataset."""
     mf_dir = save_dir / "mean_field"
     mf_dir.mkdir(parents=True, exist_ok=True)
 
@@ -312,15 +313,15 @@ def _run_mean_field_analysis(
         save_path=mf_dir / "mean_field_pairwise_isc.png",
     )
 
-    # Sliding-window ISC (non-overlapping, step=window)
+    # Sliding-window ISC
     _logger.info(f"[{label}] Computing mean-field sliding-window ISC …")
     isc_mf_tc, _ = compute_mean_field_sliding_window_isc(
-        ad.data, window_sec, window_sec, ad.sfreq
+        ad.data, window_sec, step_sec, ad.sfreq
     )
 
-    # Channel-average non-overlapping ISC for comparison
+    # Channel-average ISC for comparison
     sw_isc_ca, _ = compute_sliding_window_isc(
-        ad.data, window_sec, window_sec, ad.sfreq
+        ad.data, window_sec, step_sec, ad.sfreq
     )
     channel_avg_tc = sw_isc_ca.mean(axis=1)
 
@@ -329,6 +330,7 @@ def _run_mean_field_analysis(
         {label: channel_avg_tc},
         isc_threshold=isc_threshold,
         window_sec=window_sec,
+        step_sec=step_sec,
         save_path=mf_dir / "mean_field_vs_channel_avg_isc.png",
     )
 
@@ -405,6 +407,7 @@ if __name__ == "__main__":
             save_dir=save_dir,
             isc_threshold=args.isc_threshold,
             window_sec=args.window_sec,
+            step_sec=args.step_sec,
         )
 
     _logger.info("ISC analysis complete.")

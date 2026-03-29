@@ -931,6 +931,7 @@ def plot_mean_field_vs_channel_avg_isc(
     *,
     isc_threshold: float = 0.035,
     window_sec: float = 5.0,
+    step_sec: float = 2.5,
     save_path: Optional[Path] = None,
 ) -> Figure:
     """
@@ -940,6 +941,7 @@ def plot_mean_field_vs_channel_avg_isc(
     :param channel_avg_tc: ``{label: isc_timecourse}`` shape ``(n_windows,)`` — channel average.
     :param isc_threshold: Significance threshold.
     :param window_sec: Window size used to compute the time courses (for axis label).
+    :param step_sec: Step size used to compute the time courses (for time axis and label).
     """
     labels = list(mf_tc.keys())
     n_figs = len(labels)
@@ -953,7 +955,7 @@ def plot_mean_field_vs_channel_avg_isc(
         mf = mf_tc[label]
         ca = channel_avg_tc[label]
         n_len = min(len(mf), len(ca))
-        t = np.arange(n_len) * window_sec + window_sec / 2
+        t = np.arange(n_len) * step_sec + window_sec / 2
 
         ax.step(
             t,
@@ -961,7 +963,7 @@ def plot_mean_field_vs_channel_avg_isc(
             where="post",
             color="steelblue",
             lw=2.0,
-            label=f"Channel-avg ISC (per-ch corr, {window_sec:.0f} s)",
+            label=f"Channel-avg ISC ({window_sec:.0f} s / {step_sec:.1f} s step)",
         )
         ax.step(
             t,
@@ -970,7 +972,7 @@ def plot_mean_field_vs_channel_avg_isc(
             color="seagreen",
             lw=2.0,
             ls="--",
-            label=f"Mean-field ISC ({window_sec:.0f} s)",
+            label=f"Mean-field ISC ({window_sec:.0f} s / {step_sec:.1f} s step)",
         )
         ax.fill_between(
             t,
@@ -999,7 +1001,7 @@ def plot_mean_field_vs_channel_avg_isc(
         ax.set_xlabel("Time (s)")
         ax.set_ylabel("LOO-ISC (r)")
         ax.set_title(
-            f"[{label}]  Mean-field vs. channel-average ISC  ({window_sec:.0f} s windows)"
+            f"[{label}]  Mean-field vs. channel-average ISC  ({window_sec:.0f} s / {step_sec:.1f} s step)"
         )
         ax.legend(frameon=False, fontsize=9)
         sns.despine(ax=ax)
