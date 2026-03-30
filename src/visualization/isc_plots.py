@@ -2089,7 +2089,7 @@ def plot_band_multiscale_sliding_window_isc(
 
         isc_fine, times_fine = band_sw_fine[band]
         isc_med, times_med = band_sw_med[band]
-        isc_large, times_large = band_sw_large[band]
+        isc_large, _ = band_sw_large[band]
         isc_sp_med, _ = band_sw_spearman_med[band]
 
         mean_fine = isc_fine.mean(axis=1)
