@@ -378,15 +378,16 @@ if __name__ == "__main__":
     print_data_overview(datasets)
 
     for mt in music_types:
-        label = mt.value
-        if label not in datasets:
+        label = mt.value  # short display label (plot titles, log messages)
+        dataset_key = f"{condition.value}_{label}"  # full key used in datasets dict
+        if dataset_key not in datasets:
             _logger.warning(f"No data found for music type {label!r}; skipping.")
             continue
 
-        ad = datasets[label]
+        ad = datasets[dataset_key]
         _logger.info(f"Dataset [{label}]: shape={ad.data.shape}  sfreq={ad.sfreq} Hz")
 
-        save_dir = save_root / f"{condition.value}_{label}"
+        save_dir = save_root / dataset_key
 
         _run_broadband_analysis(
             ad,

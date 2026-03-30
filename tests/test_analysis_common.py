@@ -34,11 +34,10 @@ class TestAddCommonArguments:
 
     # ── --analysis ────────────────────────────────────────────────
 
-    def test_analysis_defaults_to_isc_and_mean_variance(self, parser):
+    def test_analysis_defaults_to_wavelet_power(self, parser):
         args = parser.parse_args([])
         assert set(args.analysis) == {
-            AnalysisVariants.ISC.value,
-            AnalysisVariants.MEAN_VARIANCE.value,
+            AnalysisVariants.WAVELET_POWER.value,
         }
 
     def test_analysis_accepts_wavelet_power(self, parser):
@@ -49,19 +48,15 @@ class TestAddCommonArguments:
         args = parser.parse_args(["--analysis", AnalysisVariants.WAVELET_PHASE.value])
         assert AnalysisVariants.WAVELET_PHASE.value in args.analysis
 
-    def test_analysis_accepts_all_choices(self, parser):
+    def test_analysis_accepts_all_wavelet_choices(self, parser):
         args = parser.parse_args(
             [
                 "--analysis",
-                AnalysisVariants.ISC.value,
-                AnalysisVariants.MEAN_VARIANCE.value,
                 AnalysisVariants.WAVELET_POWER.value,
                 AnalysisVariants.WAVELET_PHASE.value,
             ]
         )
         assert set(args.analysis) == {
-            AnalysisVariants.ISC.value,
-            AnalysisVariants.MEAN_VARIANCE.value,
             AnalysisVariants.WAVELET_POWER.value,
             AnalysisVariants.WAVELET_PHASE.value,
         }
