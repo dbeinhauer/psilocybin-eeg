@@ -2169,9 +2169,10 @@ def plot_band_multiscale_sliding_window_isc(
         ax_bar.set_ylabel("Mean LOO-ISC (r)")
         l_freq, h_freq = bands[band]
         ax_bar.set_title(
-            f"[{label} / {band.upper()}]  Per-window mean LOO-ISC  "
+            f"[{label} / {band.upper()} ({l_freq}-{h_freq} Hz)]  "
+            f"Per-window mean LOO-ISC  "
             f"(Pearson,  window = {window_med_sec:.0f} s,  "
-            f"step = {window_med_sec / 2:.1f} s)"
+            f"step = {window_med_sec / 2:.1f} s)",
         )
         sns.despine(fig=fig_bar)
         fig_bar.tight_layout()
