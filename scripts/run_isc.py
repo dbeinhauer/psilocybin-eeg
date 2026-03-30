@@ -206,6 +206,10 @@ def _run_broadband_analysis(
     data = ad.data
     sfreq = ad.sfreq
     n_subjects, n_channels, n_times = data.shape
+    _logger.info(
+        f"[{label}] Data shape: {n_subjects} subjects, "
+        f"{n_channels} channels, {n_times} time points.",
+    )
 
     # Channel subsampling for Spearman
     if n_ch_subsample > 0 and n_ch_subsample < n_channels:
