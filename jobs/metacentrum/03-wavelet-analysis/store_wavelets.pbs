@@ -8,12 +8,14 @@
 # ---------------------------------------------------------------------------
 # Bulk wavelet storage for both power and phase representations.
 #
-# Computes and stores broadband + all per-band wavelet transforms for both
-# music types (CLASSIC, PSYTRANCE) and both conditions (Placebo, Psilocybin)
+# Computes and stores broadband + all per-band wavelet transforms for
+# music types (CLASSIC, PSYTRANCE) — Placebo condition by default.
 # into data/processed/psilo_music/wavelets/.
 #
 # Uses the same split-run approach as the individual analysis scripts:
 # low-freq bands + broadband first, then high-freq bands with reuse.
+#
+# To also run Psilocybin, uncomment the "Psilocybin" blocks below.
 # ---------------------------------------------------------------------------
 
 set -e
@@ -72,26 +74,24 @@ python /mnt/scripts/run_analysis.py \
     --reuse_wavelets \
     --n_jobs -1
 
-# ----- Psilocybin -----
-python /mnt/scripts/run_analysis.py \
-    --analysis wavelet_power \
-    --condition Psilocybin \
-    --music_type CLASSIC PSYTRANCE \
-    --wavelet_bands delta theta alpha \
-    --wavelet_data_dir "$WAVELET_DIR" \
-    --n_jobs -1
-
-python /mnt/scripts/run_analysis.py \
-    --analysis wavelet_power \
-    --condition Psilocybin \
-    --music_type CLASSIC PSYTRANCE \
-    --wavelet_bands beta gamma \
-    --skip_wavelet_broadband \
-    --wavelet_data_dir "$WAVELET_DIR" \
-    --reuse_wavelets \
-    --n_jobs -1
-
-# ===== WAVELET PHASE =====
+# ----- Psilocybin (uncomment to enable) -----
+# python /mnt/scripts/run_analysis.py \
+#     --analysis wavelet_power \
+#     --condition Psilocybin \
+#     --music_type CLASSIC PSYTRANCE \
+#     --wavelet_bands delta theta alpha \
+#     --wavelet_data_dir "$WAVELET_DIR" \
+#     --n_jobs -1
+#
+# python /mnt/scripts/run_analysis.py \
+#     --analysis wavelet_power \
+#     --condition Psilocybin \
+#     --music_type CLASSIC PSYTRANCE \
+#     --wavelet_bands beta gamma \
+#     --skip_wavelet_broadband \
+#     --wavelet_data_dir "$WAVELET_DIR" \
+#     --reuse_wavelets \
+#     --n_jobs -1
 
 # ----- Placebo -----
 python /mnt/scripts/run_analysis.py \
@@ -112,24 +112,24 @@ python /mnt/scripts/run_analysis.py \
     --reuse_wavelets \
     --n_jobs -1
 
-# ----- Psilocybin -----
-python /mnt/scripts/run_analysis.py \
-    --analysis wavelet_phase \
-    --condition Psilocybin \
-    --music_type CLASSIC PSYTRANCE \
-    --wavelet_bands delta theta alpha \
-    --wavelet_data_dir "$WAVELET_DIR" \
-    --n_jobs -1
-
-python /mnt/scripts/run_analysis.py \
-    --analysis wavelet_phase \
-    --condition Psilocybin \
-    --music_type CLASSIC PSYTRANCE \
-    --wavelet_bands beta gamma \
-    --skip_wavelet_broadband \
-    --wavelet_data_dir "$WAVELET_DIR" \
-    --reuse_wavelets \
-    --n_jobs -1
+# ----- Psilocybin (uncomment to enable) -----
+# python /mnt/scripts/run_analysis.py \
+#     --analysis wavelet_phase \
+#     --condition Psilocybin \
+#     --music_type CLASSIC PSYTRANCE \
+#     --wavelet_bands delta theta alpha \
+#     --wavelet_data_dir "$WAVELET_DIR" \
+#     --n_jobs -1
+#
+# python /mnt/scripts/run_analysis.py \
+#     --analysis wavelet_phase \
+#     --condition Psilocybin \
+#     --music_type CLASSIC PSYTRANCE \
+#     --wavelet_bands beta gamma \
+#     --skip_wavelet_broadband \
+#     --wavelet_data_dir "$WAVELET_DIR" \
+#     --reuse_wavelets \
+#     --n_jobs -1
 EOF
 
 chmod +x run_inside.sh

@@ -796,6 +796,14 @@ def run_wavelet_workflow(
             f"representation must be 'power' or 'phase', got {representation!r}"
         )
 
+    if reshape_frequency_dim:
+        raise ValueError(
+            "reshape_frequency_dim=True is not supported in run_wavelet_workflow. "
+            "The ISC analysis functions require 3-D (n_items, n_features, n_samples) "
+            "arrays and will break with 4-D wavelet tensors. "
+            "Call _wavelet_transform directly if you need a 4-D output."
+        )
+
     save_dir.mkdir(parents=True, exist_ok=True)
     _logger.info(f"Wavelet {representation} figures will be saved to: {save_dir}")
 

@@ -349,3 +349,61 @@ class TestRunAnalysisWaveletReshapeArgPropagation:
         call_kwargs = run_wavelet_workflow.call_args.kwargs
         assert call_kwargs["keep_frequency_dim"] is True
         assert call_kwargs["reshape_frequency_dim"] is True
+
+
+class TestRunAnalysisArgValidation:
+    """Test CLI-level validation in run_analysis.py."""
+
+    def test_reshape_without_keep_raises(self):
+        """--wavelet_reshape_frequency_dim without --wavelet_keep_frequency_dim should fail."""
+        with (
+            patch(
+                "scripts.analysis_common.load_analyzers",
+                return_value={"TEST": object()},
+            ),
+            patch(
+                "scripts.analysis_common.analyzers_to_datasets",
+                return_value={"TEST": object()},
+            ),
+            patch.object(sys, "argv", [
+                "scripts/run_analysis.py",
+                "--analysis", "wavelet_power",
+                "--wavelet_reshape_frequency_dim",
+                # intentionally omitting --wavelet_keep_frequency_dim
+            ]),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            runpy.run_path(
+                str(Path(__file__).parent.parent / "scripts" / "run_analysis.py"),
+                run_name="__main__",
+            )
+        assert exc_info.value.code != 0
+
+
+class TestRunWaveletWorkflowReshapeRaisesInWorkflow:
+    """reshape_frequency_dim=True must raise early in run_wavelet_workflow."""
+
+    @pytest.fixture
+    def sample_datasets(self, tmp_path):
+        rng = np.random.default_rng(0)
+        return {
+            "TEST": AnalysisData(
+                data=rng.normal(size=(3, 4, 500)),
+                sfreq=250.0,
+                representation=DataRepresentation.TIME_DOMAIN,
+                label="TEST",
+            )
+        }
+
+    def test_reshape_frequency_dim_raises_in_workflow(self, sample_datasets, tmp_path):
+        freqs = np.linspace(4.0, 30.0, 5)
+        with pytest.raises(ValueError, match="reshape_frequency_dim=True is not supported"):
+            run_wavelet_workflow(
+                sample_datasets,
+                analyzers={},
+                representation="power",
+                freqs=freqs,
+                save_dir=tmp_path / "out",
+                reshape_frequency_dim=True,
+                keep_frequency_dim=True,
+            )
