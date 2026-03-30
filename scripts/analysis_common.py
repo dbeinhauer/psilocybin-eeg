@@ -261,8 +261,8 @@ def load_analyzers(
     """Load (or process & save) and normalise analysers for each music type.
 
     Returns a dict keyed by ``"{condition}_{music_type}"``
-    (e.g. ``"Placebo_CLASSIC"``), matching the naming convention used for
-    concatenated EEG data files.
+    (e.g. ``"Placebo_CLASSIC"``), matching the on-disk data file naming
+    convention used by :meth:`~src.analysis.summary.EEGSummarizedAnalyzer.save_data`.
     """
     from src.analysis.summary import EEGSummarizedAnalyzer
 

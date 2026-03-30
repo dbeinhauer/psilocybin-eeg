@@ -37,7 +37,9 @@ class TestAddCommonArguments:
 
     def test_analysis_defaults_to_wavelet_power(self, parser):
         args = parser.parse_args([])
-        assert set(args.analysis) == {AnalysisVariants.WAVELET_POWER.value}
+        assert set(args.analysis) == {
+            AnalysisVariants.WAVELET_POWER.value,
+        }
 
     def test_analysis_accepts_wavelet_power(self, parser):
         args = parser.parse_args(["--analysis", AnalysisVariants.WAVELET_POWER.value])
@@ -47,7 +49,7 @@ class TestAddCommonArguments:
         args = parser.parse_args(["--analysis", AnalysisVariants.WAVELET_PHASE.value])
         assert AnalysisVariants.WAVELET_PHASE.value in args.analysis
 
-    def test_analysis_accepts_all_choices(self, parser):
+    def test_analysis_accepts_all_wavelet_choices(self, parser):
         args = parser.parse_args(
             [
                 "--analysis",
