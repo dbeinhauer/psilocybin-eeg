@@ -54,6 +54,7 @@ import sys
 from pathlib import Path
 
 import matplotlib
+import numpy as np
 
 matplotlib.use("Agg")
 
@@ -67,10 +68,14 @@ from scripts.analysis_common import (  # noqa: E402
 from src.analysis.isc import (  # noqa: E402
     FREQUENCY_BANDS,
     compute_loo_isc,
+    compute_loo_isc_spearman,
     compute_mean_field_loo_isc,
     compute_mean_field_pairwise_isc,
     compute_mean_field_sliding_window_isc,
+    compute_pairwise_isc,
+    compute_pairwise_isc_spearman,
     compute_sliding_window_isc,
+    compute_sliding_window_isc_spearman,
 )
 from src.definitions.constants import ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
@@ -79,18 +84,17 @@ from src.definitions.fields import (  # noqa: E402
     MusicTypeVariants,
 )
 from src.visualization.isc_plots import (  # noqa: E402
-    plot_band_isc_distributions,
-    plot_band_mean_isc_bar,
+    plot_band_multiscale_sliding_window_isc,
     plot_band_overlap,
-    plot_band_sliding_window_isc,
-    plot_loo_isc_distribution,
+    plot_band_pairwise_isc_pearson_vs_spearman,
+    plot_band_loo_isc_pearson_vs_spearman,
+    plot_loo_isc_pearson_vs_spearman,
     plot_mean_field_loo_isc,
     plot_mean_field_pairwise_isc,
     plot_mean_field_vs_channel_avg_isc,
-    plot_sliding_window_isc,
-    print_band_significant_intervals,
+    plot_multiscale_sliding_window_isc,
+    plot_pairwise_isc_pearson_vs_spearman,
     print_data_overview,
-    print_significant_intervals,
 )
 
 _logger = logging.getLogger(__name__)
@@ -121,16 +125,37 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Broadband ISC significance threshold for significant interval detection.",
     )
     parser.add_argument(
+        "--window_fine_sec",
+        type=float,
+        default=1.0,
+        help="Fine sliding-window length in seconds (multi-scale analysis).",
+    )
+    parser.add_argument(
         "--window_sec",
         type=float,
         default=5.0,
-        help="Sliding-window length in seconds.",
+        help="Medium sliding-window length in seconds.",
+    )
+    parser.add_argument(
+        "--window_large_sec",
+        type=float,
+        default=15.0,
+        help="Large sliding-window length in seconds (multi-scale analysis).",
     )
     parser.add_argument(
         "--step_sec",
         type=float,
         default=2.5,
         help="Sliding-window step size in seconds.",
+    )
+    parser.add_argument(
+        "--n_ch_subsample",
+        type=int,
+        default=64,
+        help=(
+            "Number of channels randomly subsampled for Spearman ISC computation. "
+            "Set to 0 to use all channels (much slower)."
+        ),
     )
     parser.add_argument(
         "--process_and_save",
@@ -168,43 +193,107 @@ def _run_broadband_analysis(
     label: str,
     save_dir: Path,
     isc_threshold: float,
-    window_sec: float,
+    window_fine_sec: float,
+    window_med_sec: float,
+    window_large_sec: float,
     step_sec: float,
+    n_ch_subsample: int,
 ) -> None:
     """Run all broadband ISC sections for one dataset."""
     broadband_dir = save_dir / "broadband"
     broadband_dir.mkdir(parents=True, exist_ok=True)
 
-    # LOO-ISC distribution
-    _logger.info(f"[{label}] Computing broadband LOO-ISC …")
-    loo_isc, mean_loo_isc = compute_loo_isc(ad.data)
+    data = ad.data
+    sfreq = ad.sfreq
+    n_subjects, n_channels, n_times = data.shape
     _logger.info(
-        f"[{label}]  loo_isc: {loo_isc.shape}  mean_loo_isc: {mean_loo_isc.mean():.4f}"
-    )
-    plot_loo_isc_distribution(
-        {label: mean_loo_isc},
-        ylabel="Number of channels",
-        save_path=broadband_dir / "loo_isc_distribution.png",
+        f"[{label}] Data shape: {n_subjects} subjects, "
+        f"{n_channels} channels, {n_times} time points.",
     )
 
-    # Sliding-window ISC
-    _logger.info(f"[{label}] Computing broadband sliding-window ISC …")
-    sw_isc, sw_times = compute_sliding_window_isc(
-        ad.data,
-        window_sec=window_sec,
-        step_sec=step_sec,
-        sfreq=ad.sfreq,
+    # Channel subsampling for Spearman
+    if n_ch_subsample > 0 and n_ch_subsample < n_channels:
+        rng = np.random.default_rng(42)
+        ch_idx = np.sort(rng.choice(n_channels, n_ch_subsample, replace=False))
+        data_sub = data[:, ch_idx, :]
+        _logger.info(
+            f"[{label}] Subsampling {n_ch_subsample}/{n_channels} channels for Spearman."
+        )
+    else:
+        data_sub = data
+        n_ch_subsample = n_channels
+
+    # ── Section 1: LOO-ISC (Pearson + Spearman) ──────────────────────────
+    _logger.info(f"[{label}] Section 1: LOO-ISC (Pearson + Spearman) …")
+    loo_pearson, mean_pearson = compute_loo_isc(data)
+    loo_spearman, mean_spearman = compute_loo_isc_spearman(data_sub)
+
+    plot_loo_isc_pearson_vs_spearman(
+        label,
+        loo_pearson,
+        mean_pearson,
+        loo_spearman,
+        mean_spearman,
+        save_path_hist=broadband_dir / f"loo_isc_distribution_{label}.png",
+        save_path_violin=broadband_dir / f"loo_isc_per_subject_{label}.png",
     )
-    _logger.info(f"[{label}]  sw_isc: {sw_isc.shape}  sw_times: {sw_times.shape}")
-    plot_sliding_window_isc(
-        {label: (sw_isc, sw_times)},
-        isc_threshold=isc_threshold,
-        feature_axis_label="Channel index",
-        save_path=broadband_dir / "sliding_window_isc.png",
+
+    # ── Section 2: Pairwise ISC (Pearson + Spearman) ─────────────────────
+    _logger.info(f"[{label}] Section 2: Pairwise ISC (Pearson + Spearman) …")
+    pair_pearson = compute_pairwise_isc(data)
+    pair_spearman = compute_pairwise_isc_spearman(data_sub)
+
+    plot_pairwise_isc_pearson_vs_spearman(
+        label,
+        pair_pearson,
+        pair_spearman,
+        save_path_heatmaps=broadband_dir / f"pairwise_isc_matrix_{label}.png",
+        save_path_per_subject=broadband_dir / f"pairwise_isc_per_subject_{label}.png",
+        save_path_distribution=broadband_dir / f"pairwise_isc_distribution_{label}.png",
     )
-    print_significant_intervals(
-        {label: (sw_isc, sw_times)},
+
+    # ── Section 3: Multi-scale sliding-window ISC ─────────────────────────
+    _logger.info(f"[{label}] Section 3: Multi-scale sliding-window ISC …")
+    step_fine = window_fine_sec / 2
+    step_med = window_med_sec / 2
+    step_large = window_large_sec / 2
+
+    _logger.info(f"  Fine   ({window_fine_sec:.0f} s / {step_fine:.1f} s step) …")
+    isc_fine, times_fine = compute_sliding_window_isc(
+        data_sub, window_fine_sec, step_fine, sfreq
+    )
+    _logger.info(f"  Medium ({window_med_sec:.0f} s / {step_med:.1f} s step) …")
+    isc_med, times_med = compute_sliding_window_isc(
+        data_sub, window_med_sec, step_med, sfreq
+    )
+    _logger.info(f"  Large  ({window_large_sec:.0f} s / {step_large:.1f} s step) …")
+    isc_large, times_large = compute_sliding_window_isc(
+        data_sub, window_large_sec, step_large, sfreq
+    )
+    _logger.info(f"  Spearman medium ({window_med_sec:.0f} s / {step_med:.1f} s) …")
+    isc_spear_med, _ = compute_sliding_window_isc_spearman(
+        data_sub, window_med_sec, step_med, sfreq
+    )
+
+    plot_multiscale_sliding_window_isc(
+        label,
+        isc_fine,
+        times_fine,
+        isc_med,
+        times_med,
+        isc_large,
+        times_large,
+        isc_spear_med,
+        sfreq,
+        n_times,
+        window_fine_sec=window_fine_sec,
+        window_med_sec=window_med_sec,
+        window_large_sec=window_large_sec,
         isc_threshold=isc_threshold,
+        n_ch_subsample=n_ch_subsample if n_ch_subsample < n_channels else None,
+        save_path_bar=broadband_dir / f"sw_isc_bar_{label}.png",
+        save_path_overlay=broadband_dir / f"sw_isc_overlay_{label}.png",
+        save_path_comparison=broadband_dir / f"sw_isc_pearson_vs_spearman_{label}.png",
     )
 
 
@@ -213,77 +302,143 @@ def _run_band_analysis(
     label: str,
     save_dir: Path,
     isc_threshold: float,
-    window_sec: float,
+    window_fine_sec: float,
+    window_med_sec: float,
+    window_large_sec: float,
     step_sec: float,
+    n_ch_subsample: int,
 ) -> None:
     """Run all per-band ISC sections for one dataset."""
     bands_dir = save_dir / "bands"
     bands_dir.mkdir(parents=True, exist_ok=True)
 
-    # Per-band LOO-ISC
-    _logger.info(f"[{label}] Computing per-band LOO-ISC …")
+    data = ad.data
+    sfreq = ad.sfreq
+    _, n_channels, n_times = data.shape
+
+    # Channel subsampling for Spearman (same seed for reproducibility)
+    if n_ch_subsample > 0 and n_ch_subsample < n_channels:
+        rng = np.random.default_rng(42)
+        ch_idx = np.sort(rng.choice(n_channels, n_ch_subsample, replace=False))
+        _logger.info(
+            f"[{label}] Subsampling {n_ch_subsample}/{n_channels} channels for Spearman."
+        )
+    else:
+        ch_idx = np.arange(n_channels)
+        n_ch_subsample = n_channels
+
+    step_fine = window_fine_sec / 2
+    step_med = window_med_sec / 2
+    step_large = window_large_sec / 2
+
+    # ── Section 1: Per-band LOO-ISC (Pearson + Spearman) ─────────────────
+    _logger.info(f"[{label}] Section 1: per-band LOO-ISC (Pearson + Spearman) …")
     band_iscs: dict[str, tuple] = {}
+    band_iscs_spearman: dict[str, tuple] = {}
     for band, (l_freq, h_freq) in FREQUENCY_BANDS.items():
+        _logger.info(f"  {band:6s} ({l_freq}–{h_freq} Hz) — Pearson …")
         filtered = ad.filter_to_band(l_freq, h_freq)
         loo, mean_isc = compute_loo_isc(filtered.data)
         band_iscs[band] = (loo, mean_isc)
-        _logger.info(f"  {band:6s}  loo_isc={loo.shape}  mean={mean_isc.mean():.4f}")
 
-    plot_band_isc_distributions(
-        {label: band_iscs},
+        _logger.info(f"  {band:6s} ({l_freq}–{h_freq} Hz) — Spearman …")
+        loo_sp, mean_sp = compute_loo_isc_spearman(filtered.data[:, ch_idx, :])
+        band_iscs_spearman[band] = (loo_sp, mean_sp)
+
+    plot_band_loo_isc_pearson_vs_spearman(
+        label,
+        band_iscs,
+        band_iscs_spearman,
         bands=FREQUENCY_BANDS,
-        feature_axis_label="Number of channels",
-        save_path=bands_dir / "band_isc_distributions.png",
-    )
-    plot_band_mean_isc_bar(
-        {label: band_iscs},
-        bands=FREQUENCY_BANDS,
-        save_path=bands_dir / "band_isc_mean_bar.png",
+        save_path_dir=bands_dir / "loo_isc",
     )
 
-    # Per-band sliding-window ISC
-    _logger.info(f"[{label}] Computing per-band sliding-window ISC …")
-    band_sw: dict[str, tuple] = {}
+    # ── Section 2: Per-band pairwise ISC (Pearson + Spearman) ────────────
+    _logger.info(f"[{label}] Section 2: per-band pairwise ISC (Pearson + Spearman) …")
+    band_pair_pearson: dict[str, np.ndarray] = {}
+    band_pair_spearman: dict[str, np.ndarray] = {}
+    for band, (l_freq, h_freq) in FREQUENCY_BANDS.items():
+        _logger.info(f"  {band:6s} — Pearson pairwise …")
+        filtered = ad.filter_to_band(l_freq, h_freq)
+        band_pair_pearson[band] = compute_pairwise_isc(filtered.data)
+        _logger.info(f"  {band:6s} — Spearman pairwise …")
+        band_pair_spearman[band] = compute_pairwise_isc_spearman(
+            filtered.data[:, ch_idx, :]
+        )
+
+    plot_band_pairwise_isc_pearson_vs_spearman(
+        label,
+        band_pair_pearson,
+        band_pair_spearman,
+        bands=FREQUENCY_BANDS,
+        save_path_dir=bands_dir / "pairwise_isc",
+    )
+
+    # ── Section 3: Per-band multi-scale sliding-window ISC ───────────────
+    _logger.info(f"[{label}] Section 3: per-band multi-scale sliding-window ISC …")
+    band_sw_fine: dict[str, tuple] = {}
+    band_sw_med: dict[str, tuple] = {}
+    band_sw_large: dict[str, tuple] = {}
+    band_sw_spearman_med: dict[str, tuple] = {}
+
     for band, (l_freq, h_freq) in FREQUENCY_BANDS.items():
         filtered = ad.filter_to_band(l_freq, h_freq)
-        tc, times = compute_sliding_window_isc(
-            filtered.data,
-            window_sec=window_sec,
-            step_sec=step_sec,
-            sfreq=ad.sfreq,
+        fdata_sub = filtered.data[:, ch_idx, :]
+
+        _logger.info(f"  {band:6s} fine   ({window_fine_sec:.0f} s) …")
+        tc_fine, t_fine = compute_sliding_window_isc(
+            fdata_sub, window_fine_sec, step_fine, sfreq
         )
-        band_sw[band] = (tc, times)
-        _logger.info(f"  {band:6s}  isc_tc={tc.shape}  times={times.shape}")
+        band_sw_fine[band] = (tc_fine, t_fine)
 
-    plot_band_sliding_window_isc(
-        {label: band_sw},
-        bands=FREQUENCY_BANDS,
-        isc_threshold=BAND_ISC_THRESHOLDS,
-        feature_axis_label="Channel",
-        save_path=bands_dir / "band_sliding_window_isc.png",
-    )
-    print_band_significant_intervals(
-        {label: band_sw},
-        bands=FREQUENCY_BANDS,
+        _logger.info(f"  {band:6s} medium ({window_med_sec:.0f} s) …")
+        tc_med, t_med = compute_sliding_window_isc(
+            fdata_sub, window_med_sec, step_med, sfreq
+        )
+        band_sw_med[band] = (tc_med, t_med)
+
+        _logger.info(f"  {band:6s} large  ({window_large_sec:.0f} s) …")
+        tc_large, t_large = compute_sliding_window_isc(
+            fdata_sub, window_large_sec, step_large, sfreq
+        )
+        band_sw_large[band] = (tc_large, t_large)
+
+        _logger.info(f"  {band:6s} Spearman medium ({window_med_sec:.0f} s) …")
+        tc_sp, t_sp = compute_sliding_window_isc_spearman(
+            fdata_sub, window_med_sec, step_med, sfreq
+        )
+        band_sw_spearman_med[band] = (tc_sp, t_sp)
+
+    plot_band_multiscale_sliding_window_isc(
+        label,
+        band_sw_fine,
+        band_sw_med,
+        band_sw_large,
+        band_sw_spearman_med,
+        sfreq,
+        n_times,
+        window_fine_sec=window_fine_sec,
+        window_med_sec=window_med_sec,
+        window_large_sec=window_large_sec,
         band_thresholds=BAND_ISC_THRESHOLDS,
-        default_threshold=isc_threshold,
+        bands=FREQUENCY_BANDS,
+        n_ch_subsample=n_ch_subsample if n_ch_subsample < n_channels else None,
+        save_path_dir=bands_dir / "sliding_window",
     )
 
-    # Band overlap (requires broadband sliding-window ISC)
-    _logger.info(f"[{label}] Computing broadband ISC for band-overlap plot …")
-    sw_isc, sw_times = compute_sliding_window_isc(
-        ad.data,
-        window_sec=window_sec,
-        step_sec=step_sec,
-        sfreq=ad.sfreq,
+    # ── Section 4: Band-overlap analysis ──────────────────────────────────
+    _logger.info(f"[{label}] Section 4: band-overlap analysis …")
+    _logger.info(f"  Broadband sliding-window ISC (medium, {window_med_sec:.0f} s) …")
+    sw_isc_bb, sw_times_bb = compute_sliding_window_isc(
+        data, window_med_sec, step_med, sfreq
     )
     plot_band_overlap(
-        {label: band_sw},
+        {label: band_sw_med},
         bands=FREQUENCY_BANDS,
         band_thresholds=BAND_ISC_THRESHOLDS,
-        broadband_sw={label: (sw_isc, sw_times)},
+        broadband_sw={label: (sw_isc_bb, sw_times_bb)},
         broadband_threshold=isc_threshold,
-        save_path=bands_dir / "band_overlap.png",
+        save_path=bands_dir / f"band_overlap_{label}.png",
     )
 
 
@@ -394,8 +549,11 @@ if __name__ == "__main__":
             label=label,
             save_dir=save_dir,
             isc_threshold=args.isc_threshold,
-            window_sec=args.window_sec,
+            window_fine_sec=args.window_fine_sec,
+            window_med_sec=args.window_sec,
+            window_large_sec=args.window_large_sec,
             step_sec=args.step_sec,
+            n_ch_subsample=args.n_ch_subsample,
         )
 
         _run_band_analysis(
@@ -403,8 +561,11 @@ if __name__ == "__main__":
             label=label,
             save_dir=save_dir,
             isc_threshold=args.isc_threshold,
-            window_sec=args.window_sec,
+            window_fine_sec=args.window_fine_sec,
+            window_med_sec=args.window_sec,
+            window_large_sec=args.window_large_sec,
             step_sec=args.step_sec,
+            n_ch_subsample=args.n_ch_subsample,
         )
 
         _run_mean_field_analysis(

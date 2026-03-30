@@ -13,6 +13,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from src.visualization.preprocessing_plots import DatasetPlotter
+from src.visualization.isc_plots import (
+    plot_loo_isc_pearson_vs_spearman,
+    plot_pairwise_isc_pearson_vs_spearman,
+    plot_multiscale_sliding_window_isc,
+    plot_band_loo_isc_pearson_vs_spearman,
+    plot_band_pairwise_isc_pearson_vs_spearman,
+    plot_band_multiscale_sliding_window_isc,
+)
+from src.analysis.isc import FREQUENCY_BANDS
 from src.definitions.constants import ProjectPaths
 from pathlib import Path
 
@@ -76,4 +85,253 @@ class TestPlotSignalOverlap:
             time_duration=2,
             save_fig=str(tmp_path / "test_overlap.png"),
         )
+        plt.close("all")
+
+
+# ---------------------------------------------------------------------------
+# Helpers for ISC plot tests
+# ---------------------------------------------------------------------------
+
+_N_SUBJECTS = 4
+_N_CHANNELS = 8
+_N_TIMES = 500
+_SFREQ = 50.0
+
+
+@pytest.fixture()
+def isc_rng():
+    return np.random.default_rng(0)
+
+
+@pytest.fixture()
+def fake_loo(isc_rng):
+    """(n_subjects, n_channels) LOO-ISC array."""
+    return isc_rng.uniform(-0.1, 0.2, (_N_SUBJECTS, _N_CHANNELS)).astype(np.float32)
+
+
+@pytest.fixture()
+def fake_mean_isc(isc_rng):
+    """(n_channels,) mean LOO-ISC array."""
+    return isc_rng.uniform(-0.1, 0.2, (_N_CHANNELS,)).astype(np.float32)
+
+
+@pytest.fixture()
+def fake_pair(isc_rng):
+    """(n_subjects, n_subjects) pairwise ISC matrix (symmetric)."""
+    mat = isc_rng.uniform(0.0, 0.1, (_N_SUBJECTS, _N_SUBJECTS)).astype(np.float32)
+    mat = (mat + mat.T) / 2
+    np.fill_diagonal(mat, 1.0)
+    return mat
+
+
+@pytest.fixture()
+def fake_sw(isc_rng):
+    """Sliding-window ISC: (n_windows, n_channels) + times (n_windows,)."""
+    n_windows = 20
+    isc_tc = isc_rng.uniform(-0.05, 0.1, (n_windows, _N_CHANNELS)).astype(np.float32)
+    times = np.arange(n_windows, dtype=float) * (_N_TIMES / _SFREQ / n_windows)
+    return isc_tc, times
+
+
+# ---------------------------------------------------------------------------
+# Tests for new ISC plot functions
+# ---------------------------------------------------------------------------
+
+
+class TestPlotLooIscPearsonVsSpearman:
+    """plot_loo_isc_pearson_vs_spearman returns two Figure objects."""
+
+    def test_returns_two_figures(self, fake_loo, fake_mean_isc):
+        result = plot_loo_isc_pearson_vs_spearman(
+            "TEST",
+            fake_loo,
+            fake_mean_isc,
+            fake_loo[:, :4],  # subsampled Spearman
+            fake_mean_isc[:4],
+        )
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        for fig in result:
+            assert fig is not None
+        plt.close("all")
+
+    def test_saves_to_path(self, tmp_path, fake_loo, fake_mean_isc):
+        hist_path = tmp_path / "hist.png"
+        violin_path = tmp_path / "violin.png"
+        plot_loo_isc_pearson_vs_spearman(
+            "TEST",
+            fake_loo,
+            fake_mean_isc,
+            fake_loo,
+            fake_mean_isc,
+            save_path_hist=hist_path,
+            save_path_violin=violin_path,
+        )
+        assert hist_path.exists()
+        assert violin_path.exists()
+        plt.close("all")
+
+
+class TestPlotPairwiseIscPearsonVsSpearman:
+    """plot_pairwise_isc_pearson_vs_spearman returns three Figure objects."""
+
+    def test_returns_three_figures(self, fake_pair):
+        result = plot_pairwise_isc_pearson_vs_spearman("TEST", fake_pair, fake_pair)
+        assert isinstance(result, tuple)
+        assert len(result) == 3
+        plt.close("all")
+
+    def test_saves_to_paths(self, tmp_path, fake_pair):
+        p_hm = tmp_path / "heatmaps.png"
+        p_subj = tmp_path / "per_subject.png"
+        p_dist = tmp_path / "distribution.png"
+        plot_pairwise_isc_pearson_vs_spearman(
+            "TEST",
+            fake_pair,
+            fake_pair,
+            save_path_heatmaps=p_hm,
+            save_path_per_subject=p_subj,
+            save_path_distribution=p_dist,
+        )
+        assert p_hm.exists()
+        assert p_subj.exists()
+        assert p_dist.exists()
+        plt.close("all")
+
+
+class TestPlotMultiscaleSlidingWindowIsc:
+    """plot_multiscale_sliding_window_isc returns three Figure objects."""
+
+    def test_returns_three_figures(self, fake_sw):
+        isc_fine, times_fine = fake_sw
+        result = plot_multiscale_sliding_window_isc(
+            "TEST",
+            isc_fine,
+            times_fine,
+            isc_fine,
+            times_fine,
+            isc_fine,
+            times_fine,
+            isc_fine,
+            _SFREQ,
+            _N_TIMES,
+        )
+        assert isinstance(result, tuple)
+        assert len(result) == 3
+        plt.close("all")
+
+    def test_saves_bar_figure(self, tmp_path, fake_sw):
+        isc_tc, times = fake_sw
+        bar_path = tmp_path / "bar.png"
+        plot_multiscale_sliding_window_isc(
+            "TEST",
+            isc_tc,
+            times,
+            isc_tc,
+            times,
+            isc_tc,
+            times,
+            isc_tc,
+            _SFREQ,
+            _N_TIMES,
+            save_path_bar=bar_path,
+        )
+        assert bar_path.exists()
+        plt.close("all")
+
+
+class TestPlotBandLooIscPearsonVsSpearman:
+    """plot_band_loo_isc_pearson_vs_spearman returns a dict keyed by band."""
+
+    def test_returns_dict_with_all_bands(self, fake_loo, fake_mean_isc):
+        band_iscs = {band: (fake_loo, fake_mean_isc) for band in FREQUENCY_BANDS}
+        band_iscs_sp = {
+            band: (fake_loo[:, :4], fake_mean_isc[:4]) for band in FREQUENCY_BANDS
+        }
+        result = plot_band_loo_isc_pearson_vs_spearman("TEST", band_iscs, band_iscs_sp)
+        assert set(result.keys()) == set(FREQUENCY_BANDS.keys())
+        for band, (fig_hist, fig_violin) in result.items():
+            assert fig_hist is not None
+            assert fig_violin is not None
+        plt.close("all")
+
+    def test_saves_to_directory(self, tmp_path, fake_loo, fake_mean_isc):
+        band_iscs = {band: (fake_loo, fake_mean_isc) for band in FREQUENCY_BANDS}
+        band_iscs_sp = {band: (fake_loo, fake_mean_isc) for band in FREQUENCY_BANDS}
+        plot_band_loo_isc_pearson_vs_spearman(
+            "TEST", band_iscs, band_iscs_sp, save_path_dir=tmp_path
+        )
+        # Each band should produce two files
+        for band in FREQUENCY_BANDS:
+            assert (tmp_path / f"loo_isc_distribution_{band}_TEST.png").exists()
+            assert (tmp_path / f"loo_isc_per_subject_{band}_TEST.png").exists()
+        plt.close("all")
+
+
+class TestPlotBandPairwiseIscPearsonVsSpearman:
+    """plot_band_pairwise_isc_pearson_vs_spearman returns a dict keyed by band."""
+
+    def test_returns_dict_with_all_bands(self, fake_pair):
+        band_pair = {band: fake_pair for band in FREQUENCY_BANDS}
+        result = plot_band_pairwise_isc_pearson_vs_spearman(
+            "TEST", band_pair, band_pair
+        )
+        assert set(result.keys()) == set(FREQUENCY_BANDS.keys())
+        for band, (fig_hm, fig_subj, fig_dist) in result.items():
+            assert fig_hm is not None
+            assert fig_subj is not None
+            assert fig_dist is not None
+        plt.close("all")
+
+    def test_saves_to_directory(self, tmp_path, fake_pair):
+        band_pair = {band: fake_pair for band in FREQUENCY_BANDS}
+        plot_band_pairwise_isc_pearson_vs_spearman(
+            "TEST", band_pair, band_pair, save_path_dir=tmp_path
+        )
+        for band in FREQUENCY_BANDS:
+            assert (tmp_path / f"pairwise_isc_matrix_{band}_TEST.png").exists()
+            assert (tmp_path / f"pairwise_isc_per_subject_{band}_TEST.png").exists()
+            assert (tmp_path / f"pairwise_isc_distribution_{band}_TEST.png").exists()
+        plt.close("all")
+
+
+class TestPlotBandMultiscaleSlidingWindowIsc:
+    """plot_band_multiscale_sliding_window_isc returns a dict keyed by band."""
+
+    def test_returns_dict_with_all_bands(self, fake_sw):
+        isc_tc, times = fake_sw
+        band_sw = {band: (isc_tc, times) for band in FREQUENCY_BANDS}
+        result = plot_band_multiscale_sliding_window_isc(
+            "TEST",
+            band_sw,
+            band_sw,
+            band_sw,
+            band_sw,
+            _SFREQ,
+            _N_TIMES,
+        )
+        assert set(result.keys()) == set(FREQUENCY_BANDS.keys())
+        for band, (fig_bar, fig_ov, fig_cmp) in result.items():
+            assert fig_bar is not None
+            assert fig_ov is not None
+            assert fig_cmp is not None
+        plt.close("all")
+
+    def test_saves_to_directory(self, tmp_path, fake_sw):
+        isc_tc, times = fake_sw
+        band_sw = {band: (isc_tc, times) for band in FREQUENCY_BANDS}
+        plot_band_multiscale_sliding_window_isc(
+            "TEST",
+            band_sw,
+            band_sw,
+            band_sw,
+            band_sw,
+            _SFREQ,
+            _N_TIMES,
+            save_path_dir=tmp_path,
+        )
+        for band in FREQUENCY_BANDS:
+            assert (tmp_path / f"sw_isc_bar_{band}_TEST.png").exists()
+            assert (tmp_path / f"sw_isc_overlay_{band}_TEST.png").exists()
+            assert (tmp_path / f"sw_isc_pearson_vs_spearman_{band}_TEST.png").exists()
         plt.close("all")
