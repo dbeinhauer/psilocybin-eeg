@@ -365,12 +365,17 @@ class TestRunAnalysisArgValidation:
                 "scripts.analysis_common.analyzers_to_datasets",
                 return_value={"TEST": object()},
             ),
-            patch.object(sys, "argv", [
-                "scripts/run_analysis.py",
-                "--analysis", "wavelet_power",
-                "--wavelet_reshape_frequency_dim",
-                # intentionally omitting --wavelet_keep_frequency_dim
-            ]),
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "scripts/run_analysis.py",
+                    "--analysis",
+                    "wavelet_power",
+                    "--wavelet_reshape_frequency_dim",
+                    # intentionally omitting --wavelet_keep_frequency_dim
+                ],
+            ),
             pytest.raises(SystemExit) as exc_info,
         ):
             runpy.run_path(
@@ -397,7 +402,9 @@ class TestRunWaveletWorkflowReshapeRaisesInWorkflow:
 
     def test_reshape_frequency_dim_raises_in_workflow(self, sample_datasets, tmp_path):
         freqs = np.linspace(4.0, 30.0, 5)
-        with pytest.raises(ValueError, match="reshape_frequency_dim=True is not supported"):
+        with pytest.raises(
+            ValueError, match="reshape_frequency_dim=True is not supported"
+        ):
             run_wavelet_workflow(
                 sample_datasets,
                 analyzers={},

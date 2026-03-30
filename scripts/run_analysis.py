@@ -59,10 +59,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Early validation: reshape requires keep
-    if (
-        args.wavelet_reshape_frequency_dim
-        and not args.wavelet_keep_frequency_dim
-    ):
+    if args.wavelet_reshape_frequency_dim and not args.wavelet_keep_frequency_dim:
         parser.error(
             "--wavelet_reshape_frequency_dim requires --wavelet_keep_frequency_dim"
         )
