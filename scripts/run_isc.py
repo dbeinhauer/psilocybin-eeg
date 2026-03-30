@@ -245,8 +245,7 @@ def _run_broadband_analysis(
         pair_spearman,
         save_path_heatmaps=broadband_dir / f"pairwise_isc_matrix_{label}.png",
         save_path_per_subject=broadband_dir / f"pairwise_isc_per_subject_{label}.png",
-        save_path_distribution=broadband_dir
-        / f"pairwise_isc_distribution_{label}.png",
+        save_path_distribution=broadband_dir / f"pairwise_isc_distribution_{label}.png",
     )
 
     # ── Section 3: Multi-scale sliding-window ISC ─────────────────────────
@@ -290,8 +289,7 @@ def _run_broadband_analysis(
         n_ch_subsample=n_ch_subsample if n_ch_subsample < n_channels else None,
         save_path_bar=broadband_dir / f"sw_isc_bar_{label}.png",
         save_path_overlay=broadband_dir / f"sw_isc_overlay_{label}.png",
-        save_path_comparison=broadband_dir
-        / f"sw_isc_pearson_vs_spearman_{label}.png",
+        save_path_comparison=broadband_dir / f"sw_isc_pearson_vs_spearman_{label}.png",
     )
 
 

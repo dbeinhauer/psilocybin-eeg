@@ -176,9 +176,7 @@ class TestPlotPairwiseIscPearsonVsSpearman:
     """plot_pairwise_isc_pearson_vs_spearman returns three Figure objects."""
 
     def test_returns_three_figures(self, fake_pair):
-        result = plot_pairwise_isc_pearson_vs_spearman(
-            "TEST", fake_pair, fake_pair
-        )
+        result = plot_pairwise_isc_pearson_vs_spearman("TEST", fake_pair, fake_pair)
         assert isinstance(result, tuple)
         assert len(result) == 3
         plt.close("all")
@@ -247,10 +245,10 @@ class TestPlotBandLooIscPearsonVsSpearman:
 
     def test_returns_dict_with_all_bands(self, fake_loo, fake_mean_isc):
         band_iscs = {band: (fake_loo, fake_mean_isc) for band in FREQUENCY_BANDS}
-        band_iscs_sp = {band: (fake_loo[:, :4], fake_mean_isc[:4]) for band in FREQUENCY_BANDS}
-        result = plot_band_loo_isc_pearson_vs_spearman(
-            "TEST", band_iscs, band_iscs_sp
-        )
+        band_iscs_sp = {
+            band: (fake_loo[:, :4], fake_mean_isc[:4]) for band in FREQUENCY_BANDS
+        }
+        result = plot_band_loo_isc_pearson_vs_spearman("TEST", band_iscs, band_iscs_sp)
         assert set(result.keys()) == set(FREQUENCY_BANDS.keys())
         for band, (fig_hist, fig_violin) in result.items():
             assert fig_hist is not None

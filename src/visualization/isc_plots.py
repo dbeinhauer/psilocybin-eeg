@@ -1227,9 +1227,7 @@ def plot_pairwise_isc_pearson_vs_spearman(
         mat_display = mat.copy()
         np.fill_diagonal(mat_display, np.nan)
         vmax = max(float(np.nanmax(np.abs(mat_display))), 0.01)
-        im = ax.imshow(
-            mat_display, cmap="RdBu_r", vmin=-vmax, vmax=vmax, aspect="auto"
-        )
+        im = ax.imshow(mat_display, cmap="RdBu_r", vmin=-vmax, vmax=vmax, aspect="auto")
         plt.colorbar(im, ax=ax, label="ISC (r)", shrink=0.82)
         ax.set_xticks(range(n_subjects))
         ax.set_yticks(range(n_subjects))
@@ -1397,9 +1395,7 @@ def plot_multiscale_sliding_window_isc(
         for v in mean_med
     ]
 
-    fig_bar, ax_bar = plt.subplots(
-        figsize=(max(14, len(win_centers_s) * 0.28), 4)
-    )
+    fig_bar, ax_bar = plt.subplots(figsize=(max(14, len(win_centers_s) * 0.28), 4))
     ax_bar.bar(
         win_centers_s,
         mean_med,
@@ -1445,8 +1441,7 @@ def plot_multiscale_sliding_window_isc(
     extra_h, _ = ax_bar.get_legend_handles_labels()
     ax_bar.legend(
         handles=bar_patches + extra_h,
-        labels=[p.get_label() for p in bar_patches]
-        + [h.get_label() for h in extra_h],
+        labels=[p.get_label() for p in bar_patches] + [h.get_label() for h in extra_h],
         frameon=False,
         fontsize=9,
     )
@@ -1517,7 +1512,11 @@ def plot_multiscale_sliding_window_isc(
                 t_end,
                 color="gold",
                 alpha=0.22,
-                label="Sig. window (med)" if (first_span and _ax is ax_isc) else "_nolegend_",
+                label=(
+                    "Sig. window (med)"
+                    if (first_span and _ax is ax_isc)
+                    else "_nolegend_"
+                ),
             )
         first_span = False
 
@@ -1672,8 +1671,7 @@ def plot_multiscale_sliding_window_isc(
     ax_cmp.set_xlabel("Time (s)")
     ax_cmp.set_ylabel("Mean LOO-ISC (r)")
     ax_cmp.set_title(
-        f"[{label}]  Pearson vs. Spearman  "
-        f"({window_med_sec:.0f} s / 50% overlap)"
+        f"[{label}]  Pearson vs. Spearman  ({window_med_sec:.0f} s / 50% overlap)"
     )
     ax_cmp.legend(frameon=False, fontsize=9)
     sns.despine(fig=fig_cmp)
@@ -1799,7 +1797,8 @@ def plot_band_loo_isc_pearson_vs_spearman(
         fig_hist.tight_layout()
         if save_path_dir is not None:
             _save_fig(
-                fig_hist, Path(save_path_dir) / f"loo_isc_distribution_{band}_{label}.png"
+                fig_hist,
+                Path(save_path_dir) / f"loo_isc_distribution_{band}_{label}.png",
             )
         plt.show()
 
@@ -1846,9 +1845,7 @@ def plot_band_loo_isc_pearson_vs_spearman(
         ax2.axhline(0, color="gray", ls="--", lw=0.8, label="r = 0")
         ax2.set_xlabel("Correlation method")
         ax2.set_ylabel("Mean LOO-ISC across channels (r)")
-        ax2.set_title(
-            f"[{label} / {band.upper()}]  Per-subject mean LOO-ISC"
-        )
+        ax2.set_title(f"[{label} / {band.upper()}]  Per-subject mean LOO-ISC")
         ax2.legend(frameon=False, fontsize=9)
         sns.despine(fig=fig_violin)
         fig_violin.tight_layout()
@@ -1908,9 +1905,7 @@ def plot_band_pairwise_isc_pearson_vs_spearman(
 
         # ── Side-by-side heatmaps ─────────────────────────────────────────
         fig_hm, axes = plt.subplots(1, 2, figsize=(14, 5))
-        for ax, mat, method in zip(
-            axes, [pair_p, pair_s], ["Pearson", "Spearman"]
-        ):
+        for ax, mat, method in zip(axes, [pair_p, pair_s], ["Pearson", "Spearman"]):
             mat_display = mat.copy()
             np.fill_diagonal(mat_display, np.nan)
             vmax = max(float(np.nanmax(np.abs(mat_display))), 0.01)
@@ -1979,8 +1974,7 @@ def plot_band_pairwise_isc_pearson_vs_spearman(
         if save_path_dir is not None:
             _save_fig(
                 fig_subj,
-                Path(save_path_dir)
-                / f"pairwise_isc_per_subject_{band}_{label}.png",
+                Path(save_path_dir) / f"pairwise_isc_per_subject_{band}_{label}.png",
             )
         plt.show()
 
@@ -2018,8 +2012,7 @@ def plot_band_pairwise_isc_pearson_vs_spearman(
         if save_path_dir is not None:
             _save_fig(
                 fig_dist,
-                Path(save_path_dir)
-                / f"pairwise_isc_distribution_{band}_{label}.png",
+                Path(save_path_dir) / f"pairwise_isc_distribution_{band}_{label}.png",
             )
         plt.show()
 
@@ -2117,15 +2110,11 @@ def plot_band_multiscale_sliding_window_isc(
         std_per_win = isc_med.std(axis=1)
         bar_w = window_med_sec / 2 * 0.9
         bar_colors = [
-            "#5cb85c"
-            if v > thr_band
-            else (_C_NEG if v < 0 else color_band)
+            "#5cb85c" if v > thr_band else (_C_NEG if v < 0 else color_band)
             for v in mean_med
         ]
 
-        fig_bar, ax_bar = plt.subplots(
-            figsize=(max(14, len(win_centers_s) * 0.28), 4)
-        )
+        fig_bar, ax_bar = plt.subplots(figsize=(max(14, len(win_centers_s) * 0.28), 4))
         ax_bar.bar(
             win_centers_s,
             mean_med,
@@ -2246,9 +2235,11 @@ def plot_band_multiscale_sliding_window_isc(
                     t_end,
                     color="gold",
                     alpha=0.22,
-                    label="Sig. window (med)"
-                    if (first_span and _ax is ax_isc)
-                    else "_nolegend_",
+                    label=(
+                        "Sig. window (med)"
+                        if (first_span and _ax is ax_isc)
+                        else "_nolegend_"
+                    ),
                 )
             first_span = False
 
@@ -2417,8 +2408,7 @@ def plot_band_multiscale_sliding_window_isc(
         if save_path_dir is not None:
             _save_fig(
                 fig_cmp,
-                Path(save_path_dir)
-                / f"sw_isc_pearson_vs_spearman_{band}_{label}.png",
+                Path(save_path_dir) / f"sw_isc_pearson_vs_spearman_{band}_{label}.png",
             )
         plt.show()
 
