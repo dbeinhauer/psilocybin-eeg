@@ -310,7 +310,7 @@ def _run_band_analysis(
 
     data = ad.data
     sfreq = ad.sfreq
-    n_subjects, n_channels, n_times = data.shape
+    _, n_channels, n_times = data.shape
 
     # Channel subsampling for Spearman (same seed for reproducibility)
     if n_ch_subsample > 0 and n_ch_subsample < n_channels:
