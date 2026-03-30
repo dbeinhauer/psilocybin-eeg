@@ -52,14 +52,17 @@ psilocybin-eeg/
 │   │
 │   ├── analysis/                  #   Feature extraction & statistical analysis
 │   │   ├── __init__.py
-│   │   ├── isc.py                 #     Inter-Subject Correlation computation
+│   │   ├── README.md              #     Package documentation and function reference
+│   │   ├── isc.py                 #     Inter-Subject Correlation computation (Pearson, Spearman, mean-field)
+│   │   ├── mean_variance.py       #     Intersubject mean-variance synchrony analysis
 │   │   ├── data_representations.py #    AnalysisData container & adapters (time-domain, wavelet, etc.)
 │   │   └── summary.py             #     High-level analysis orchestrator (EEGSummarizedAnalyzer)
 │   │
 │   ├── visualization/             #   All plotting code
 │   │   ├── __init__.py
 │   │   ├── preprocessing_plots.py #     Topomap, power spectrum, signal-overlap plots
-│   │   └── isc_plots.py           #     ISC heatmaps, sliding-window plots, band comparison
+│   │   ├── isc_plots.py           #     ISC histograms, pairwise heatmaps, multi-scale sliding-window plots
+│   │   └── mean_variance_plots.py #     Mean-variance synchrony plots
 │   │
 │   ├── filtering/                 #   Metadata / DataFrame filtering
 │   │   ├── __init__.py
@@ -69,28 +72,37 @@ psilocybin-eeg/
 │       └── logging_config.py      #     LoggerMixin, setup helpers
 │
 ├── scripts/                       # ── CLI entry points ──────────────
+│   ├── analysis_common.py         #   Shared helpers: load_analyzers, analyzers_to_datasets
 │   ├── run_preprocessing.py       #   Full preprocessing pipeline
 │   ├── run_time_alignment.py      #   Stimulus-based time alignment
-│   ├── run_analysis.py            #   ISC & group-level analysis
+│   ├── run_isc.py                 #   ISC analysis (broadband, per-band, mean-field)
+│   ├── run_mean_variance.py       #   Mean-variance synchrony analysis
+│   ├── run_analysis.py            #   Legacy ISC & group-level analysis entry point
 │   ├── organize_plots.sh          #   Organize plot files by participant
 │   └── zip_data_subset.sh         #   Create zip archives of processed data
 │
 ├── notebooks/                     # ── Exploratory analysis ──────────
-│   ├── data_analysis.ipynb
-│   ├── test_notebook.ipynb
-│   └── time_alignment.ipynb
+│   ├── 00-preprocessing/          #   Preprocessing inspection and time alignment
+│   ├── 01-raw-mean-variance-analysis/  #   Mean-variance synchrony (broadband + per-band)
+│   ├── 02-isc-broadband-analysis/ #   ISC analysis (broadband + per-band)
+│   └── [legacy notebooks]         #   data_analysis.ipynb, time_alignment.ipynb, etc.
 │
 ├── tests/                         # ── Tests ──────────────────────────
 │   ├── conftest.py                #   Shared fixtures
-│   └── test_dataset_parsing.py
+│   ├── test_dataset_parsing.py
+│   ├── test_isc.py
+│   ├── test_mean_variance.py
+│   ├── test_visualization.py
+│   └── [further test modules]     #   One per src/ module
 │
 ├── jobs/                          # ── HPC job scripts ───────────────
-│   ├── metacentrum/
-│   │   ├── preprocessing_job_template.pbs
-│   │   ├── run_excluded_plot.pbs
-│   │   └── run_full_preprocessing.pbs
-│   └── umbriel/
-│       └── run_dataset_preprocessing.pbs
+│   └── metacentrum/
+│       ├── 00-preprocessing/      #   Preprocessing job scripts
+│       ├── 01-raw-mean-variance-analysis/  #   Mean-variance job script
+│       ├── 02-isc-broadband-analysis/      #   ISC job script
+│       ├── preprocessing_job_template.pbs  #   Legacy flat scripts
+│       ├── run_excluded_plot.pbs
+│       └── run_full_preprocessing.pbs
 │
 └── docs/                          # ── Extended documentation ─────────
     ├── pipeline_overview.md       #   End-to-end description of the workflow

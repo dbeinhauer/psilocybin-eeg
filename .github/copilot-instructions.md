@@ -68,7 +68,7 @@ notebooks/
 2. **Title cell** (Markdown) — analysis name + scope + brief description of what is computed and visualised.
 3. **Configuration cell** (code) — all user-tunable parameters (condition, music types, window sizes, thresholds …) in one place; also define `SAVE_PLOTS = True` and `PLOTS_DIR = ProjectPaths.NOTEBOOKS_DIR / "<notebook-dir>" / "plots" / "<scope>"` (import `ProjectPaths` in the setup cell).
 4. **Data loading cell** (code) — load / process-and-save data via `load_analyzers` / `analyzers_to_datasets`.
-5. **Dataset selection cell** (code) — pick the active music-type label and derive dimension variables.
+5. **Dataset selection cell** (code) — pick the active music-type label and look up the dataset using the combined key `f"{CONDITION.value}_{LABEL}"` (e.g. `datasets[f"{CONDITION.value}_{LABEL}"]`). `load_analyzers` / `analyzers_to_datasets` key datasets as `"{condition}_{music_type}"` (e.g. `"Placebo_CLASSIC"`). Derive dimension variables (`n_subjects`, `n_channels`, `n_times`, `sfreq`) from the selected `AnalysisData` object.
 6. **One cell per analysis step** — each step has a Markdown header explaining what is computed/plotted, followed by a single code cell that calls one `src.analysis.*` or `src.visualization.*` function and displays the result; pass `save_path=PLOTS_DIR / "filename.png" if SAVE_PLOTS else None` to each plot function.
 
 **Notebook code style:**
@@ -257,6 +257,11 @@ python scripts/run_time_alignment.py --condition Placebo --music_type CLASSIC
 
 # ISC analysis (dedicated script — Placebo condition by default)
 python scripts/run_isc.py --music_type CLASSIC PSYTRANCE
+
+# ISC with custom multi-scale window sizes and channel subsampling
+python scripts/run_isc.py --music_type CLASSIC \
+    --window_fine_sec 1.0 --window_sec 5.0 --window_large_sec 15.0 \
+    --n_ch_subsample 64
 
 # Mean-variance analysis (Placebo condition by default)
 python scripts/run_mean_variance.py --music_type CLASSIC PSYTRANCE
