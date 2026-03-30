@@ -1079,7 +1079,8 @@ def plot_loo_isc_pearson_vs_spearman(
         n_out = int((mean_isc > clip).sum())
         vals = mean_isc[mean_isc <= clip]
         counts, edges = np.histogram(vals, bins=30)
-        pct_vals = counts / n_channels * 100
+        n_channels_current = mean_isc.shape[0]
+        pct_vals = counts / n_channels_current * 100
         centers = 0.5 * (edges[:-1] + edges[1:])
         _hist_colors = [color if c >= 0 else _C_NEG for c in centers]
         ax.bar(
