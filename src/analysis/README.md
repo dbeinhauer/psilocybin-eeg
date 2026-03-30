@@ -235,8 +235,10 @@ the same commit that changes the code — do not leave stale documentation behin
 # ISC analysis (broadband + per-band + mean-field, Placebo condition, both music types)
 python scripts/run_isc.py --music_type CLASSIC PSYTRANCE
 
-# ISC with custom window / step sizes (50% overlap by default: step = window / 2)
-python scripts/run_isc.py --music_type CLASSIC --window_sec 10.0 --step_sec 5.0
+# ISC with custom multi-scale window sizes and channel subsampling for Spearman
+python scripts/run_isc.py --music_type CLASSIC \
+    --window_fine_sec 1.0 --window_sec 5.0 --window_large_sec 15.0 \
+    --n_ch_subsample 64
 
 # Mean-variance analysis (dedicated script)
 python scripts/run_mean_variance.py --music_type CLASSIC PSYTRANCE
