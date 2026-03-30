@@ -8,23 +8,80 @@ An interactive Streamlit multi-page app that serves as:
 
 ---
 
-## How to Run
+## Running Locally
 
-### 1. Install dependencies
+### Option A — with `uv` (recommended)
+
+[`uv`](https://docs.astral.sh/uv/) is the project's recommended Python toolchain.
+Run the app in an **isolated, temporary environment** — no manual install needed:
 
 ```bash
-pip install -r docs/viz_catalog/requirements.txt
+# From the repository root:
+uv run --with "streamlit>=1.32.0" --with "pyyaml>=6.0" --with "matplotlib>=3.7.0" \
+    streamlit run docs/viz_catalog/app.py
 ```
 
-### 2. Launch the app
-
-From the **repository root**:
+Or install into a dedicated virtual environment and reuse it:
 
 ```bash
+# Create and activate a virtual environment
+uv venv .venv-viz
+source .venv-viz/bin/activate          # macOS / Linux
+# .venv-viz\Scripts\activate            # Windows PowerShell
+
+# Install catalog dependencies
+uv pip install -r docs/viz_catalog/requirements.txt
+
+# Launch
 streamlit run docs/viz_catalog/app.py
 ```
 
-The app opens at `http://localhost:8501` in your browser.
+### Option B — with plain `pip`
+
+```bash
+# (Optionally create a venv first)
+python -m venv .venv-viz && source .venv-viz/bin/activate
+
+pip install -r docs/viz_catalog/requirements.txt
+streamlit run docs/viz_catalog/app.py
+```
+
+The app opens at **`http://localhost:8501`** in your browser.
+
+---
+
+## Browsing Real Results Locally
+
+The **Results Browser** page lets you view plot files that were generated on HPC
+(or a local pipeline run) once you copy them to your machine.
+
+### 1. Copy plots from the HPC cluster
+
+Use `rsync` (recommended — fast, incremental) or `scp`:
+
+```bash
+# rsync — copy the entire plots/ tree from HPC to your local machine
+rsync -avz --progress \
+    <your-username>@<hpc-hostname>:/path/to/project/plots/ \
+    ~/psilocybin-eeg-results/
+
+# scp alternative
+scp -r <your-username>@<hpc-hostname>:/path/to/project/plots/ \
+    ~/psilocybin-eeg-results/
+```
+
+> **Tip:** The plots directory on HPC follows the layout
+> `plots/<NN-analysis-name>/<Condition>_<MUSIC_TYPE>/<subdir>/`.
+> The Results Browser parses this structure automatically for its sidebar filters.
+
+### 2. Point the Results Browser at your local folder
+
+1. Launch the app (see above).
+2. Navigate to **🔬 Results Browser** in the sidebar.
+3. Paste the local path you copied plots into, e.g. `~/psilocybin-eeg-results/` or
+   `C:\Users\you\psilocybin-eeg-results\`.
+4. Use the sidebar filters to narrow by analysis stage, condition, music type, or
+   filename pattern.
 
 ---
 
