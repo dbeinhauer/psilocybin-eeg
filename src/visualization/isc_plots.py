@@ -1064,7 +1064,6 @@ def plot_loo_isc_pearson_vs_spearman(
     :param save_path_violin: Optional path to save the per-subject violin figure.
     :return: Tuple ``(fig_hist, fig_violin)``.
     """
-    n_channels = mean_isc_pearson.shape[0]
     n_subjects = loo_pearson.shape[0]
 
     # ── Histogram: Pearson vs. Spearman side by side ──────────────────────
