@@ -104,14 +104,22 @@ scp -r <your-username>@<hpc-hostname>:/path/to/project/plots/ \
 
 #### Sidebar filters
 
-| Filter | Description |
-|--------|-------------|
-| **Analysis stage** | Top-level directory name (e.g. `01-raw-mean-variance-analysis`) |
-| **Condition** | Parsed from `<Condition>_<MUSIC_TYPE>` directory (e.g. `Placebo`) |
-| **Music type** | Parsed from `<Condition>_<MUSIC_TYPE>` directory (e.g. `CLASSIC`) |
-| **Analysis part** | Sub-directory within the condition folder (e.g. `raw`, `bands`, `loo_isc`) |
-| **Frequency band** | Band name extracted from the sub-directory or filename (`delta`, `theta`, `alpha`, `beta`, `gamma`) |
-| **Filename contains** | Free-text substring search on the filename |
+> **No images are shown by default.** Select at least one filter to start browsing.
+
+| Filter | Source | Notes |
+|--------|--------|-------|
+| **Analysis stage** | First path component (e.g. `01-raw-mean-variance-analysis`) | |
+| **Condition** | First token of `<Condition>_<MUSIC_TYPE>` directory | e.g. `Placebo` |
+| **Music type** | Second token of `<Condition>_<MUSIC_TYPE>` directory | e.g. `CLASSIC` |
+| **Analysis part** | Top-level sub-directory within the condition folder | e.g. `raw`, `bands`, `broadband`, `mean_field` — nested paths like `bands/loo_isc` are excluded here |
+| **Frequency band** | Extracted from inner sub-directory path or filename | `broadband` (maps to `raw/` and `broadband/` subdirs), `delta`, `theta`, `alpha`, `beta`, `gamma` |
+| **Filename contains** | Free-text substring search on the filename | |
+
+Only image files matching the expected pipeline output structure are indexed:
+```
+<stage>/<Condition>_<MUSIC_TYPE>/<subdir>/<filename.ext>
+```
+Files at shallower depths or without the `<Condition>_<MusicType>` separator are ignored.
 
 #### View modes
 

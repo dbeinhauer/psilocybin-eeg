@@ -86,6 +86,10 @@ def find_catalog_entry(record: dict) -> tuple[dict | None, dict | None]:
 # ---------------------------------------------------------------------------
 # Band keyword extraction — whole-token matching to avoid false positives
 # ---------------------------------------------------------------------------
+# Top-level subdirectory names that represent broadband (non-per-band) analyses.
+# "broadband" is used by the ISC script; "raw" is used by the mean-variance script.
+_BROADBAND_SUBDIRS: frozenset[str] = frozenset({"broadband", "raw"})
+
 _BAND_CANONICAL: dict[str, str] = {
     "delta": "delta",
     "theta": "theta",
@@ -136,9 +140,12 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 def scan_images(directory: str) -> list[dict]:
     """Recursively scan *directory* for image files and return a metadata list.
 
-    Path structure assumed:
+    Only files that match the expected pipeline output structure are included:
         <stage>/<condition>_<music_type>/<subdir>/<filename.ext>
     e.g. 01-raw-mean-variance-analysis/Placebo_CLASSIC/raw/variance_timecourse.png
+
+    Files shallower than this (fewer than 4 path components from root) or missing
+    the ``<Condition>_<MusicType>`` separator are silently skipped.
     """
     root = Path(directory)
     records = []
@@ -147,28 +154,48 @@ def scan_images(directory: str) -> list[dict]:
             continue
         rel = path.relative_to(root)
         parts = list(rel.parts)
-        record = {
-            "path": str(path),
-            "relative": str(rel),
-            "filename": path.name,
-            "stem": path.stem,
-            # Heuristic token extraction from directory structure
-            "stage": parts[0] if len(parts) >= 2 else "",
-            "condition_music": parts[1] if len(parts) >= 3 else "",
-            "subdir": str(Path(*parts[2:-1])) if len(parts) >= 4 else "",
-        }
-        # Split condition_music into condition + music_type
-        cm = record["condition_music"]
-        if "_" in cm:
-            split = cm.split("_", 1)
-            record["condition"] = split[0]
-            record["music_type"] = split[1]
+
+        # Require at least stage / condition_music / subdir / filename
+        if len(parts) < 4:
+            continue
+        # Require the second token to look like <Condition>_<MusicType>
+        if "_" not in parts[1]:
+            continue
+
+        stage = parts[0]
+        condition_music = parts[1]
+        # Full subdir path (may be nested, e.g. "bands/loo_isc")
+        subdir = str(Path(*parts[2:-1]))
+        # Top-level subdir only — used for the "Analysis part" filter
+        subdir_top = parts[2]
+
+        condition, music_type = condition_music.split("_", 1)
+
+        # Band: broadband subdirs map to "broadband"; otherwise extract from
+        # deeper path components or the filename stem.
+        if subdir_top in _BROADBAND_SUBDIRS:
+            band = "broadband"
         else:
-            record["condition"] = cm
-            record["music_type"] = ""
-        # Extract frequency band from subdir or filename stem
-        record["band"] = _extract_band(record["subdir"]) or _extract_band(path.stem)
-        records.append(record)
+            # Try inner subdir path first (e.g. "loo_isc/delta…"), then filename
+            # to avoid false positives from the top-level subdir token.
+            inner_path = "/".join(parts[3:-1])
+            band = _extract_band(inner_path) or _extract_band(path.stem)
+
+        records.append(
+            {
+                "path": str(path),
+                "relative": str(rel),
+                "filename": path.name,
+                "stem": path.stem,
+                "stage": stage,
+                "condition_music": condition_music,
+                "condition": condition,
+                "music_type": music_type,
+                "subdir": subdir,
+                "subdir_top": subdir_top,
+                "band": band,
+            }
+        )
     return records
 
 
@@ -176,7 +203,7 @@ with st.spinner("Scanning directory…"):
     images = scan_images(str(results_dir))
 
 if not images:
-    st.info("No PNG / JPG files found in the selected directory.")
+    st.info("No PNG / JPG files found matching the expected directory structure.")
     st.stop()
 
 st.success(f"Found **{len(images)}** image(s) in `{results_dir}`.")
@@ -189,27 +216,39 @@ st.sidebar.header("Filters")
 all_stages = sorted({r["stage"] for r in images if r["stage"]})
 all_conditions = sorted({r["condition"] for r in images if r["condition"]})
 all_music_types = sorted({r["music_type"] for r in images if r["music_type"]})
-all_subdirs = sorted({r["subdir"] for r in images if r["subdir"]})
+# Analysis part: top-level subdir only (no "bands/loo_isc" style nested paths)
+all_subdir_tops = sorted({r["subdir_top"] for r in images if r["subdir_top"]})
 all_bands = sorted({r["band"] for r in images if r["band"]})
 
-sel_stages = st.sidebar.multiselect("Analysis stage", all_stages, default=all_stages)
-sel_conditions = st.sidebar.multiselect(
-    "Condition", all_conditions, default=all_conditions
-)
-sel_music = st.sidebar.multiselect(
-    "Music type", all_music_types, default=all_music_types
-)
-if all_subdirs:
-    sel_subdirs = st.sidebar.multiselect(
-        "Analysis part", all_subdirs, default=all_subdirs
+# All filters default to empty — nothing is shown until the user selects something.
+sel_stages = st.sidebar.multiselect("Analysis stage", all_stages, default=[])
+sel_conditions = st.sidebar.multiselect("Condition", all_conditions, default=[])
+sel_music = st.sidebar.multiselect("Music type", all_music_types, default=[])
+if all_subdir_tops:
+    sel_subdir_tops = st.sidebar.multiselect(
+        "Analysis part", all_subdir_tops, default=[]
     )
 else:
-    sel_subdirs = []
+    sel_subdir_tops = []
 if all_bands:
-    sel_bands = st.sidebar.multiselect("Frequency band", all_bands, default=all_bands)
+    sel_bands = st.sidebar.multiselect("Frequency band", all_bands, default=[])
 else:
     sel_bands = []
 free_text = st.sidebar.text_input("Filename contains", "")
+
+# Guard: show nothing until at least one filter is active
+any_filter_active = (
+    sel_stages
+    or sel_conditions
+    or sel_music
+    or sel_subdir_tops
+    or sel_bands
+    or free_text
+)
+if not any_filter_active:
+    st.sidebar.markdown(f"**0** / {len(images)} images shown")
+    st.info("👆 Select at least one filter in the sidebar to start browsing images.")
+    st.stop()
 
 # Apply filters
 filtered = [
@@ -218,7 +257,7 @@ filtered = [
     if (not sel_stages or r["stage"] in sel_stages)
     and (not sel_conditions or r["condition"] in sel_conditions)
     and (not sel_music or r["music_type"] in sel_music)
-    and (not sel_subdirs or r["subdir"] in sel_subdirs)
+    and (not sel_subdir_tops or r["subdir_top"] in sel_subdir_tops)
     and (not sel_bands or r["band"] in sel_bands)
     and (not free_text or free_text.lower() in r["filename"].lower())
 ]
@@ -374,8 +413,10 @@ else:
                     st.markdown(f"- **Condition**: `{rec['condition']}`")
                 if rec["music_type"]:
                     st.markdown(f"- **Music type**: `{rec['music_type']}`")
-                if rec["subdir"]:
-                    st.markdown(f"- **Analysis part**: `{rec['subdir']}`")
+                if rec["subdir_top"]:
+                    st.markdown(f"- **Analysis part**: `{rec['subdir_top']}`")
+                if rec["subdir"] != rec["subdir_top"]:
+                    st.markdown(f"- **Sub-analysis**: `{rec['subdir']}`")
                 if rec.get("band"):
                     st.markdown(f"- **Frequency band**: `{rec['band']}`")
                 file_size = os.path.getsize(rec["path"])
