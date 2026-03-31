@@ -50,7 +50,9 @@ def scan_images(directory: str) -> list[dict]:
         if path.suffix.lower() not in IMAGE_EXTENSIONS:
             continue
         rel = path.relative_to(root)
-        parts = list(rel.parts)  # e.g. ["01-mean-variance", "Placebo_CLASSIC", "raw", "foo.png"]
+        parts = list(
+            rel.parts
+        )  # e.g. ["01-mean-variance", "Placebo_CLASSIC", "raw", "foo.png"]
         record = {
             "path": str(path),
             "relative": str(rel),
@@ -93,8 +95,12 @@ all_conditions = sorted({r["condition"] for r in images if r["condition"]})
 all_music_types = sorted({r["music_type"] for r in images if r["music_type"]})
 
 sel_stages = st.sidebar.multiselect("Analysis stage", all_stages, default=all_stages)
-sel_conditions = st.sidebar.multiselect("Condition", all_conditions, default=all_conditions)
-sel_music = st.sidebar.multiselect("Music type", all_music_types, default=all_music_types)
+sel_conditions = st.sidebar.multiselect(
+    "Condition", all_conditions, default=all_conditions
+)
+sel_music = st.sidebar.multiselect(
+    "Music type", all_music_types, default=all_music_types
+)
 free_text = st.sidebar.text_input("Filename contains", "")
 
 # Apply filters
@@ -125,7 +131,9 @@ compare_mode = st.sidebar.checkbox("Compare mode (select 2–4 images)")
 # ---------------------------------------------------------------------------
 if compare_mode:
     st.markdown("### Compare images")
-    st.caption("Tick the checkboxes below to select 2–4 images to compare side by side.")
+    st.caption(
+        "Tick the checkboxes below to select 2–4 images to compare side by side."
+    )
 
     selected_for_compare: list[str] = []
     n_cols = 4
@@ -133,7 +141,9 @@ if compare_mode:
     for i, rec in enumerate(filtered):
         col = cols[i % n_cols]
         with col:
-            checked = st.checkbox(rec["filename"], key=f"cmp_{rec['path']}", value=False)
+            checked = st.checkbox(
+                rec["filename"], key=f"cmp_{rec['path']}", value=False
+            )
             if checked:
                 selected_for_compare.append(rec["path"])
             st.image(rec["path"], use_container_width=True)

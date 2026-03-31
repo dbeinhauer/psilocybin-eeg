@@ -49,7 +49,7 @@ def sketch_timeseries_multichannel() -> Figure:
     t = np.linspace(0, 4, n_t)
     for i in range(n_ch):
         signal = rng.standard_normal(n_t) * 0.4
-        signal[80:100] += (3 - i * 0.3)  # artefact burst
+        signal[80:100] += 3 - i * 0.3  # artefact burst
         ax.plot(t, signal + i * 1.2, lw=0.7, color="steelblue")
     ax.set_xlabel("Time (s)", fontsize=7)
     ax.set_ylabel("Channels", fontsize=7)
@@ -83,18 +83,22 @@ def sketch_topomap() -> Figure:
     rng = np.random.default_rng(2)
     fig, ax = plt.subplots(figsize=(3, 3))
     theta_vals = np.linspace(0, 2 * np.pi, 60)
-    xs = np.concatenate([
-        np.cos(theta_vals),
-        0.7 * np.cos(theta_vals),
-        0.4 * np.cos(theta_vals),
-        [0],
-    ])
-    ys = np.concatenate([
-        np.sin(theta_vals),
-        0.7 * np.sin(theta_vals),
-        0.4 * np.sin(theta_vals),
-        [0],
-    ])
+    xs = np.concatenate(
+        [
+            np.cos(theta_vals),
+            0.7 * np.cos(theta_vals),
+            0.4 * np.cos(theta_vals),
+            [0],
+        ]
+    )
+    ys = np.concatenate(
+        [
+            np.sin(theta_vals),
+            0.7 * np.sin(theta_vals),
+            0.4 * np.sin(theta_vals),
+            [0],
+        ]
+    )
     power = rng.uniform(0, 1, len(xs))
     ax.scatter(xs, ys, c=power, cmap="RdYlBu_r", s=14, vmin=0, vmax=1)
     circle = plt.Circle((0, 0), 1.0, fill=False, color="gray", lw=1)
@@ -141,8 +145,8 @@ def sketch_matrix_heatmap() -> Figure:
     plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     ax.set_xticks(range(n))
     ax.set_yticks(range(n))
-    ax.set_xticklabels([f"P{i+1}" for i in range(n)], fontsize=5)
-    ax.set_yticklabels([f"P{i+1}" for i in range(n)], fontsize=5)
+    ax.set_xticklabels([f"P{i + 1}" for i in range(n)], fontsize=5)
+    ax.set_yticklabels([f"P{i + 1}" for i in range(n)], fontsize=5)
     ax.set_title("Pairwise lag / ISC matrix", fontsize=8)
     fig.tight_layout()
     return fig
@@ -159,7 +163,9 @@ def sketch_timeseries_variance() -> Figure:
     ax.plot(t, var_trace, lw=0.8, color="steelblue")
     ax.axhline(threshold, color="tomato", ls="--", lw=0.8, label="10th pct")
     low = var_trace < threshold
-    ax.fill_between(t, 0, var_trace.max(), where=low, alpha=0.2, color="gold", label="Synchrony")
+    ax.fill_between(
+        t, 0, var_trace.max(), where=low, alpha=0.2, color="gold", label="Synchrony"
+    )
     ax.set_xlabel("Time (s)", fontsize=7)
     ax.set_ylabel("Variance", fontsize=7)
     ax.set_title("Inter-subject variance trace", fontsize=8)
@@ -227,8 +233,17 @@ def sketch_histogram_overlay() -> Figure:
     d1 = rng.normal(0.15, 0.12, 300)
     d2 = rng.normal(0.22, 0.11, 300)
     bins = np.linspace(-0.2, 0.6, 30)
-    ax.hist(d1, bins=bins, alpha=0.6, label="CLASSIC", color="steelblue", edgecolor="white")
-    ax.hist(d2, bins=bins, alpha=0.6, label="PSYTRANCE", color="darkorange", edgecolor="white")
+    ax.hist(
+        d1, bins=bins, alpha=0.6, label="CLASSIC", color="steelblue", edgecolor="white"
+    )
+    ax.hist(
+        d2,
+        bins=bins,
+        alpha=0.6,
+        label="PSYTRANCE",
+        color="darkorange",
+        edgecolor="white",
+    )
     ax.axvline(0, color="gray", ls="--", lw=0.8)
     ax.set_xlabel("LOO-ISC (r)", fontsize=7)
     ax.set_ylabel("Count", fontsize=7)
@@ -278,7 +293,7 @@ def sketch_bar_grouped() -> Figure:
     ax.bar(x + w / 2, spearman, w, label="Spearman", color="darkorange")
     ax.axhline(0, color="gray", lw=0.8)
     ax.set_xticks(x)
-    ax.set_xticklabels([f"S{i+1}" for i in range(n_subj)], fontsize=6)
+    ax.set_xticklabels([f"S{i + 1}" for i in range(n_subj)], fontsize=6)
     ax.set_ylabel("LOO-ISC", fontsize=7)
     ax.set_title("Mean-field LOO-ISC per subject", fontsize=8)
     ax.legend(fontsize=6)
@@ -294,7 +309,9 @@ def sketch_histogram_facet() -> Figure:
     fig, axes = plt.subplots(1, 5, figsize=(6, 2.2), sharey=True)
     for ax, band, col in zip(axes, bands, colors):
         d = rng.normal(0.1 + rng.uniform(-0.05, 0.1), 0.1, 200)
-        ax.hist(d, bins=15, color=col, edgecolor="white", lw=0.3, orientation="vertical")
+        ax.hist(
+            d, bins=15, color=col, edgecolor="white", lw=0.3, orientation="vertical"
+        )
         ax.axvline(0, color="gray", ls="--", lw=0.6)
         ax.set_title(band, fontsize=7)
         ax.tick_params(labelsize=5)
@@ -328,8 +345,12 @@ def sketch_bar_grouped_bands() -> Figure:
 def sketch_grid_timeseries_heatmap() -> Figure:
     rng = np.random.default_rng(14)
     fig, axes = plt.subplots(2, 2, figsize=(5.5, 3.2))
-    titles = [("α Classic", "steelblue"), ("α Psytrance", "darkorange"),
-              ("β Classic", "seagreen"), ("β Psytrance", "tomato")]
+    titles = [
+        ("α Classic", "steelblue"),
+        ("α Psytrance", "darkorange"),
+        ("β Classic", "seagreen"),
+        ("β Psytrance", "tomato"),
+    ]
     n_w, n_ch = 40, 20
     for ax, (title, col) in zip(axes.flat, titles):
         hm = rng.uniform(0, 0.5, (n_ch, n_w))
@@ -453,7 +474,10 @@ else:
                 if ds:
                     st.markdown("**Data shape**")
                     st.table(
-                        {"": ["Input", "Output"], "Shape": [ds.get("input", ""), ds.get("output", "")]}
+                        {
+                            "": ["Input", "Output"],
+                            "Shape": [ds.get("input", ""), ds.get("output", "")],
+                        }
                     )
 
                 # Order of operations
