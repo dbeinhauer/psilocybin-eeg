@@ -41,32 +41,46 @@ _catalog = load_catalog()
 
 
 def find_catalog_entry(record: dict) -> tuple[dict | None, dict | None]:
-    """Return (analysis, plot) from catalog matching *record*, or (None, None)."""
+    """Return (analysis, plot) from catalog matching *record*, or (None, None).
+
+    Matching strategy (highest priority first):
+    1. Exact stage-directory → catalog-id match + filename pattern match.
+    2. Numeric-prefix match + filename pattern match (handles minor name variations).
+    3. Exact stage-directory → catalog-id match (stage-level fallback, no plot).
+    4. First numeric-prefix match (coarse fallback, no plot).
+    """
     stage = record.get("stage", "")
     filename = record.get("filename", "")
 
     if not stage:
         return None, None
 
-    # Match on the leading numeric stage token (e.g. "01" matches "01-mean-variance")
     stage_num = stage.split("-")[0] if "-" in stage else stage
 
-    best_analysis: dict | None = None
+    exact_fallback: dict | None = None  # exact ID match but no plot pattern match
+    prefix_fallback: dict | None = None  # first numeric-prefix match
+
     for analysis in _catalog.get("analyses", []):
         aid = analysis.get("id", "")
         aid_num = aid.split("-")[0] if "-" in aid else aid
         if aid_num != stage_num:
             continue
+
+        exact_id = aid == stage  # full directory name matches catalog id
+
         # Try to match filename against each plot's filename_pattern
         for plot in analysis.get("plots", []):
             pattern = plot.get("filename_pattern", "")
             if pattern and fnmatch.fnmatch(filename, pattern):
                 return analysis, plot
-        # No per-plot match — keep as stage-level fallback
-        if best_analysis is None:
-            best_analysis = analysis
 
-    return best_analysis, None
+        # Track fallbacks: prefer exact ID match over coarse numeric match
+        if exact_id:
+            exact_fallback = analysis
+        elif prefix_fallback is None:
+            prefix_fallback = analysis
+
+    return (exact_fallback or prefix_fallback), None
 
 
 # ---------------------------------------------------------------------------
