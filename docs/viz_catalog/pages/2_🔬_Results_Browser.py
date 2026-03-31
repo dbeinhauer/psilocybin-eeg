@@ -86,9 +86,7 @@ def find_catalog_entry(record: dict) -> tuple[dict | None, dict | None]:
 # ---------------------------------------------------------------------------
 # Band keyword extraction — whole-token matching to avoid false positives
 # ---------------------------------------------------------------------------
-# Top-level subdirectory names that represent broadband (non-per-band) analyses.
-# "broadband" is used by the ISC script; "raw" is used by the mean-variance script.
-_BROADBAND_SUBDIRS: frozenset[str] = frozenset({"broadband", "raw"})
+_SPECTRUM_TYPES: frozenset[str] = frozenset({"broadband", "bands"})
 
 _BAND_CANONICAL: dict[str, str] = {
     "delta": "delta",
@@ -140,12 +138,14 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 def scan_images(directory: str) -> list[dict]:
     """Recursively scan *directory* for image files and return a metadata list.
 
-    Only files that match the expected pipeline output structure are included:
-        <stage>/<condition>_<music_type>/<subdir>/<filename.ext>
-    e.g. 01-raw-mean-variance-analysis/Placebo_CLASSIC/raw/variance_timecourse.png
+    Only files matching the canonical pipeline output structure are included::
 
-    Files shallower than this (fewer than 4 path components from root) or missing
-    the ``<Condition>_<MusicType>`` separator are silently skipped.
+        <stage>/<Condition>_<MusicType>/broadband/<analysis_type>/<filename.ext>
+        <stage>/<Condition>_<MusicType>/bands/<analysis_type>/<filename.ext>
+
+    Files that do not conform to this layout (wrong depth, missing
+    ``<Condition>_<MusicType>`` separator, or unknown spectrum type) are
+    silently skipped.
     """
     root = Path(directory)
     records = []
@@ -155,31 +155,29 @@ def scan_images(directory: str) -> list[dict]:
         rel = path.relative_to(root)
         parts = list(rel.parts)
 
-        # Require at least stage / condition_music / subdir / filename
-        if len(parts) < 4:
+        # Require exactly: stage / condition_music / spectrum_type / analysis_type / filename
+        if len(parts) < 5:
             continue
         # Require the second token to look like <Condition>_<MusicType>
         if "_" not in parts[1]:
             continue
+        # Require the third token to be a known spectrum type
+        if parts[2] not in _SPECTRUM_TYPES:
+            continue
 
         stage = parts[0]
         condition_music = parts[1]
-        # Full subdir path (may be nested, e.g. "bands/loo_isc")
-        subdir = str(Path(*parts[2:-1]))
-        # Top-level subdir only — used for the "Analysis part" filter
-        subdir_top = parts[2]
+        spectrum_type = parts[2]  # "broadband" or "bands"
+        analysis_type = parts[3]  # e.g. "loo_isc", "pairwise_isc", "timeseries"
 
         condition, music_type = condition_music.split("_", 1)
 
-        # Band: broadband subdirs map to "broadband"; otherwise extract from
-        # deeper path components or the filename stem.
-        if subdir_top in _BROADBAND_SUBDIRS:
+        # Band: all broadband files map to "broadband"; per-band files get
+        # the band extracted from the filename stem.
+        if spectrum_type == "broadband":
             band = "broadband"
         else:
-            # Try inner subdir path first (e.g. "loo_isc/delta…"), then filename
-            # to avoid false positives from the top-level subdir token.
-            inner_path = "/".join(parts[3:-1])
-            band = _extract_band(inner_path) or _extract_band(path.stem)
+            band = _extract_band(path.stem)
 
         records.append(
             {
@@ -191,8 +189,8 @@ def scan_images(directory: str) -> list[dict]:
                 "condition_music": condition_music,
                 "condition": condition,
                 "music_type": music_type,
-                "subdir": subdir,
-                "subdir_top": subdir_top,
+                "spectrum_type": spectrum_type,
+                "analysis_type": analysis_type,
                 "band": band,
             }
         )
@@ -216,20 +214,18 @@ st.sidebar.header("Filters")
 all_stages = sorted({r["stage"] for r in images if r["stage"]})
 all_conditions = sorted({r["condition"] for r in images if r["condition"]})
 all_music_types = sorted({r["music_type"] for r in images if r["music_type"]})
-# Analysis part: top-level subdir only (no "bands/loo_isc" style nested paths)
-all_subdir_tops = sorted({r["subdir_top"] for r in images if r["subdir_top"]})
+all_spectrum_types = sorted({r["spectrum_type"] for r in images if r["spectrum_type"]})
+all_analysis_types = sorted({r["analysis_type"] for r in images if r["analysis_type"]})
 all_bands = sorted({r["band"] for r in images if r["band"]})
 
 # All filters default to empty — nothing is shown until the user selects something.
 sel_stages = st.sidebar.multiselect("Analysis stage", all_stages, default=[])
 sel_conditions = st.sidebar.multiselect("Condition", all_conditions, default=[])
 sel_music = st.sidebar.multiselect("Music type", all_music_types, default=[])
-if all_subdir_tops:
-    sel_subdir_tops = st.sidebar.multiselect(
-        "Analysis part", all_subdir_tops, default=[]
-    )
-else:
-    sel_subdir_tops = []
+sel_spectrum = st.sidebar.multiselect("Spectrum type", all_spectrum_types, default=[])
+sel_analysis_types = st.sidebar.multiselect(
+    "Analysis type", all_analysis_types, default=[]
+)
 if all_bands:
     sel_bands = st.sidebar.multiselect("Frequency band", all_bands, default=[])
 else:
@@ -241,7 +237,8 @@ any_filter_active = (
     sel_stages
     or sel_conditions
     or sel_music
-    or sel_subdir_tops
+    or sel_spectrum
+    or sel_analysis_types
     or sel_bands
     or free_text
 )
@@ -257,7 +254,8 @@ filtered = [
     if (not sel_stages or r["stage"] in sel_stages)
     and (not sel_conditions or r["condition"] in sel_conditions)
     and (not sel_music or r["music_type"] in sel_music)
-    and (not sel_subdir_tops or r["subdir_top"] in sel_subdir_tops)
+    and (not sel_spectrum or r["spectrum_type"] in sel_spectrum)
+    and (not sel_analysis_types or r["analysis_type"] in sel_analysis_types)
     and (not sel_bands or r["band"] in sel_bands)
     and (not free_text or free_text.lower() in r["filename"].lower())
 ]
@@ -413,10 +411,10 @@ else:
                     st.markdown(f"- **Condition**: `{rec['condition']}`")
                 if rec["music_type"]:
                     st.markdown(f"- **Music type**: `{rec['music_type']}`")
-                if rec["subdir_top"]:
-                    st.markdown(f"- **Analysis part**: `{rec['subdir_top']}`")
-                if rec["subdir"] != rec["subdir_top"]:
-                    st.markdown(f"- **Sub-analysis**: `{rec['subdir']}`")
+                if rec["spectrum_type"]:
+                    st.markdown(f"- **Spectrum type**: `{rec['spectrum_type']}`")
+                if rec["analysis_type"]:
+                    st.markdown(f"- **Analysis type**: `{rec['analysis_type']}`")
                 if rec.get("band"):
                     st.markdown(f"- **Frequency band**: `{rec['band']}`")
                 file_size = os.path.getsize(rec["path"])

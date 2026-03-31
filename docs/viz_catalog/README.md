@@ -102,24 +102,26 @@ scp -r <your-username>@<hpc-hostname>:/path/to/project/plots/ \
 - Enter a **local results directory** path (where your `.png` / `.jpg` plot files live).
 - The browser recursively scans the folder and builds an index from path tokens.
 
-#### Sidebar filters
+Only files matching the canonical pipeline output structure are indexed:
+
+```
+<stage>/<Condition>_<MusicType>/broadband/<analysis_type>/<filename.ext>
+<stage>/<Condition>_<MusicType>/bands/<analysis_type>/<filename.ext>
+```
 
 > **No images are shown by default.** Select at least one filter to start browsing.
 
-| Filter | Source | Notes |
-|--------|--------|-------|
-| **Analysis stage** | First path component (e.g. `01-raw-mean-variance-analysis`) | |
-| **Condition** | First token of `<Condition>_<MUSIC_TYPE>` directory | e.g. `Placebo` |
-| **Music type** | Second token of `<Condition>_<MUSIC_TYPE>` directory | e.g. `CLASSIC` |
-| **Analysis part** | Top-level sub-directory within the condition folder | e.g. `raw`, `bands`, `broadband`, `mean_field` — nested paths like `bands/loo_isc` are excluded here |
-| **Frequency band** | Extracted from inner sub-directory path or filename | `broadband` (maps to `raw/` and `broadband/` subdirs), `delta`, `theta`, `alpha`, `beta`, `gamma` |
-| **Filename contains** | Free-text substring search on the filename | |
+#### Sidebar filters
 
-Only image files matching the expected pipeline output structure are indexed:
-```
-<stage>/<Condition>_<MUSIC_TYPE>/<subdir>/<filename.ext>
-```
-Files at shallower depths or without the `<Condition>_<MusicType>` separator are ignored.
+| Filter | Source | Example values |
+|--------|--------|---------------|
+| **Analysis stage** | First path component | `01-raw-mean-variance-analysis`, `02-isc-broadband-analysis` |
+| **Condition** | First token of `<Condition>_<MusicType>` | `Placebo`, `Psilocybin` |
+| **Music type** | Second token of `<Condition>_<MusicType>` | `CLASSIC`, `PSYTRANCE` |
+| **Spectrum type** | Third path component — always `broadband` or `bands` | `broadband`, `bands` |
+| **Analysis type** | Fourth path component — the specific analysis run | `loo_isc`, `pairwise_isc`, `sliding_window`, `mean_field`, `timeseries`, `variance`, `windowed`, `band_overlap` |
+| **Frequency band** | Extracted from filename stem — whole-token matching only | `broadband` (all files in `broadband/`), `delta`, `theta`, `alpha`, `beta`, `gamma` |
+| **Filename contains** | Free-text substring search on the filename | |
 
 #### View modes
 
