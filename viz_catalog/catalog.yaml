@@ -166,7 +166,7 @@ analyses:
     description: |
       Inter-Subject Correlation on the broadband (unfiltered) preprocessed EEG.
       Four analysis sections: LOO-ISC, Pairwise ISC, Multi-Scale Sliding-Window
-      ISC, and Mean-Field ISC.  Both Pearson and Spearman correlations are
+      ISC, and Mean-Field ISC. Both Pearson and Spearman correlations are
       computed and compared in every section.
     notebooks:
       - path: "notebooks/02-isc-broadband-analysis/isc_broadband.ipynb"
@@ -278,7 +278,7 @@ analyses:
           - "Overlay both time courses with significance threshold"
         interpretation: |
           Mean-field ISC captures global synchrony; channel-average ISC retains
-          spatially distributed effects.  Large divergence highlights
+          spatially distributed effects. Large divergence highlights
           whether synchrony is spatially uniform or driven by specific regions.
         sketch_type: "timeseries_multisubject"
 
@@ -286,8 +286,8 @@ analyses:
     title: "Stage 02 — ISC (Per-Band)"
     description: |
       ISC repeated for each EEG frequency band after bandpass filtering.
-      Bands: delta (1–4 Hz), theta (4–8 Hz), alpha (8–13 Hz),
-      beta (13–30 Hz), gamma (30–70 Hz).
+      Bands: delta (1-4 Hz), theta (4-8 Hz), alpha (8-13 Hz),
+      beta (13-30 Hz), gamma (30-70 Hz).
       Both Pearson and Spearman correlations are computed and compared
       per band in each section.
     notebooks:
@@ -309,7 +309,7 @@ analyses:
           - "Per band: per-subject violin + strip plot"
         interpretation: |
           Alpha/theta with higher ISC under psilocybin → supports thalamo-cortical
-          entrainment hypothesis.  Pearson vs Spearman discrepancy per band
+          entrainment hypothesis. Pearson vs Spearman discrepancy per band
           highlights outlier sensitivity in specific frequency ranges.
         sketch_type: "histogram_facet"
 
