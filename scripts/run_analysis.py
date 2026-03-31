@@ -58,6 +58,12 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    # Early validation: reshape requires keep
+    if args.wavelet_reshape_frequency_dim and not args.wavelet_keep_frequency_dim:
+        parser.error(
+            "--wavelet_reshape_frequency_dim requires --wavelet_keep_frequency_dim"
+        )
+
     # ── Configuration ─────────────────────────────────────────────
     condition = ConditionVariants(args.condition)
     music_types = [MusicTypeVariants(mt) for mt in args.music_type]
@@ -103,6 +109,7 @@ if __name__ == "__main__":
             wavelet_dir=Path(args.wavelet_data_dir),
             reuse_wavelets=args.reuse_wavelets,
             keep_frequency_dim=args.wavelet_keep_frequency_dim,
+            reshape_frequency_dim=args.wavelet_reshape_frequency_dim,
             isc_threshold=args.isc_threshold,
             window_sec=WINDOW_SEC,
             step_sec=STEP_SEC,
@@ -123,6 +130,7 @@ if __name__ == "__main__":
             wavelet_dir=Path(args.wavelet_data_dir),
             reuse_wavelets=args.reuse_wavelets,
             keep_frequency_dim=args.wavelet_keep_frequency_dim,
+            reshape_frequency_dim=args.wavelet_reshape_frequency_dim,
             isc_threshold=args.isc_threshold,
             window_sec=WINDOW_SEC,
             step_sec=STEP_SEC,

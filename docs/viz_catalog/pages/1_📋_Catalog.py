@@ -393,6 +393,43 @@ def sketch_raster_overlap() -> Figure:
     return fig
 
 
+def sketch_polar_histogram() -> Figure:
+    rng = np.random.default_rng(16)
+    # Simulate approximately uniform phase with a slight bias
+    phases = rng.uniform(-np.pi, np.pi, 2000)
+    fig, (ax_lin, ax_pol) = plt.subplots(1, 2, figsize=(5, 2.5))
+    # Linear histogram
+    ax_lin.hist(phases, bins=30, color="steelblue", edgecolor="white", lw=0.3)
+    ax_lin.set_xlabel("Phase (rad)", fontsize=6)
+    ax_lin.set_ylabel("Count", fontsize=6)
+    ax_lin.set_xticks([-np.pi, 0, np.pi])
+    ax_lin.set_xticklabels(["-π", "0", "π"], fontsize=6)
+    ax_lin.tick_params(labelsize=5)
+    ax_lin.set_title("Linear histogram", fontsize=7)
+    # Polar histogram
+    ax_pol.remove()
+    ax_pol = fig.add_subplot(1, 2, 2, projection="polar")
+    n_bins = 24
+    counts, bin_edges = np.histogram(phases, bins=n_bins, range=(-np.pi, np.pi))
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    width = 2 * np.pi / n_bins
+    ax_pol.bar(
+        bin_centers,
+        counts,
+        width=width,
+        bottom=0,
+        color="steelblue",
+        edgecolor="white",
+        lw=0.3,
+    )
+    ax_pol.set_yticks([])
+    ax_pol.tick_params(labelsize=5)
+    ax_pol.set_title("Polar", fontsize=7)
+    fig.suptitle("Phase distribution (uniform = healthy)", fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
 SKETCH_FUNCTIONS: dict[str, Callable[[], Figure]] = {
     "timeseries_multichannel": sketch_timeseries_multichannel,
     "psd": sketch_psd,
@@ -410,6 +447,7 @@ SKETCH_FUNCTIONS: dict[str, Callable[[], Figure]] = {
     "bar_grouped_bands": sketch_bar_grouped_bands,
     "grid_timeseries_heatmap": sketch_grid_timeseries_heatmap,
     "raster_overlap": sketch_raster_overlap,
+    "polar_histogram": sketch_polar_histogram,
 }
 
 

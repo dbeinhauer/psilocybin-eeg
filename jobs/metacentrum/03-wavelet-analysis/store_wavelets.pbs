@@ -1,0 +1,146 @@
+#!/bin/bash
+#PBS -N PSILO_STORE_WAVELETS_03
+#PBS -l walltime=18:00:00
+#PBS -l select=1:ncpus=8:mem=499gb:scratch_local=100gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Bulk wavelet storage for both power and phase representations.
+#
+# Computes and stores broadband + all per-band wavelet transforms for
+# music types (CLASSIC, PSYTRANCE) — Placebo condition by default.
+# into data/processed/psilo_music/wavelets/.
+#
+# Uses the same split-run approach as the individual analysis scripts:
+# low-freq bands + broadband first, then high-freq bands with reuse.
+#
+# To also run Psilocybin, uncomment the "Psilocybin" blocks below.
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music.sif"
+
+export TMPDIR=$SCRATCHDIR
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+
+WAVELET_DIR="/mnt/data/processed/psilo_music/wavelets"
+
+# ===== WAVELET POWER =====
+
+# ----- Placebo -----
+python /mnt/scripts/run_analysis.py \
+    --analysis wavelet_power \
+    --condition Placebo \
+    --music_type CLASSIC PSYTRANCE \
+    --wavelet_bands delta theta alpha \
+    --wavelet_data_dir "$WAVELET_DIR" \
+    --n_jobs -1
+
+python /mnt/scripts/run_analysis.py \
+    --analysis wavelet_power \
+    --condition Placebo \
+    --music_type CLASSIC PSYTRANCE \
+    --wavelet_bands beta gamma \
+    --skip_wavelet_broadband \
+    --wavelet_data_dir "$WAVELET_DIR" \
+    --reuse_wavelets \
+    --n_jobs -1
+
+# ----- Psilocybin (uncomment to enable) -----
+# python /mnt/scripts/run_analysis.py \
+#     --analysis wavelet_power \
+#     --condition Psilocybin \
+#     --music_type CLASSIC PSYTRANCE \
+#     --wavelet_bands delta theta alpha \
+#     --wavelet_data_dir "$WAVELET_DIR" \
+#     --n_jobs -1
+#
+# python /mnt/scripts/run_analysis.py \
+#     --analysis wavelet_power \
+#     --condition Psilocybin \
+#     --music_type CLASSIC PSYTRANCE \
+#     --wavelet_bands beta gamma \
+#     --skip_wavelet_broadband \
+#     --wavelet_data_dir "$WAVELET_DIR" \
+#     --reuse_wavelets \
+#     --n_jobs -1
+
+# ----- Placebo -----
+python /mnt/scripts/run_analysis.py \
+    --analysis wavelet_phase \
+    --condition Placebo \
+    --music_type CLASSIC PSYTRANCE \
+    --wavelet_bands delta theta alpha \
+    --wavelet_data_dir "$WAVELET_DIR" \
+    --n_jobs -1
+
+python /mnt/scripts/run_analysis.py \
+    --analysis wavelet_phase \
+    --condition Placebo \
+    --music_type CLASSIC PSYTRANCE \
+    --wavelet_bands beta gamma \
+    --skip_wavelet_broadband \
+    --wavelet_data_dir "$WAVELET_DIR" \
+    --reuse_wavelets \
+    --n_jobs -1
+
+# ----- Psilocybin (uncomment to enable) -----
+# python /mnt/scripts/run_analysis.py \
+#     --analysis wavelet_phase \
+#     --condition Psilocybin \
+#     --music_type CLASSIC PSYTRANCE \
+#     --wavelet_bands delta theta alpha \
+#     --wavelet_data_dir "$WAVELET_DIR" \
+#     --n_jobs -1
+#
+# python /mnt/scripts/run_analysis.py \
+#     --analysis wavelet_phase \
+#     --condition Psilocybin \
+#     --music_type CLASSIC PSYTRANCE \
+#     --wavelet_bands beta gamma \
+#     --skip_wavelet_broadband \
+#     --wavelet_data_dir "$WAVELET_DIR" \
+#     --reuse_wavelets \
+#     --n_jobs -1
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch
