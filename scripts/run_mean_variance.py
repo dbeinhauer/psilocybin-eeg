@@ -25,7 +25,9 @@ All figures are saved under::
     plots/01-raw-mean-variance-analysis/<condition>_<music_type>/broadband/<analysis_type>/
     plots/01-raw-mean-variance-analysis/<condition>_<music_type>/bands/<analysis_type>/
 
-where ``<analysis_type>`` is one of ``timeseries``, ``variance``, or ``windowed``.
+where for **broadband** outputs ``<analysis_type>`` is one of ``timeseries``,
+``variance``, or ``windowed``, and for **per-band** outputs ``<analysis_type>``
+is one of ``timeseries``, ``variance``, ``windowed``, or ``isc_matrices``.
 
 Usage examples::
 
