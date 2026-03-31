@@ -17,7 +17,7 @@ Run the app in an **isolated, temporary environment** — no manual install need
 
 ```bash
 # From the repository root:
-uv run --with "streamlit>=1.32.0" --with "pyyaml>=6.0" --with "matplotlib>=3.7.0" \
+uv run --with "streamlit>=1.32.0" --with "pyyaml>=6.0" --with "numpy>=1.24.0" --with "matplotlib>=3.7.0" \
     streamlit run docs/viz_catalog/app.py
 ```
 

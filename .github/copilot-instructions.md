@@ -365,7 +365,7 @@ docs/viz_catalog/
 
 ```bash
 # With uv (recommended) — one-liner, no prior install:
-uv run --with "streamlit>=1.32.0" --with "pyyaml>=6.0" --with "matplotlib>=3.7.0" \
+uv run --with "streamlit>=1.32.0" --with "pyyaml>=6.0" --with "numpy>=1.24.0" --with "matplotlib>=3.7.0" \
     streamlit run docs/viz_catalog/app.py
 
 # With uv — persistent venv:
