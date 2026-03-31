@@ -101,9 +101,45 @@ scp -r <your-username>@<hpc-hostname>:/path/to/project/plots/ \
 
 - Enter a **local results directory** path (where your `.png` / `.jpg` plot files live).
 - The browser recursively scans the folder and builds an index from path tokens.
-- Use the **sidebar filters** (analysis stage, condition, music type, free text) to narrow results.
-- Switch between **grid view** and **list view**.
-- **Compare mode**: tick 2–4 images to display them side-by-side.
+
+#### Sidebar filters
+
+| Filter | Description |
+|--------|-------------|
+| **Analysis stage** | Top-level directory name (e.g. `01-raw-mean-variance-analysis`) |
+| **Condition** | Parsed from `<Condition>_<MUSIC_TYPE>` directory (e.g. `Placebo`) |
+| **Music type** | Parsed from `<Condition>_<MUSIC_TYPE>` directory (e.g. `CLASSIC`) |
+| **Analysis part** | Sub-directory within the condition folder (e.g. `raw`, `bands`, `loo_isc`) |
+| **Frequency band** | Band name extracted from the sub-directory or filename (`delta`, `theta`, `alpha`, `beta`, `gamma`) |
+| **Filename contains** | Free-text substring search on the filename |
+
+#### View modes
+
+- **Grid view** — configurable number of columns (1–6); shows image tiles with relative path captions.
+- **List view** — full-width images alongside a metadata panel (stage, condition, music type, analysis part, frequency band, file size).
+
+#### ℹ️ Per-image info panel
+
+Every image (in both Grid and List view) has an **"ℹ️ About this plot"** expander below it. Expand it to see:
+
+- The **analysis stage** title and description from `catalog.yaml`.
+- The matched **plot** title and interpretation note.
+- A direct link to the **source notebook** on GitHub.
+- A one-click link to the **📋 Analysis Catalog** page for full methodology details.
+
+The info panel looks up `catalog.yaml` by matching the image's stage prefix and filename pattern, so it works automatically for all standard output files.
+
+#### Compare modes
+
+Three modes are available via the **Compare mode** radio button in the sidebar:
+
+| Mode | When to use |
+|------|-------------|
+| **None** | Normal browsing (default) |
+| **Manual (select 2–4)** | Tick individual images to compare any combination side-by-side |
+| **By condition / music type** | Select one plot by filename stem; the browser automatically finds every condition/music-type variant of that plot and displays them in parallel columns |
+
+**By condition / music type** is the recommended mode for comparing Placebo vs Psilocybin or CLASSIC vs PSYTRANCE results for the same analysis.
 
 ---
 
