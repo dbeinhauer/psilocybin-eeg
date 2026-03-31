@@ -22,7 +22,7 @@ Two representations are explored:
 | Notebook | Scope | Key analyses |
 |---|---|---|
 | `wavelet_power_exploration.ipynb` | Broadband + per-band | Spectral profile, time–frequency maps, band power time courses, intersubject variance, wavelet-domain LOO-ISC, topographic mapping, time–frequency ISC, sliding-window ISC, cross-frequency coupling, power–phase joint analysis |
-| `wavelet_phase_exploration.ipynb` | Broadband + per-band | Phase distribution check, ITPC spectrum, time–frequency ITPC map, per-band ITPC time course, phase-based LOO-ISC, ITPC vs ISC comparison |
+| `wavelet_phase_exploration.ipynb` | Broadband + per-band | Phase distribution check, ITPC spectrum, time–frequency ITPC map, per-band ITPC time course, phase-based LOO-ISC, ITPC vs ISC comparison, topographic phase-ISC mapping |
 
 ## HPC job scripts
 
@@ -190,6 +190,19 @@ ITPC and LOO-ISC(cos φ).
 **Why:** Bands where both metrics are elevated indicate robust, convergent
 evidence for stimulus-driven phase synchrony.  Discrepancies can highlight
 cases where one measure is more sensitive than the other.
+
+#### 7. Topographic mapping of per-band phase-ISC
+
+**What:** Project per-channel mean LOO-ISC(cos φ) for each frequency band onto
+the scalp montage using MNE topomaps.  Channel positions are obtained from the
+analyzer's `info` attribute and subsetted to match the number of channels used
+in the notebook.
+
+**Why:** Reveals which brain regions exhibit the strongest inter-subject
+*phase* synchrony at each frequency, providing a spatial complement to the
+band-level bar charts.  Directly comparable to the power-ISC topomap in
+`wavelet_power_exploration.ipynb` — differences between the two highlight
+regions where amplitude and timing are decoupled.
 
 ## Future directions
 

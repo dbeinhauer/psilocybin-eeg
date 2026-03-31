@@ -316,3 +316,286 @@ analyses:
           Windows where all bands simultaneously significant = strongest, most global synchrony.
           Best candidates for 'peak synchrony' — correlatable with musical features or subjective ratings.
         sketch_type: "raster_overlap"
+
+  - id: "03-wavelet-power"
+    title: "Stage 03 — Wavelet Power Analysis"
+    description: |
+      Time-frequency analysis of EEG using complex Morlet wavelets.
+      Wavelet power (amplitude²) is computed for broadband (DELTA–GAMMA) and
+      per-canonical-band data, yielding 4D tensors of shape
+      (n_subjects, n_channels, n_frequencies, n_times).
+      Ten analyses explore spectral dynamics, inter-subject synchrony in the
+      frequency domain, and spatial topographic patterns.
+    notebooks:
+      - path: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
+        label: "Wavelet Power Exploration"
+    plots:
+      - id: "spectral_profile"
+        title: "Grand-average spectral profile"
+        notebook: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
+        section: "1 — Grand-average spectral profile"
+        filename_pattern: "spectral_profile_*.png"
+        data_shape:
+          input: "(n_subjects, n_channels, n_freqs, n_times)"
+          output: "(n_freqs,) — mean power per frequency bin"
+        operation_order:
+          - "Average wavelet power across subjects and time"
+          - "Average across channels → scalar per frequency"
+          - "Plot power vs frequency"
+        interpretation: "Classic 1/f slope with alpha peak ~10 Hz is expected. Deviations indicate artefacts or interesting frequency-specific effects."
+        sketch_type: "psd"
+
+      - id: "tf_map"
+        title: "Time-frequency map (spectrogram)"
+        notebook: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
+        section: "2 — Time-frequency map"
+        filename_pattern: "tf_map_*.png"
+        data_shape:
+          input: "(n_subjects, n_channels, n_freqs, n_times)"
+          output: "(n_freqs, n_times) — channel- and subject-averaged power"
+        operation_order:
+          - "Average wavelet power across subjects"
+          - "Average across channels → (n_freqs, n_times) image"
+          - "Plot as 2D heatmap (frequency × time)"
+        interpretation: "Bright regions = high power at that frequency and time. Alpha suppression during high-arousal musical passages and theta entrainment to rhythmic stimuli (e.g. psytrance beats) are expected markers of stimulus-driven engagement."
+        sketch_type: "timeseries_heatmap"
+
+      - id: "band_power_tc"
+        title: "Per-band power time course"
+        notebook: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
+        section: "3 — Per-band power time course"
+        filename_pattern: "band_power_tc_*.png"
+        data_shape:
+          input: "(n_subjects, n_channels, n_freqs, n_times) per band"
+          output: "(n_times,) — z-scored group mean ± SD per band"
+        operation_order:
+          - "Average wavelet power within each canonical band"
+          - "Z-score across time per subject per channel"
+          - "Average across channels → (n_subjects, n_times)"
+          - "Plot group mean ± SD per band"
+        interpretation: "Frequency-resolved counterpart to the broadband time courses in 01-*. Theta increases during rhythmic passages; alpha suppression indicates engagement."
+        sketch_type: "timeseries_multiband"
+
+      - id: "intersubject_variance"
+        title: "Intersubject variance in the wavelet domain"
+        notebook: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
+        section: "4 — Intersubject variance"
+        filename_pattern: "intersubject_variance_*.png"
+        data_shape:
+          input: "(n_subjects, n_channels, n_times) — band-averaged, z-scored"
+          output: "(n_times,) — variance across subjects, channel-averaged"
+        operation_order:
+          - "Average and z-score per band"
+          - "Compute variance across subjects at each (channel, time)"
+          - "Average across channels → variance time course"
+          - "Plot per-band variance traces"
+        interpretation: "Low variance = high inter-subject synchrony. Frequency-resolved synchrony proxy comparable to 01-* mean-variance analysis."
+        sketch_type: "timeseries_variance"
+
+      - id: "wavelet_loo_isc"
+        title: "Wavelet-domain LOO-ISC per band"
+        notebook: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
+        section: "5 — Wavelet-domain LOO-ISC"
+        filename_pattern: "wavelet_loo_isc_*.png"
+        data_shape:
+          input: "(n_subjects, n_channels, n_times) — band-averaged wavelet power"
+          output: "(n_bands, n_channels) — mean LOO-ISC per band per channel"
+        operation_order:
+          - "Average within each canonical band → (n_subjects, n_channels, n_times)"
+          - "compute_loo_isc per band"
+          - "Bar chart + distribution across channels per band"
+        interpretation: "Bands tracking stimulus features (delta/theta for rhythm, alpha for attention) expected to show higher ISC. Directly comparable to 02-* per-band ISC."
+        sketch_type: "bar_grouped_bands"
+
+      - id: "topomap_power_isc"
+        title: "Topographic mapping of power LOO-ISC"
+        notebook: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
+        section: "6 — Topographic mapping"
+        filename_pattern: "topomap_isc_*.png"
+        data_shape:
+          input: "(n_channels,) — mean LOO-ISC per channel per band"
+          output: "2D scalp map — one topomap per frequency band"
+        operation_order:
+          - "Compute per-channel mean LOO-ISC for each band"
+          - "Map values onto 2D electrode positions using MNE"
+          - "Render one colour-coded topomap per band"
+        interpretation: "Regions with high ISC = spatially consistent frequency-specific synchrony. Occipital alpha, frontal theta, or sensorimotor beta patterns are diagnostically informative."
+        sketch_type: "topomap"
+
+      - id: "tf_isc"
+        title: "Time-frequency ISC spectrogram"
+        notebook: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
+        section: "7 — Time-frequency ISC"
+        filename_pattern: "tf_isc_*.png"
+        data_shape:
+          input: "(n_subjects, n_channels × n_freqs, n_times)"
+          output: "(n_freqs,) — channel-averaged LOO-ISC per frequency bin"
+        operation_order:
+          - "Reshape broadband data → (n_subjects, n_channels × n_freqs, n_times)"
+          - "compute_loo_isc per frequency bin"
+          - "Average across channels → ISC-vs-frequency profile"
+        interpretation: "Continuous frequency-resolved synchrony without discrete band boundaries. Peaks indicate frequencies that best capture stimulus-driven synchrony."
+        sketch_type: "timeseries_heatmap"
+
+      - id: "sliding_window_isc_bands"
+        title: "Sliding-window wavelet ISC per band"
+        notebook: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
+        section: "8 — Sliding-window wavelet ISC"
+        filename_pattern: "sliding_window_isc_*.png"
+        data_shape:
+          input: "(n_subjects, n_channels, n_times) per band"
+          output: "(n_bands × n_windows, n_channels) — time-resolved ISC"
+        operation_order:
+          - "Collapse frequency dimension per band"
+          - "compute_sliding_window_isc per band"
+          - "Plot time-resolved ISC traces per band"
+        interpretation: "Time-resolved frequency-specific synchrony. Episodic bursts in a band signal event-driven entrainment to specific musical features."
+        sketch_type: "grid_timeseries_heatmap"
+
+      - id: "cross_frequency_coupling"
+        title: "Cross-frequency coupling (band correlation matrix)"
+        notebook: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
+        section: "9 — Cross-frequency coupling"
+        filename_pattern: "cross_freq_coupling_*.png"
+        data_shape:
+          input: "(n_bands × n_times) — channel-averaged, subject-mean power per band"
+          output: "(n_bands, n_bands) — Pearson correlation matrix"
+        operation_order:
+          - "Channel-average and subject-mean per band → (n_bands, n_times)"
+          - "Compute Pearson correlation between all band pairs"
+          - "Plot as symmetric heatmap"
+        interpretation: "High correlation between bands = co-modulation of oscillatory activity. Theta–alpha coupling is common; gamma–beta coupling can indicate rhythmic motor entrainment."
+        sketch_type: "matrix_heatmap"
+
+      - id: "power_phase_joint"
+        title: "Power–phase joint ISC comparison"
+        notebook: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
+        section: "10 — Power-phase joint analysis"
+        filename_pattern: "power_phase_isc_*.png"
+        data_shape:
+          input: "(n_bands,) power ISC and (n_bands,) phase ISC"
+          output: "(n_bands × 2,) — grouped bar chart"
+        operation_order:
+          - "Compute per-band power LOO-ISC (from power cache)"
+          - "Compute per-band phase LOO-ISC via cos(phase) (from phase cache)"
+          - "Overlay in grouped bar chart per band"
+        interpretation: "Bands where both power and phase ISC are high = robust, multi-modal synchrony. Discordant bands reveal amplitude-only or timing-only entrainment."
+        sketch_type: "bar_grouped_bands"
+
+  - id: "03-wavelet-phase"
+    title: "Stage 03 — Wavelet Phase Analysis"
+    description: |
+      Phase analysis of EEG wavelet transforms. Phase is a circular quantity in
+      (−π, π] — standard linear statistics are replaced by circular analogues
+      (ITPC, cosine projection). Seven analyses explore phase distribution,
+      inter-trial phase coherence (ITPC), and inter-subject phase synchrony.
+    notebooks:
+      - path: "notebooks/03-wavelet-analysis/wavelet_phase_exploration.ipynb"
+        label: "Wavelet Phase Exploration"
+    plots:
+      - id: "phase_distribution"
+        title: "Phase distribution sanity check"
+        notebook: "notebooks/03-wavelet-analysis/wavelet_phase_exploration.ipynb"
+        section: "1 — Phase distribution sanity check"
+        filename_pattern: "phase_distribution_*.png"
+        data_shape:
+          input: "(n_subjects, n_channels, n_freqs, n_times)"
+          output: "(n_bins,) — histogram of phase angles pooled across all dims"
+        operation_order:
+          - "Pool all phase values across subjects, channels, freqs, times"
+          - "Histogram on [−π, π] (linear)"
+          - "Polar histogram overlay"
+        interpretation: "Wavelet phase should be approximately uniform. A strongly peaked distribution indicates artefacts or data-processing issues."
+        sketch_type: "polar_histogram"
+
+      - id: "itpc_spectrum"
+        title: "Inter-Trial Phase Coherence (ITPC) spectrum"
+        notebook: "notebooks/03-wavelet-analysis/wavelet_phase_exploration.ipynb"
+        section: "2 — ITPC spectrum"
+        filename_pattern: "itpc_spectrum_*.png"
+        data_shape:
+          input: "(n_subjects, n_channels, n_freqs, n_times)"
+          output: "(n_freqs,) — ITPC = |mean(exp(i·phase))| averaged over time and channels"
+        operation_order:
+          - "Compute ITPC(f, t) = |mean_subjects(exp(i·phase))|"
+          - "Average over time → (n_channels, n_freqs)"
+          - "Average over channels → (n_freqs,)"
+          - "Plot vs frequency"
+        interpretation: "Peaks indicate frequencies where subjects' oscillatory timing is consistently entrained to the stimulus. High ITPC at alpha/theta = stimulus-locked phase alignment."
+        sketch_type: "psd"
+
+      - id: "tf_itpc_map"
+        title: "Time-frequency ITPC map"
+        notebook: "notebooks/03-wavelet-analysis/wavelet_phase_exploration.ipynb"
+        section: "3 — Time-frequency ITPC map"
+        filename_pattern: "tf_itpc_map_*.png"
+        data_shape:
+          input: "(n_subjects, n_channels, n_freqs, n_times)"
+          output: "(n_freqs, n_times) — channel-averaged ITPC"
+        operation_order:
+          - "Compute ITPC(f, t) per channel"
+          - "Average across channels → (n_freqs, n_times)"
+          - "Plot as 2D heatmap"
+        interpretation: "Bright regions = consistent inter-subject phase alignment at that frequency and time. Stimulus-locked phase resets visible as horizontal bands appearing at musical transitions."
+        sketch_type: "timeseries_heatmap"
+
+      - id: "band_itpc_tc"
+        title: "Per-band ITPC time course"
+        notebook: "notebooks/03-wavelet-analysis/wavelet_phase_exploration.ipynb"
+        section: "4 — Per-band ITPC time course"
+        filename_pattern: "band_itpc_tc_*.png"
+        data_shape:
+          input: "(n_subjects, n_channels, n_freqs, n_times) per band"
+          output: "(n_times,) — channel-averaged, band-averaged ITPC"
+        operation_order:
+          - "Average phase within each canonical band → per-band phase arrays"
+          - "Compute ITPC per band → (n_channels, n_times)"
+          - "Average across channels → (n_times,) per band"
+          - "Plot all bands as overlaid time courses"
+        interpretation: "Frequency-resolved phase consistency over the stimulus duration. Sustained high ITPC = persistent stimulus-driven entrainment; episodic peaks = event-locked phase resets."
+        sketch_type: "timeseries_multiband"
+
+      - id: "phase_loo_isc"
+        title: "Phase-based LOO-ISC per band"
+        notebook: "notebooks/03-wavelet-analysis/wavelet_phase_exploration.ipynb"
+        section: "5 — Phase-based LOO-ISC"
+        filename_pattern: "phase_loo_isc_*.png"
+        data_shape:
+          input: "(n_subjects, n_channels, n_times) — band-averaged cos(phase)"
+          output: "(n_bands, n_channels) — mean LOO-ISC per band"
+        operation_order:
+          - "Convert phase to cos(phase) per band"
+          - "compute_loo_isc on cos(phase) arrays"
+          - "Bar chart + distributions across channels per band"
+        interpretation: "Pearson ISC on cos(phase) tests whether subjects share the same oscillatory timing independently of amplitude. Complementary to ITPC."
+        sketch_type: "bar_grouped_bands"
+
+      - id: "itpc_vs_isc"
+        title: "ITPC vs. phase-ISC comparison"
+        notebook: "notebooks/03-wavelet-analysis/wavelet_phase_exploration.ipynb"
+        section: "6 — ITPC vs. phase-ISC comparison"
+        filename_pattern: "itpc_vs_isc_*.png"
+        data_shape:
+          input: "(n_bands,) ITPC and (n_bands,) LOO-ISC(cos φ)"
+          output: "(n_bands × 2,) — grouped bar chart"
+        operation_order:
+          - "Compute mean ITPC per band"
+          - "Compute mean LOO-ISC(cos φ) per band"
+          - "Overlay in grouped bar chart per band"
+        interpretation: "Bands where both ITPC and phase-ISC are high = convergent evidence for stimulus-driven phase synchrony. Discrepancies reveal sensitivity differences between the two metrics."
+        sketch_type: "bar_grouped_bands"
+
+      - id: "topomap_phase_isc"
+        title: "Topographic mapping of phase LOO-ISC"
+        notebook: "notebooks/03-wavelet-analysis/wavelet_phase_exploration.ipynb"
+        section: "7 — Topographic mapping"
+        filename_pattern: "topomap_phase_isc_*.png"
+        data_shape:
+          input: "(n_channels,) — mean LOO-ISC(cos φ) per channel per band"
+          output: "2D scalp map — one topomap per frequency band"
+        operation_order:
+          - "Compute per-channel mean LOO-ISC(cos φ) for each band"
+          - "Map values onto 2D electrode positions using MNE"
+          - "Render one colour-coded topomap per band"
+        interpretation: "Regions with high phase ISC = spatially consistent inter-subject timing synchrony at each frequency. Compare with power ISC topomaps to identify amplitude vs. phase decoupling."
+        sketch_type: "topomap"
