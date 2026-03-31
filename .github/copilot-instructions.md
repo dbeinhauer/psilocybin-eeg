@@ -83,10 +83,31 @@ notebooks/
 
 Plots are saved in two different locations depending on the context:
 
-- **Jupyter notebooks** — save figures to a `plots/` subdirectory *inside* the notebook's own directory. For example, notebooks under `notebooks/01-raw-mean-variance-analysis/` should save to `notebooks/01-raw-mean-variance-analysis/plots/`. Each notebook may organise plots into further subdirectories (e.g. `plots/broadband/`, `plots/bands/`).
-- **CLI scripts** — save figures to `plots/<notebook-directory-name>/`, where `<notebook-directory-name>` is the name of the corresponding numbered notebook subdirectory (e.g. `plots/01-raw-mean-variance-analysis/`). Within that root, scripts may use subdirectories such as `<condition>_<music_type>/raw/` and `<condition>_<music_type>/bands/`.
+- **Jupyter notebooks** — save figures to a `plots/` subdirectory *inside* the notebook's own directory. For example, notebooks under `notebooks/01-raw-mean-variance-analysis/` should save to `notebooks/01-raw-mean-variance-analysis/plots/broadband/<analysis_type>/` (broadband) or `notebooks/01-raw-mean-variance-analysis/plots/bands/<analysis_type>/` (per-band).
+- **CLI scripts** — save figures to `plots/<notebook-directory-name>/<Condition>_<MusicType>/broadband/<analysis_type>/` (broadband) or `plots/<notebook-directory-name>/<Condition>_<MusicType>/bands/<analysis_type>/` (per-band).
 
-This convention keeps all output organised in a consistent hierarchy and makes it easy to locate the figures that correspond to any given analysis.
+### Canonical plot directory structure
+
+The canonical structure for all CLI-script output (used by the Results Browser) is:
+
+```
+plots/
+└── {NN}-{analysis-name}/            ← analysis stage (matches notebook subdirectory)
+    └── {Condition}_{MusicType}/     ← condition + music type (e.g. Placebo_CLASSIC)
+        ├── broadband/               ← broadband (no per-band filtering)
+        │   └── {analysis_type}/     ← specific analysis (e.g. loo_isc, timeseries)
+        │       └── *.png
+        └── bands/                   ← per-frequency-band analyses
+            └── {analysis_type}/     ← specific analysis (e.g. loo_isc, windowed)
+                └── *.png            ← filename includes band name for per-band files
+```
+
+**Rules:**
+1. **Never** use `raw/` — broadband analyses always go into `broadband/<analysis_type>/`.
+2. **Never** place files directly in `broadband/` or `bands/` — always use an `<analysis_type>/` subdirectory.
+3. `<analysis_type>` names must be consistent across `broadband/` and `bands/` where the same analysis is run for both (e.g. both use `loo_isc`, `pairwise_isc`, `sliding_window`).
+4. Mean-field and other broadband-only analyses go in `broadband/mean_field/` (or appropriate name).
+5. Per-band filenames should include the band name as the first token (e.g. `delta_loo_isc_distribution.png`).
 
 ## Directory Structure
 
@@ -444,10 +465,12 @@ SKETCH_FUNCTIONS["my_new_type"] = sketch_my_new_type
 ### Results Browser page conventions (`2_🔬_Results_Browser.py`)
 
 - Accept a free-text directory path from the user; use `pathlib.Path.rglob("*.png")` + `rglob("*.jpg")` to build the file index.
-- Parse path tokens (stage / condition_music / subdir) from the relative path, not from filenames.
-- Sidebar filters: analysis stage multiselect, condition multiselect, music type multiselect, free-text filename search.
-- Support **grid view** (configurable columns slider) and **list view** (filename + size + mtime).
-- **Compare mode**: checkbox-select 2–4 images, display side-by-side in equal-width `st.columns`.
+- Only index files matching the canonical plot structure: `<stage>/<Condition>_<MusicType>/<broadband|bands>/<analysis_type>/<filename.ext>` (5 path components minimum). Skip everything else silently.
+- Parse path tokens from the relative path, not from filenames: `stage` → parts[0], `condition_music` → parts[1], `spectrum_type` → parts[2] (`broadband` or `bands`), `analysis_type` → parts[3].
+- Sidebar filters (all default to empty — no images shown until at least one is selected): analysis stage, condition, music type, spectrum type, analysis type, frequency band, free-text filename search.
+- Frequency band: for `broadband/` files → band = `"broadband"`; for `bands/` files → extract whole-token band name from filename stem.
+- Support **grid view** (configurable columns slider) and **list view** (filename + size + path metadata).
+- **Compare mode**: 3-way radio — None / Manual (select 2–4 side-by-side) / By condition/music type (auto-find all variants of a filename stem).
 - Cache the file scan with `@st.cache_data(ttl=30)` so manual refreshes don't hammer the filesystem.
 
 ### Catalog-specific Dos and Don'ts

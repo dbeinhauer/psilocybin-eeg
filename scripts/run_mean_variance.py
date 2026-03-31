@@ -22,8 +22,12 @@ For each requested music type the script runs:
 
 All figures are saved under::
 
-    plots/01-raw-mean-variance-analysis/<condition>_<music_type>/raw/
-    plots/01-raw-mean-variance-analysis/<condition>_<music_type>/bands/
+    plots/01-raw-mean-variance-analysis/<condition>_<music_type>/broadband/<analysis_type>/
+    plots/01-raw-mean-variance-analysis/<condition>_<music_type>/bands/<analysis_type>/
+
+where for **broadband** outputs ``<analysis_type>`` is one of ``timeseries``,
+``variance``, or ``windowed``, and for **per-band** outputs ``<analysis_type>``
+is one of ``timeseries``, ``variance``, ``windowed``, or ``isc_matrices``.
 
 Usage examples::
 
@@ -161,8 +165,12 @@ def _run_raw_analysis(
     step_sec: float | None = None,
 ) -> None:
     """Run all raw (broadband) mean-variance sections for one dataset."""
-    raw_dir = save_dir / "raw"
-    raw_dir.mkdir(parents=True, exist_ok=True)
+    broadband_timeseries_dir = save_dir / "broadband" / "timeseries"
+    broadband_timeseries_dir.mkdir(parents=True, exist_ok=True)
+    broadband_variance_dir = save_dir / "broadband" / "variance"
+    broadband_variance_dir.mkdir(parents=True, exist_ok=True)
+    broadband_windowed_dir = save_dir / "broadband" / "windowed"
+    broadband_windowed_dir.mkdir(parents=True, exist_ok=True)
 
     _logger.info(f"[{label}] Computing intersubject statistics …")
     stats = compute_intersubject_stats(ad.data)
@@ -175,7 +183,7 @@ def _run_raw_analysis(
         stats,
         sfreq,
         label,
-        save_path=raw_dir / "timeseries.png",
+        save_path=broadband_timeseries_dir / "timeseries.png",
     )
 
     # Section 2 — variance distribution
@@ -183,7 +191,7 @@ def _run_raw_analysis(
     plot_variance_distribution(
         stats["inter_var"],
         label,
-        save_path=raw_dir / "variance_distribution.png",
+        save_path=broadband_variance_dir / "variance_distribution.png",
     )
 
     # Section 4 — windowed analysis
@@ -209,8 +217,8 @@ def _run_raw_analysis(
         window_sec=window_sec,
         sync_percentile=sync_percentile,
         step_sec=step_sec,
-        save_path_bar=raw_dir / "windowed_bar.png",
-        save_path_overlay=raw_dir / "windowed_overlay.png",
+        save_path_bar=broadband_windowed_dir / "windowed_bar.png",
+        save_path_overlay=broadband_windowed_dir / "windowed_overlay.png",
     )
 
 
@@ -223,8 +231,14 @@ def _run_band_analysis(
     step_sec: float | None = None,
 ) -> None:
     """Run all per-band mean-variance sections for one dataset."""
-    bands_dir = save_dir / "bands"
-    bands_dir.mkdir(parents=True, exist_ok=True)
+    bands_timeseries_dir = save_dir / "bands" / "timeseries"
+    bands_timeseries_dir.mkdir(parents=True, exist_ok=True)
+    bands_variance_dir = save_dir / "bands" / "variance"
+    bands_variance_dir.mkdir(parents=True, exist_ok=True)
+    bands_isc_dir = save_dir / "bands" / "isc_matrices"
+    bands_isc_dir.mkdir(parents=True, exist_ok=True)
+    bands_windowed_dir = save_dir / "bands" / "windowed"
+    bands_windowed_dir.mkdir(parents=True, exist_ok=True)
 
     sfreq = ad.sfreq
     n_subjects = ad.data.shape[0]
@@ -240,7 +254,7 @@ def _run_band_analysis(
         label,
         sync_percentile=sync_percentile,
         bands=FREQUENCY_BANDS,
-        save_path=bands_dir / "band_timeseries.png",
+        save_path=bands_timeseries_dir / "band_timeseries.png",
     )
 
     # Section 2 — per-band variance distributions
@@ -249,7 +263,7 @@ def _run_band_analysis(
         band_stats,
         label,
         bands=FREQUENCY_BANDS,
-        save_path=bands_dir / "band_variance_distributions.png",
+        save_path=bands_variance_dir / "band_variance_distributions.png",
     )
 
     # Section 3 — pairwise ISC matrices
@@ -264,12 +278,11 @@ def _run_band_analysis(
         n_subjects=n_subjects,
         label=label,
         bands=FREQUENCY_BANDS,
-        save_path=bands_dir / "isc_matrices.png",
+        save_path=bands_isc_dir / "isc_matrices.png",
     )
 
     # Section 4 — per-band windowed analysis
     _logger.info(f"[{label}] Section 4: per-band windowed analysis")
-    per_band_dir = bands_dir / "windowed_per_band"
     plot_band_windowed_analysis(
         band_stats,
         sfreq,
@@ -278,9 +291,9 @@ def _run_band_analysis(
         sync_percentile=sync_percentile,
         step_sec=step_sec,
         bands=FREQUENCY_BANDS,
-        save_path_bar=bands_dir / "band_windowed_bar.png",
-        save_path_summary=bands_dir / "band_windowed_summary.png",
-        save_path_per_band_dir=per_band_dir,
+        save_path_bar=bands_windowed_dir / "band_windowed_bar.png",
+        save_path_summary=bands_windowed_dir / "band_windowed_summary.png",
+        save_path_per_band_dir=bands_windowed_dir,
     )
 
 

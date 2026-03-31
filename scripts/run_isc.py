@@ -27,9 +27,11 @@ For each requested music type the script runs:
 
 All figures are saved under::
 
-    plots/02-isc-broadband-analysis/<condition>_<music_type>/broadband/
-    plots/02-isc-broadband-analysis/<condition>_<music_type>/bands/
-    plots/02-isc-broadband-analysis/<condition>_<music_type>/mean_field/
+    plots/02-isc-broadband-analysis/<condition>_<music_type>/broadband/<analysis_type>/
+    plots/02-isc-broadband-analysis/<condition>_<music_type>/bands/<analysis_type>/
+
+where ``<analysis_type>`` is one of ``loo_isc``, ``pairwise_isc``, ``sliding_window``,
+``mean_field``, or ``band_overlap``.
 
 Usage examples::
 
@@ -200,8 +202,12 @@ def _run_broadband_analysis(
     n_ch_subsample: int,
 ) -> None:
     """Run all broadband ISC sections for one dataset."""
-    broadband_dir = save_dir / "broadband"
-    broadband_dir.mkdir(parents=True, exist_ok=True)
+    loo_isc_dir = save_dir / "broadband" / "loo_isc"
+    loo_isc_dir.mkdir(parents=True, exist_ok=True)
+    pairwise_isc_dir = save_dir / "broadband" / "pairwise_isc"
+    pairwise_isc_dir.mkdir(parents=True, exist_ok=True)
+    sliding_window_dir = save_dir / "broadband" / "sliding_window"
+    sliding_window_dir.mkdir(parents=True, exist_ok=True)
 
     data = ad.data
     sfreq = ad.sfreq
@@ -234,8 +240,8 @@ def _run_broadband_analysis(
         mean_pearson,
         loo_spearman,
         mean_spearman,
-        save_path_hist=broadband_dir / f"loo_isc_distribution_{label}.png",
-        save_path_violin=broadband_dir / f"loo_isc_per_subject_{label}.png",
+        save_path_hist=loo_isc_dir / f"loo_isc_distribution_{label}.png",
+        save_path_violin=loo_isc_dir / f"loo_isc_per_subject_{label}.png",
     )
 
     # ── Section 2: Pairwise ISC (Pearson + Spearman) ─────────────────────
@@ -247,9 +253,11 @@ def _run_broadband_analysis(
         label,
         pair_pearson,
         pair_spearman,
-        save_path_heatmaps=broadband_dir / f"pairwise_isc_matrix_{label}.png",
-        save_path_per_subject=broadband_dir / f"pairwise_isc_per_subject_{label}.png",
-        save_path_distribution=broadband_dir / f"pairwise_isc_distribution_{label}.png",
+        save_path_heatmaps=pairwise_isc_dir / f"pairwise_isc_matrix_{label}.png",
+        save_path_per_subject=pairwise_isc_dir
+        / f"pairwise_isc_per_subject_{label}.png",
+        save_path_distribution=pairwise_isc_dir
+        / f"pairwise_isc_distribution_{label}.png",
     )
 
     # ── Section 3: Multi-scale sliding-window ISC ─────────────────────────
@@ -291,9 +299,10 @@ def _run_broadband_analysis(
         window_large_sec=window_large_sec,
         isc_threshold=isc_threshold,
         n_ch_subsample=n_ch_subsample if n_ch_subsample < n_channels else None,
-        save_path_bar=broadband_dir / f"sw_isc_bar_{label}.png",
-        save_path_overlay=broadband_dir / f"sw_isc_overlay_{label}.png",
-        save_path_comparison=broadband_dir / f"sw_isc_pearson_vs_spearman_{label}.png",
+        save_path_bar=sliding_window_dir / f"sw_isc_bar_{label}.png",
+        save_path_overlay=sliding_window_dir / f"sw_isc_overlay_{label}.png",
+        save_path_comparison=sliding_window_dir
+        / f"sw_isc_pearson_vs_spearman_{label}.png",
     )
 
 
@@ -309,8 +318,14 @@ def _run_band_analysis(
     n_ch_subsample: int,
 ) -> None:
     """Run all per-band ISC sections for one dataset."""
-    bands_dir = save_dir / "bands"
-    bands_dir.mkdir(parents=True, exist_ok=True)
+    loo_isc_dir = save_dir / "bands" / "loo_isc"
+    loo_isc_dir.mkdir(parents=True, exist_ok=True)
+    pairwise_isc_dir = save_dir / "bands" / "pairwise_isc"
+    pairwise_isc_dir.mkdir(parents=True, exist_ok=True)
+    sliding_window_dir = save_dir / "bands" / "sliding_window"
+    sliding_window_dir.mkdir(parents=True, exist_ok=True)
+    band_overlap_dir = save_dir / "bands" / "band_overlap"
+    band_overlap_dir.mkdir(parents=True, exist_ok=True)
 
     data = ad.data
     sfreq = ad.sfreq
@@ -350,7 +365,7 @@ def _run_band_analysis(
         band_iscs,
         band_iscs_spearman,
         bands=FREQUENCY_BANDS,
-        save_path_dir=bands_dir / "loo_isc",
+        save_path_dir=loo_isc_dir,
     )
 
     # ── Section 2: Per-band pairwise ISC (Pearson + Spearman) ────────────
@@ -371,7 +386,7 @@ def _run_band_analysis(
         band_pair_pearson,
         band_pair_spearman,
         bands=FREQUENCY_BANDS,
-        save_path_dir=bands_dir / "pairwise_isc",
+        save_path_dir=pairwise_isc_dir,
     )
 
     # ── Section 3: Per-band multi-scale sliding-window ISC ───────────────
@@ -423,7 +438,7 @@ def _run_band_analysis(
         band_thresholds=BAND_ISC_THRESHOLDS,
         bands=FREQUENCY_BANDS,
         n_ch_subsample=n_ch_subsample if n_ch_subsample < n_channels else None,
-        save_path_dir=bands_dir / "sliding_window",
+        save_path_dir=sliding_window_dir,
     )
 
     # ── Section 4: Band-overlap analysis ──────────────────────────────────
@@ -438,7 +453,7 @@ def _run_band_analysis(
         band_thresholds=BAND_ISC_THRESHOLDS,
         broadband_sw={label: (sw_isc_bb, sw_times_bb)},
         broadband_threshold=isc_threshold,
-        save_path=bands_dir / f"band_overlap_{label}.png",
+        save_path=band_overlap_dir / f"band_overlap_{label}.png",
     )
 
 
@@ -451,7 +466,7 @@ def _run_mean_field_analysis(
     step_sec: float,
 ) -> None:
     """Run mean-field ISC analysis for one dataset."""
-    mf_dir = save_dir / "mean_field"
+    mf_dir = save_dir / "broadband" / "mean_field"
     mf_dir.mkdir(parents=True, exist_ok=True)
 
     # LOO-ISC
