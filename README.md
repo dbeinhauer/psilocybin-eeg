@@ -232,7 +232,7 @@ configuration details.
 ## Visualization Catalog
 
 An interactive **Streamlit** app for browsing the analysis catalog and exploring
-locally generated result plots. It lives entirely in `docs/viz_catalog/` and has
+locally generated result plots. It lives entirely in `viz_catalog/` and has
 no dependencies on the main Python package.
 
 ### Quick start
@@ -240,7 +240,7 @@ no dependencies on the main Python package.
 ```bash
 # Recommended — with uv (no prior install needed):
 uv run --with "streamlit>=1.32.0" --with "pyyaml>=6.0" --with "numpy>=1.24.0" --with "matplotlib>=3.7.0" \
-    streamlit run docs/viz_catalog/app.py
+    streamlit run viz_catalog/app.py
 ```
 
 The app opens at **`http://localhost:8501`** and provides two pages:
@@ -272,7 +272,7 @@ Sidebar filters: **Analysis stage**, **Condition**, **Music type**,
 and a free-text **Filename** search. All filters default to empty (nothing shown)
 until at least one is selected.
 
-See [`docs/viz_catalog/README.md`](docs/viz_catalog/README.md) for full usage
+See [`viz_catalog/README.md`](viz_catalog/README.md) for full usage
 instructions including how to copy results from the HPC cluster.
 
 ---
@@ -285,6 +285,6 @@ instructions including how to copy results from the HPC cluster.
 | [`docs/pipeline_overview.md`](docs/pipeline_overview.md) | End-to-end workflow description |
 | [`docs/data_dictionary.md`](docs/data_dictionary.md) | All field names, enum values, CSV schemas |
 | [`docs/hpc_guide.md`](docs/hpc_guide.md) | HPC job submission guide |
-| [`docs/viz_catalog/README.md`](docs/viz_catalog/README.md) | Visualization Catalog & Results Browser usage |
+| [`viz_catalog/README.md`](viz_catalog/README.md) | Visualization Catalog & Results Browser usage |
 | [`data/README.md`](data/README.md) | Expected data directory layout |
 | [`src/preprocessing/README.md`](src/preprocessing/README.md) | Preprocessing pipeline details |

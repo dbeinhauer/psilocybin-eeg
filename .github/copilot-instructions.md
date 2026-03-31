@@ -365,14 +365,14 @@ For large-scale processing on the Metacentrum HPC cluster:
 - [`src/preprocessing/README.md`](../src/preprocessing/README.md) — Preprocessing details
 - [`src/analysis/README.md`](../src/analysis/README.md) — Analysis modules, data shape conventions, and ISC workflow
 
-## Visualization Catalog (`docs/viz_catalog/`)
+## Visualization Catalog (`viz_catalog/`)
 
-A self-contained **Streamlit multi-page app** that serves as an interactive analysis reference and a local results file browser. It lives entirely under `docs/viz_catalog/` and has **no imports from `src/`** — it is independent of the main project package.
+A self-contained **Streamlit multi-page app** that serves as an interactive analysis reference and a local results file browser. It lives entirely under `viz_catalog/` and has **no imports from `src/`** — it is independent of the main project package.
 
 ### Structure
 
 ```
-docs/viz_catalog/
+viz_catalog/
 ├── app.py                        ← Streamlit entry point (page config + home)
 ├── catalog.yaml                  ← Single source of truth for all analyses/plots
 ├── requirements.txt              ← streamlit, pyyaml, matplotlib, numpy
@@ -387,23 +387,23 @@ docs/viz_catalog/
 ```bash
 # With uv (recommended) — one-liner, no prior install:
 uv run --with "streamlit>=1.32.0" --with "pyyaml>=6.0" --with "numpy>=1.24.0" --with "matplotlib>=3.7.0" \
-    streamlit run docs/viz_catalog/app.py
+    streamlit run viz_catalog/app.py
 
 # With uv — persistent venv:
 uv venv .venv-viz && source .venv-viz/bin/activate
-uv pip install -r docs/viz_catalog/requirements.txt
-streamlit run docs/viz_catalog/app.py
+uv pip install -r viz_catalog/requirements.txt
+streamlit run viz_catalog/app.py
 
 # With plain pip:
-pip install -r docs/viz_catalog/requirements.txt
-streamlit run docs/viz_catalog/app.py
+pip install -r viz_catalog/requirements.txt
+streamlit run viz_catalog/app.py
 ```
 
 The app opens at **`http://localhost:8501`**.
 
 ### Adding a new analysis group (YAML only — no Python needed)
 
-Add a new entry under `analyses:` in `docs/viz_catalog/catalog.yaml`:
+Add a new entry under `analyses:` in `viz_catalog/catalog.yaml`:
 
 ```yaml
 analyses:
@@ -434,7 +434,7 @@ Every plot entry **must** include: `id`, `title`, `notebook`, `section`, `filena
 
 ### Adding a new sketch type (Python)
 
-1. Open `docs/viz_catalog/pages/1_📋_Catalog.py`.
+1. Open `viz_catalog/pages/1_📋_Catalog.py`.
 2. Write a zero-argument function that returns a `matplotlib.figure.Figure`. Keep it small (`figsize=(5, 2.5)`) and schematic — it is an orientation aid, not a data plot.
 3. Register it in the `SKETCH_FUNCTIONS` dict at module level.
 
@@ -477,14 +477,14 @@ SKETCH_FUNCTIONS["my_new_type"] = sketch_my_new_type
 
 ✓ Keep `catalog.yaml` as the **only** place where analysis content lives — no hardcoded titles or descriptions in Python pages.
 ✓ Keep sketch functions **pure** (no I/O, no side effects, deterministic seeds).
-✓ Update `catalog.yaml` **and** `docs/viz_catalog/README.md` when adding a new analysis group or stage.
+✓ Update `catalog.yaml` **and** `viz_catalog/README.md` when adding a new analysis group or stage.
 ✓ Pin the `GITHUB_BASE` branch to `develop` so notebook links stay valid.
-✓ Run `ruff check docs/viz_catalog/` and `ruff format docs/viz_catalog/` after any Python change.
+✓ Run `ruff check viz_catalog/` and `ruff format viz_catalog/` after any Python change.
 
-✗ Do **not** import from `src/` inside any `docs/viz_catalog/` file — the catalog must stay self-contained.
-✗ Do **not** add heavyweight dependencies (MNE, PyTorch, SciPy) to `docs/viz_catalog/requirements.txt`.
+✗ Do **not** import from `src/` inside any `viz_catalog/` file — the catalog must stay self-contained.
+✗ Do **not** add heavyweight dependencies (MNE, PyTorch, SciPy) to `viz_catalog/requirements.txt`.
 ✗ Do **not** use `plt.show()` inside sketch functions — always return the `Figure` object and let Streamlit render it.
-✗ Do **not** store actual EEG data or plot files in `docs/viz_catalog/` — the Results Browser reads them from an external local path.
+✗ Do **not** store actual EEG data or plot files in `viz_catalog/` — the Results Browser reads them from an external local path.
 
 ## Important Notes
 

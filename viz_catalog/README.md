@@ -18,7 +18,7 @@ Run the app in an **isolated, temporary environment** — no manual install need
 ```bash
 # From the repository root:
 uv run --with "streamlit>=1.32.0" --with "pyyaml>=6.0" --with "numpy>=1.24.0" --with "matplotlib>=3.7.0" \
-    streamlit run docs/viz_catalog/app.py
+    streamlit run viz_catalog/app.py
 ```
 
 Or install into a dedicated virtual environment and reuse it:
@@ -30,10 +30,10 @@ source .venv-viz/bin/activate          # macOS / Linux
 # .venv-viz\Scripts\activate            # Windows PowerShell
 
 # Install catalog dependencies
-uv pip install -r docs/viz_catalog/requirements.txt
+uv pip install -r viz_catalog/requirements.txt
 
 # Launch
-streamlit run docs/viz_catalog/app.py
+streamlit run viz_catalog/app.py
 ```
 
 ### Option B — with plain `pip`
@@ -42,8 +42,8 @@ streamlit run docs/viz_catalog/app.py
 # (Optionally create a venv first)
 python -m venv .venv-viz && source .venv-viz/bin/activate
 
-pip install -r docs/viz_catalog/requirements.txt
-streamlit run docs/viz_catalog/app.py
+pip install -r viz_catalog/requirements.txt
+streamlit run viz_catalog/app.py
 ```
 
 The app opens at **`http://localhost:8501`** in your browser.
@@ -155,7 +155,7 @@ Three modes are available via the **Compare mode** radio button in the sidebar:
 
 ## How to Add a New Analysis or Plot Type
 
-All content is driven by `docs/viz_catalog/catalog.yaml` — no Python changes needed for
+All content is driven by `viz_catalog/catalog.yaml` — no Python changes needed for
 new entries.
 
 ### Add a new analysis group
@@ -187,7 +187,7 @@ analyses:
 
 ### Add a new sketch type
 
-1. Open `docs/viz_catalog/pages/1_📋_Catalog.py`.
+1. Open `viz_catalog/pages/1_📋_Catalog.py`.
 2. Find the `SKETCH_FUNCTIONS` dictionary near the top.
 3. Add a new entry:
 
@@ -209,7 +209,7 @@ SKETCH_FUNCTIONS["my_new_type"] = sketch_my_new_type
 ## Directory Structure
 
 ```
-docs/viz_catalog/
+viz_catalog/
 ├── app.py                       ← Streamlit entry point
 ├── catalog.yaml                 ← Single source of truth for all analyses/plots
 ├── requirements.txt             ← Streamlit + pyyaml + matplotlib
