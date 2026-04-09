@@ -17,6 +17,7 @@ Use the sidebar to navigate:
 |------|-------------|
 | 📋 **Catalog** | Browse all analysis types, data shapes, operations, and plot sketches |
 | 🔬 **Results Browser** | Browse actual computed plot files from your results folder |
+| 📊 **Interactive Explorer** | Interactively visualise precomputed CSV results (time-series, ISC distributions, windowed stats) |
 """)
 
 st.info("Select a page from the sidebar to get started.")
