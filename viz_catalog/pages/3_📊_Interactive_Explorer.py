@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -27,6 +28,9 @@ st.markdown(
 # ---------------------------------------------------------------------------
 
 #: CSV basenames recognised as results-database entries.
+#: NOTE: Must be kept in sync with ``_KNOWN_CSV_FILES`` in
+#: ``src/analysis/results_store.py``.  Duplicated here because viz_catalog
+#: must remain self-contained (no imports from ``src/``).
 _KNOWN_CSV: frozenset[str] = frozenset(
     {
         "intersubject_timeseries.csv",
@@ -168,6 +172,12 @@ def _label(rec: dict[str, str]) -> str:
     if rec["band"] != "broadband":
         parts.append(rec["band"])
     return " / ".join(parts)
+
+
+def _off_diagonal(mat: np.ndarray) -> np.ndarray:
+    """Return the off-diagonal elements of a square matrix."""
+    mask = ~np.eye(mat.shape[0], dtype=bool)
+    return mat[mask]
 
 
 def viz_intersubject_timeseries(rec: dict[str, str]) -> None:
@@ -321,8 +331,7 @@ def viz_pairwise_isc(rec: dict[str, str]) -> None:
 
     with col2:
         st.markdown("**Off-diagonal ISC distribution**")
-        mask = ~np.eye(n, dtype=bool)
-        off_diag = mat[mask]
+        off_diag = _off_diagonal(mat)
         n_bins = st.slider(
             "Number of bins",
             min_value=5,
@@ -336,8 +345,7 @@ def viz_pairwise_isc(rec: dict[str, str]) -> None:
         st.bar_chart(hist_df, use_container_width=True)
 
     # Summary
-    mask = ~np.eye(n, dtype=bool)
-    off_diag = mat[mask]
+    off_diag = _off_diagonal(mat)
     col_m1, col_m2 = st.columns(2)
     with col_m1:
         st.metric("Mean off-diagonal ISC", f"{off_diag.mean():.4f}")
@@ -349,7 +357,7 @@ def viz_pairwise_isc(rec: dict[str, str]) -> None:
 
 
 # Map analysis_type → renderer
-_VIZ_MAP: dict[str, object] = {
+_VIZ_MAP: dict[str, Callable[[dict[str, str]], None]] = {
     "intersubject_timeseries": viz_intersubject_timeseries,
     "windowed_stats": viz_windowed_stats,
     "loo_isc": viz_loo_isc,
