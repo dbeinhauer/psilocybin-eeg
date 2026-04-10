@@ -78,6 +78,10 @@ def save_intersubject_timeseries(
     :param band: Frequency band name or ``"broadband"``.
     :return: Path to the written CSV file.
     """
+    if sfreq <= 0:
+        raise ValueError(
+            f"sfreq must be a positive sampling frequency in Hz, got {sfreq}."
+        )
     n_times = stats["mean_t"].shape[0]
     time = np.arange(n_times) / sfreq
     df = pd.DataFrame(
@@ -151,6 +155,11 @@ def save_loo_isc(
     :return: Path to the written CSV file.
     """
     n_subjects, n_channels = loo_isc.shape
+    if mean_isc.shape != (n_channels,):
+        raise ValueError(
+            f"mean_isc shape {mean_isc.shape} does not match "
+            f"expected ({n_channels},) from loo_isc with {n_channels} channels."
+        )
     records: list[dict] = []
     for s in range(n_subjects):
         for ch in range(n_channels):
@@ -201,6 +210,10 @@ def save_pairwise_isc(
     :param band: Frequency band name or ``"broadband"``.
     :return: Path to the written CSV file.
     """
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        raise ValueError(
+            f"matrix must be a square 2-D array, got shape {matrix.shape}."
+        )
     n = matrix.shape[0]
     records: list[dict] = []
     for i in range(n):

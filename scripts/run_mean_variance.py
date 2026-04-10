@@ -347,6 +347,22 @@ def _run_band_analysis(
                 music_type=music_type,
                 band=band,
             )
+            n_band_times = len(stats["mean_t"])
+            df_band_wins = compute_windowed_stats(
+                stats,
+                n_times=n_band_times,
+                sfreq=sfreq,
+                window_sec=window_sec,
+                sync_percentile=sync_percentile,
+                step_sec=step_sec,
+            )
+            save_windowed_stats(
+                df_band_wins,
+                db_dir,
+                condition=condition,
+                music_type=music_type,
+                band=band,
+            )
         for band, matrix in isc_matrices.items():
             db_dir = results_db_dir / "bands" / band
             save_pairwise_isc(

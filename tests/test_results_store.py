@@ -125,6 +125,12 @@ class TestSaveLoadIntersubjectTimeseries:
         assert (df["music_type"] == "PSYTRANCE").all()
         assert (df["band"] == "alpha").all()
 
+    def test_rejects_non_positive_sfreq(self, tmp_path, sample_stats):
+        with pytest.raises(ValueError, match="sfreq must be a positive"):
+            save_intersubject_timeseries(sample_stats, sfreq=0.0, out_dir=tmp_path)
+        with pytest.raises(ValueError, match="sfreq must be a positive"):
+            save_intersubject_timeseries(sample_stats, sfreq=-10.0, out_dir=tmp_path)
+
 
 class TestSaveLoadWindowedStats:
     def test_round_trip(self, tmp_path, sample_windowed_df):
@@ -192,6 +198,12 @@ class TestSaveLoadLooIsc:
         means = df[df["subject"] == -1].sort_values("channel")
         np.testing.assert_allclose(means["isc"].values, mean_isc, atol=1e-6)
 
+    def test_rejects_mismatched_mean_isc_shape(self, tmp_path, sample_loo):
+        loo, _ = sample_loo
+        wrong_mean = np.zeros(loo.shape[1] + 3)
+        with pytest.raises(ValueError, match="mean_isc shape"):
+            save_loo_isc(loo, wrong_mean, out_dir=tmp_path)
+
 
 class TestSaveLoadPairwiseIsc:
     def test_round_trip(self, tmp_path, sample_pairwise):
@@ -210,6 +222,16 @@ class TestSaveLoadPairwiseIsc:
         for _, row in df.iterrows():
             i, j = int(row["subject_i"]), int(row["subject_j"])
             np.testing.assert_allclose(row["isc"], sample_pairwise[i, j], atol=1e-6)
+
+    def test_rejects_non_square_matrix(self, tmp_path):
+        rect = np.ones((3, 4))
+        with pytest.raises(ValueError, match="square 2-D array"):
+            save_pairwise_isc(rect, out_dir=tmp_path)
+
+    def test_rejects_1d_array(self, tmp_path):
+        vec = np.ones(5)
+        with pytest.raises(ValueError, match="square 2-D array"):
+            save_pairwise_isc(vec, out_dir=tmp_path)
 
 
 # ---------------------------------------------------------------------------

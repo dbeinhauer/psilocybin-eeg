@@ -284,14 +284,15 @@ Use `src.analysis.results_store` save functions to generate the CSV database:
 
 ```
 results_db/
-└── {Condition}_{MusicType}/        ← e.g. Placebo_CLASSIC
-    ├── broadband/
-    │   ├── intersubject_timeseries.csv
-    │   ├── windowed_stats.csv
-    │   ├── loo_isc.csv
-    │   └── pairwise_isc.csv
-    └── bands/{band}/               ← e.g. alpha, delta
-        └── *.csv
+└── {NN}-{analysis-name}/           ← e.g. 01-raw-mean-variance-analysis
+    └── {Condition}_{MusicType}/    ← e.g. Placebo_CLASSIC
+        ├── broadband/
+        │   ├── intersubject_timeseries.csv
+        │   ├── windowed_stats.csv
+        │   ├── loo_isc.csv
+        │   └── pairwise_isc.csv
+        └── bands/{band}/           ← e.g. alpha, delta
+            └── *.csv
 ```
 
 ---
