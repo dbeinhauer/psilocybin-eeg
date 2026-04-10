@@ -192,8 +192,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Root directory for the CSV results database (Interactive Explorer). "
-            "Defaults to results_db/02-isc-broadband-analysis/. "
-            "Set to 'none' to disable CSV export."
+            "Defaults to results_db/02-isc-broadband-analysis/."
         ),
     )
     parser.add_argument(
