@@ -1,0 +1,43 @@
+name: "Simple task (fix/docs/test/refactor)"
+description: "Bug fix, doc update, test, lint fix, or simple refactor — runs on Sonnet"
+labels: ["claude"]
+body:
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      description: Pick the label — this determines the model (all use Sonnet).
+      options:
+        - "fix/bug — Fix broken functionality"
+        - "fix/lint — Fix linting or formatting violations"
+        - "fix/typo — Fix typo in code, docs, or comments"
+        - "docs/update — Update documentation or docstrings"
+        - "docs/sync — Sync docs with current project structure"
+        - "test/add — Add missing tests for existing module"
+        - "test/fix — Fix broken or flaky test"
+        - "refactor/simple — Rename, extract, move (single module)"
+        - "catalog/update — Update viz catalog YAML or sketch"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What needs to be done
+      description: >
+        Be specific: name the file, function, or module.
+        Simple tasks work best with precise instructions.
+      placeholder: |
+        In `src/analysis/isc.py`, the function `compute_pairwise_isc`
+        uses a hardcoded string "CLASSIC" on line 42. Replace it with
+        `MusicTypeVariants.CLASSICAL.value`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Done when
+      placeholder: |
+        - [ ] Tests pass
+        - [ ] Linting passes
