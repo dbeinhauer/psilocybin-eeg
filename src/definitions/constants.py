@@ -29,6 +29,9 @@ class ProjectPaths:
     )  # Directory where excluded electrodes from processing are stored (we want to typically omit the boundary electrodes).
     EXCLUDED_ICS_FILENAME_MAPPING = "excluded_ics_mapping.csv"  # Filename where the mapping of all ICs selected for exclusion are stored alongside with their category.
     PLOTS_PATH = PROJECT_ROOT / "plots"  # Path to all project plots.
+    RESULTS_DB_PATH = (
+        PROJECT_ROOT / "results_db"
+    )  # Path to the CSV results database for the Interactive Explorer.
     NOTEBOOKS_DIR = PROJECT_ROOT / "notebooks"  # Path to all project notebooks.
     EXCLUDED_PARTICIPANTS_DIR = (
         DATA_DIR / "excluded_participants"

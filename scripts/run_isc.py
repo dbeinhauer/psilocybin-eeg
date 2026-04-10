@@ -79,6 +79,10 @@ from src.analysis.isc import (  # noqa: E402
     compute_sliding_window_isc,
     compute_sliding_window_isc_spearman,
 )
+from src.analysis.results_store import (  # noqa: E402
+    save_loo_isc,
+    save_pairwise_isc,
+)
 from src.definitions.constants import ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
     ConditionVariants,
@@ -183,6 +187,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--results_db_dir",
+        type=Path,
+        default=None,
+        help=(
+            "Root directory for the CSV results database (Interactive Explorer). "
+            "Defaults to results_db/02-isc-broadband-analysis/. "
+            "Set to 'none' to disable CSV export."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable DEBUG logging.",
@@ -200,6 +214,10 @@ def _run_broadband_analysis(
     window_large_sec: float,
     step_sec: float,
     n_ch_subsample: int,
+    *,
+    condition: str = "",
+    music_type: str = "",
+    results_db_dir: Path | None = None,
 ) -> None:
     """Run all broadband ISC sections for one dataset."""
     loo_isc_dir = save_dir / "broadband" / "loo_isc"
@@ -260,6 +278,24 @@ def _run_broadband_analysis(
         / f"pairwise_isc_distribution_{label}.png",
     )
 
+    # ── Export CSV results for Interactive Explorer ────────────────────────
+    if results_db_dir is not None:
+        db_dir = results_db_dir / "broadband"
+        save_loo_isc(
+            loo_pearson,
+            mean_pearson,
+            db_dir,
+            condition=condition,
+            music_type=music_type,
+            method="pearson",
+        )
+        save_pairwise_isc(
+            pair_pearson,
+            db_dir,
+            condition=condition,
+            music_type=music_type,
+        )
+
     # ── Section 3: Multi-scale sliding-window ISC ─────────────────────────
     _logger.info(f"[{label}] Section 3: Multi-scale sliding-window ISC …")
     step_fine = window_fine_sec / 2
@@ -316,6 +352,10 @@ def _run_band_analysis(
     window_large_sec: float,
     step_sec: float,
     n_ch_subsample: int,
+    *,
+    condition: str = "",
+    music_type: str = "",
+    results_db_dir: Path | None = None,
 ) -> None:
     """Run all per-band ISC sections for one dataset."""
     loo_isc_dir = save_dir / "bands" / "loo_isc"
@@ -388,6 +428,29 @@ def _run_band_analysis(
         bands=FREQUENCY_BANDS,
         save_path_dir=pairwise_isc_dir,
     )
+
+    # ── Export per-band CSV results for Interactive Explorer ───────────────
+    if results_db_dir is not None:
+        for band, (loo, mean_isc) in band_iscs.items():
+            db_dir = results_db_dir / "bands" / band
+            save_loo_isc(
+                loo,
+                mean_isc,
+                db_dir,
+                condition=condition,
+                music_type=music_type,
+                band=band,
+                method="pearson",
+            )
+        for band, matrix in band_pair_pearson.items():
+            db_dir = results_db_dir / "bands" / band
+            save_pairwise_isc(
+                matrix,
+                db_dir,
+                condition=condition,
+                music_type=music_type,
+                band=band,
+            )
 
     # ── Section 3: Per-band multi-scale sliding-window ISC ───────────────
     _logger.info(f"[{label}] Section 3: per-band multi-scale sliding-window ISC …")
@@ -530,6 +593,11 @@ if __name__ == "__main__":
         if args.save_dir is not None
         else ProjectPaths.PLOTS_PATH / "02-isc-broadband-analysis"
     )
+    results_db_root = (
+        args.results_db_dir
+        if args.results_db_dir is not None
+        else ProjectPaths.RESULTS_DB_PATH / "02-isc-broadband-analysis"
+    )
 
     _logger.info(
         f"Starting ISC analysis: condition={condition.value}, "
@@ -559,6 +627,8 @@ if __name__ == "__main__":
 
         save_dir = save_root / dataset_key
 
+        results_db_dir = results_db_root / dataset_key
+
         _run_broadband_analysis(
             ad,
             label=label,
@@ -569,6 +639,9 @@ if __name__ == "__main__":
             window_large_sec=args.window_large_sec,
             step_sec=args.step_sec,
             n_ch_subsample=args.n_ch_subsample,
+            condition=condition.value,
+            music_type=label,
+            results_db_dir=results_db_dir,
         )
 
         _run_band_analysis(
@@ -581,6 +654,9 @@ if __name__ == "__main__":
             window_large_sec=args.window_large_sec,
             step_sec=args.step_sec,
             n_ch_subsample=args.n_ch_subsample,
+            condition=condition.value,
+            music_type=label,
+            results_db_dir=results_db_dir,
         )
 
         _run_mean_field_analysis(

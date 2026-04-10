@@ -4,6 +4,7 @@ data/interim
 data/excluded_participants
 config/participant_mappings/
 plots/
+results_db/
 src/psilocybin_eeg.egg-info/
 notebooks/preprocessing_jan.ipynb
 
