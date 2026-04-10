@@ -1,8 +1,8 @@
 ---
 name: new-analysis
 description: Scaffold a new analysis following the full CLAUDE.md workflow
-user_invocable: true
-args: name
+user-invocable: true
+argument-hint: "[name]"
 ---
 
 Scaffold a new analysis called `{{ name }}`. Follow the "Adding a New Analysis" workflow from CLAUDE.md:

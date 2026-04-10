@@ -1,7 +1,7 @@
 ---
 name: validate
 description: Run consistency checks across the codebase to find convention violations
-user_invocable: true
+user-invocable: true
 ---
 
 Run the following consistency checks and report results as a table:

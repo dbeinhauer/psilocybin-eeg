@@ -1,7 +1,7 @@
 ---
 name: sync-docs
 description: Update documentation files to reflect current project structure
-user_invocable: true
+user-invocable: true
 ---
 
 Scan the project and update all documentation to match the current state:

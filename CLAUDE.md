@@ -41,6 +41,9 @@ python scripts/run_time_alignment.py --condition Placebo --music_type CLASSIC
 python scripts/run_isc.py --music_type CLASSIC PSYTRANCE
 python scripts/run_mean_variance.py --music_type CLASSIC PSYTRANCE
 
+# scripts/analysis_common.py provides shared helpers (load_analyzers, analyzers_to_datasets)
+# used by both run_isc.py and run_mean_variance.py
+
 # Run visualization catalog (Streamlit app, independent of src/)
 uv run --with "streamlit>=1.32.0" --with "pyyaml>=6.0" --with "numpy>=1.24.0" --with "matplotlib>=3.7.0" \
     streamlit run viz_catalog/app.py
@@ -53,21 +56,39 @@ uv run --with "streamlit>=1.32.0" --with "pyyaml>=6.0" --with "numpy>=1.24.0" --
 - **`definitions/`** — Single source of truth for enums (`fields.py`), path constants (`constants.py` → `ProjectPaths`), and channel mappings (`mappings.py`). Never hardcode categorical values as strings; always use enums.
 - **`io/`** — Filename parsing (`parsing.py`), data loading (`loading.py`), saving (`saving.py`). All file I/O routes through here.
 - **`preprocessing/`** — Pipeline order: **channel_prep → filtering → ica → time_alignment**. Uses MNE-Python `Raw`/`Epochs` objects.
-- **`analysis/`** — ISC computation (`isc.py`), data containers (`data_representations.py` → `AnalysisData`), results CSV export (`results_store.py`), summary utilities. Input shape convention: `(n_subjects, n_channels, n_timepoints)`.
+- **`analysis/`** — ISC computation (`isc.py`), intersubject mean-variance synchrony (`mean_variance.py`), data containers (`data_representations.py` → `AnalysisData`), results CSV export (`results_store.py`), high-level orchestrator (`summary.py` → `EEGSummarizedAnalyzer`). Input shape convention: `(n_subjects, n_channels, n_timepoints)`.
 - **`visualization/`** — Seaborn for statistical plots, Matplotlib for EEG topomaps. All plot functions accept an optional `save_path` parameter.
 - **`filtering/`** — `DatasetFilter` for metadata-level DataFrame filtering.
 - **`utils/`** — `LoggerMixin` for class-level logging.
 
 ### Key Patterns
 
-- **Enums everywhere**: `ConditionVariants`, `MusicTypeVariants`, `FrequencyBandNames` from `src/definitions/fields.py`. Frequency bands: delta (1-4 Hz), theta (4-8), alpha (8-13), beta (13-30), gamma (30-70).
+- **Enums everywhere**: `ConditionVariants`, `MusicTypeVariants`, `FrequencyBandNames`, `AnalysisVariants`, `PreprocessedDataVariants`, `CoordinateSystems` from `src/definitions/fields.py`. Frequency bands: delta (1-4 Hz), theta (4-8), alpha (8-13), beta (13-30), gamma (30-70).
 - **ProjectPaths**: All paths via `src/definitions/constants.py`, never hardcoded.
 - **Analysis results as DataFrames**: Analysis functions return pandas DataFrames with metadata columns (participant, condition, music_type, band, channel).
 - **Default to Placebo condition** in all analyses, notebooks, and scripts unless explicitly told otherwise.
 
 ### Notebooks (`notebooks/`)
 
-Numbered subdirectories: `NN-<kebab-case-name>/` (e.g., `00-preprocessing/`, `01-raw-mean-variance-analysis/`, `02-isc-broadband-analysis/`). Each notebook follows a 6-cell template: setup (imports + path resolver) → title → config → data loading → dataset selection → one cell per analysis step. All imports in the first cell with `# noqa: E402` after the `sys.path.insert` block.
+Numbered subdirectories: `NN-<kebab-case-name>/` (e.g., `00-preprocessing/`, `01-raw-mean-variance-analysis/`, `02-isc-broadband-analysis/`, `03-wavelet-analysis/`). Each notebook follows a 6-cell template: setup (imports + path resolver) → title → config → data loading → dataset selection → one cell per analysis step. All imports in the first cell with `# noqa: E402` after the `sys.path.insert` block.
+
+### Plot Output Structure
+
+CLI scripts write plots to `plots/` following this canonical layout (used by the Results Browser):
+
+```
+plots/
+└── {NN}-{analysis-name}/
+    └── {Condition}_{MusicType}/       # e.g. Placebo_CLASSIC
+        ├── broadband/
+        │   └── {analysis_type}/      # e.g. loo_isc, pairwise_isc, sliding_window
+        │       └── *.png
+        └── bands/
+            └── {analysis_type}/
+                └── {band}_*.png      # band name is the first token of the filename
+```
+
+Notebooks save to `notebooks/{NN}-{name}/plots/{broadband|bands}/{analysis_type}/`. Never place files directly in `broadband/` or `bands/` — always use an `{analysis_type}/` subdirectory.
 
 ### Visualization Catalog (`viz_catalog/`)
 

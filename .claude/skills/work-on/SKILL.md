@@ -1,8 +1,8 @@
 ---
 name: work-on
 description: Fetch a GitHub issue, recommend model tier, create branch, and implement
-user_invocable: true
-args: issue_number
+user-invocable: true
+argument-hint: "[issue-number]"
 ---
 
 Work on GitHub issue #{{ issue_number }}. Follow these steps:
