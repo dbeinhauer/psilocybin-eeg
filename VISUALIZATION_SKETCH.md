@@ -683,6 +683,37 @@ Phase 3 (if needed): Plotly/Bokeh for time-course and heatmap interactivity
                      → does not replace Seaborn/Matplotlib production plots
 ```
 
+#### Interactive Explorer (implemented)
+
+The **Interactive Explorer** page in `viz_catalog/` provides Phase-3-level
+interactivity today, without replacing the existing static-image workflow:
+
+```
+Analysis pipeline ──► src.analysis.results_store ──► CSV results database
+                                                           │
+                                                           ▼
+                                              viz_catalog/ Streamlit app
+                                              └── 📊 Interactive Explorer
+                                                  ├── Time-series viewer
+                                                  ├── Windowed stats viewer
+                                                  ├── LOO-ISC distribution
+                                                  └── Pairwise ISC matrix
+```
+
+**How it works:**
+
+1. Analysis scripts call `save_intersubject_timeseries()`,
+   `save_windowed_stats()`, `save_loo_isc()`, `save_pairwise_isc()` from
+   `src.analysis.results_store` to export results as CSV files.
+2. CSV files are stored in a canonical directory layout:
+   `<root>/<Condition>_<MusicType>/<broadband|bands/band>/<analysis>.csv`
+3. The **Interactive Explorer** scans this directory, offers sidebar filters
+   (condition, music type, band, analysis type), and renders each CSV with a
+   dedicated interactive Streamlit visualisation (line charts, area charts,
+   bar charts, styled heatmap DataFrames, histograms, summary metrics).
+4. Users can zoom, hover, adjust downsampling, and inspect raw data tables —
+   all in the browser, no Jupyter or Python needed.
+
 #### GitHub Pages — Is It a Good Fit?
 
 **Yes**, with caveats:

@@ -62,6 +62,11 @@ from src.analysis.mean_variance import (
     compute_pairwise_isc_matrices,
     FREQUENCY_BANDS,
 )
+from src.analysis.results_store import (
+    save_intersubject_timeseries,
+    save_windowed_stats,
+    save_pairwise_isc,
+)
 from src.visualization.mean_variance_plots import (
     plot_timeseries,
     plot_variance_distribution,
@@ -149,6 +154,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--results_db_dir",
+        type=Path,
+        default=None,
+        help=(
+            "Root directory for the CSV results database (Interactive Explorer). "
+            "Defaults to results_db/01-raw-mean-variance-analysis/."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable DEBUG logging.",
@@ -163,6 +177,10 @@ def _run_raw_analysis(
     window_sec: float,
     sync_percentile: float,
     step_sec: float | None = None,
+    *,
+    condition: str = "",
+    music_type: str = "",
+    results_db_dir: Path | None = None,
 ) -> None:
     """Run all raw (broadband) mean-variance sections for one dataset."""
     broadband_timeseries_dir = save_dir / "broadband" / "timeseries"
@@ -221,6 +239,23 @@ def _run_raw_analysis(
         save_path_overlay=broadband_windowed_dir / "windowed_overlay.png",
     )
 
+    # ── Export CSV results for Interactive Explorer ────────────────────────
+    if results_db_dir is not None:
+        db_dir = results_db_dir / "broadband"
+        save_intersubject_timeseries(
+            stats,
+            sfreq,
+            db_dir,
+            condition=condition,
+            music_type=music_type,
+        )
+        save_windowed_stats(
+            df_wins,
+            db_dir,
+            condition=condition,
+            music_type=music_type,
+        )
+
 
 def _run_band_analysis(
     ad: "AnalysisData",  # noqa: F821
@@ -229,6 +264,10 @@ def _run_band_analysis(
     window_sec: float,
     sync_percentile: float,
     step_sec: float | None = None,
+    *,
+    condition: str = "",
+    music_type: str = "",
+    results_db_dir: Path | None = None,
 ) -> None:
     """Run all per-band mean-variance sections for one dataset."""
     bands_timeseries_dir = save_dir / "bands" / "timeseries"
@@ -296,6 +335,44 @@ def _run_band_analysis(
         save_path_per_band_dir=bands_windowed_dir,
     )
 
+    # ── Export CSV results for Interactive Explorer ────────────────────────
+    if results_db_dir is not None:
+        for band, stats in band_stats.items():
+            db_dir = results_db_dir / "bands" / band
+            save_intersubject_timeseries(
+                stats,
+                sfreq,
+                db_dir,
+                condition=condition,
+                music_type=music_type,
+                band=band,
+            )
+            n_band_times = len(stats["mean_t"])
+            df_band_wins = compute_windowed_stats(
+                stats,
+                n_times=n_band_times,
+                sfreq=sfreq,
+                window_sec=window_sec,
+                sync_percentile=sync_percentile,
+                step_sec=step_sec,
+            )
+            save_windowed_stats(
+                df_band_wins,
+                db_dir,
+                condition=condition,
+                music_type=music_type,
+                band=band,
+            )
+        for band, matrix in isc_matrices.items():
+            db_dir = results_db_dir / "bands" / band
+            save_pairwise_isc(
+                matrix,
+                db_dir,
+                condition=condition,
+                music_type=music_type,
+                band=band,
+            )
+
 
 if __name__ == "__main__":
     parser = _build_arg_parser()
@@ -316,6 +393,11 @@ if __name__ == "__main__":
         args.save_dir
         if args.save_dir is not None
         else ProjectPaths.PLOTS_PATH / "01-raw-mean-variance-analysis"
+    )
+    results_db_root = (
+        args.results_db_dir
+        if args.results_db_dir is not None
+        else ProjectPaths.RESULTS_DB_PATH / "01-raw-mean-variance-analysis"
     )
 
     _logger.info(
@@ -346,6 +428,8 @@ if __name__ == "__main__":
 
         save_dir = save_root / dataset_key
 
+        results_db_dir = results_db_root / dataset_key
+
         _run_raw_analysis(
             ad,
             label=label,
@@ -353,6 +437,9 @@ if __name__ == "__main__":
             window_sec=args.window_sec,
             sync_percentile=args.sync_percentile,
             step_sec=args.step_sec,
+            condition=condition.value,
+            music_type=label,
+            results_db_dir=results_db_dir,
         )
 
         _run_band_analysis(
@@ -362,6 +449,9 @@ if __name__ == "__main__":
             window_sec=args.window_sec,
             sync_percentile=args.sync_percentile,
             step_sec=args.step_sec,
+            condition=condition.value,
+            music_type=label,
+            results_db_dir=results_db_dir,
         )
 
     _logger.info("Mean-variance analysis complete.")
