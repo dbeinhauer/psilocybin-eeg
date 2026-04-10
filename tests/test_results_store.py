@@ -20,7 +20,6 @@ from src.analysis.results_store import (
     scan_results_db,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -107,9 +106,7 @@ class TestSaveLoadIntersubjectTimeseries:
         )
 
     def test_time_column_uses_sfreq(self, tmp_path, sample_stats):
-        save_intersubject_timeseries(
-            sample_stats, sfreq=250.0, out_dir=tmp_path
-        )
+        save_intersubject_timeseries(sample_stats, sfreq=250.0, out_dir=tmp_path)
         df = load_intersubject_timeseries(tmp_path / "intersubject_timeseries.csv")
         expected_time = np.arange(sample_stats["mean_t"].shape[0]) / 250.0
         np.testing.assert_allclose(df["time"].values, expected_time, atol=1e-8)
@@ -186,18 +183,14 @@ class TestSaveLoadLooIsc:
                 row = per_subject[
                     (per_subject["subject"] == s) & (per_subject["channel"] == ch)
                 ]
-                np.testing.assert_allclose(
-                    row["isc"].values[0], loo[s, ch], atol=1e-6
-                )
+                np.testing.assert_allclose(row["isc"].values[0], loo[s, ch], atol=1e-6)
 
     def test_mean_rows(self, tmp_path, sample_loo):
         loo, mean_isc = sample_loo
         save_loo_isc(loo, mean_isc, out_dir=tmp_path)
         df = load_loo_isc(tmp_path / "loo_isc.csv")
         means = df[df["subject"] == -1].sort_values("channel")
-        np.testing.assert_allclose(
-            means["isc"].values, mean_isc, atol=1e-6
-        )
+        np.testing.assert_allclose(means["isc"].values, mean_isc, atol=1e-6)
 
 
 class TestSaveLoadPairwiseIsc:
@@ -216,9 +209,7 @@ class TestSaveLoadPairwiseIsc:
         df = load_pairwise_isc(tmp_path / "pairwise_isc.csv")
         for _, row in df.iterrows():
             i, j = int(row["subject_i"]), int(row["subject_j"])
-            np.testing.assert_allclose(
-                row["isc"], sample_pairwise[i, j], atol=1e-6
-            )
+            np.testing.assert_allclose(row["isc"], sample_pairwise[i, j], atol=1e-6)
 
 
 # ---------------------------------------------------------------------------

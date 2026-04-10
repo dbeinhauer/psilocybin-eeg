@@ -12,9 +12,7 @@ import streamlit as st
 # ---------------------------------------------------------------------------
 # Page config
 # ---------------------------------------------------------------------------
-st.set_page_config(
-    page_title="Interactive Explorer", page_icon="📊", layout="wide"
-)
+st.set_page_config(page_title="Interactive Explorer", page_icon="📊", layout="wide")
 
 st.title("📊 Interactive Explorer")
 st.markdown(
@@ -233,9 +231,7 @@ def viz_windowed_stats(rec: dict[str, str]) -> None:
 
     with col2:
         st.markdown("**Variance of signal per window**")
-        chart_df = df[["center", "var_signal"]].rename(
-            columns={"center": "time (s)"}
-        )
+        chart_df = df[["center", "var_signal"]].rename(columns={"center": "time (s)"})
         st.bar_chart(chart_df.set_index("time (s)"), use_container_width=True)
 
     # Synchrony candidate summary
