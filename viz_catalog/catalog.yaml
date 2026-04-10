@@ -176,7 +176,7 @@ analyses:
         title: "LOO-ISC Pearson vs Spearman (histogram + violin)"
         notebook: "notebooks/02-isc-broadband-analysis/isc_broadband.ipynb"
         section: "Section 1 — LOO-ISC Distribution (Pearson vs. Spearman)"
-        filename_pattern: "loo_isc_distribution*.png"
+        filename_pattern: "loo_isc_*.png"
         data_shape:
           input: "(n_subjects, n_channels, n_times)"
           output: "(n_subjects, n_channels) — per-subject per-channel LOO-ISC, Pearson + Spearman"
@@ -298,7 +298,7 @@ analyses:
         title: "Per-band LOO-ISC Pearson vs Spearman (histogram + violin)"
         notebook: "notebooks/02-isc-broadband-analysis/isc_bands.ipynb"
         section: "Section 1 — Per-Band LOO-ISC Distribution (Pearson vs. Spearman)"
-        filename_pattern: "*_loo_isc_distribution_*.png"
+        filename_pattern: "*_loo_isc_*.png"
         data_shape:
           input: "(n_subjects, n_channels, n_times) — per band after bandpass filtering"
           output: "per band: (n_subjects, n_channels) — LOO-ISC, Pearson + Spearman"
