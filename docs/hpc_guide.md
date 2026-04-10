@@ -5,16 +5,29 @@ Metacentrum and Umbriel HPC clusters.
 
 ## Directory Structure
 
-All HPC job scripts are under `jobs/`:
+All HPC job scripts are under `jobs/metacentrum/`:
 
 ```
 jobs/
-├── metacentrum/
-│   ├── preprocessing_job_template.pbs   # Basic preprocessing
-│   ├── run_excluded_plot.pbs            # IC exclusion + plotting
-│   └── run_full_preprocessing.pbs       # Full pipeline (ICA + IC + plots)
-└── umbriel/
-    └── run_dataset_preprocessing.pbs    # Umbriel preprocessing
+└── metacentrum/
+    ├── 00-preprocessing/
+    │   ├── preprocessing_job_template.pbs   # Basic preprocessing
+    │   ├── run_excluded_plot.pbs            # IC exclusion + plotting
+    │   ├── run_full_preprocessing.pbs       # Full pipeline (ICA + IC + plots)
+    │   └── run_time_alignment.pbs           # Time alignment
+    ├── 01-raw-mean-variance-analysis/
+    │   └── run_mean_variance.pbs            # Mean-variance synchrony analysis
+    ├── 02-isc-broadband-analysis/
+    │   └── run_isc.pbs                      # ISC analysis
+    ├── 03-wavelet-analysis/
+    │   ├── run_wavelet_phase.pbs            # Wavelet phase analysis
+    │   ├── run_wavelet_power.pbs            # Wavelet power analysis
+    │   └── store_wavelets.pbs              # Wavelet data storage
+    ├── preprocessing_job_template.pbs   # Legacy flat scripts (use NN-* versions above)
+    ├── run_excluded_plot.pbs
+    ├── run_full_preprocessing.pbs
+    ├── run_wavelet_analysis.pbs
+    └── store_wavelet_data.pbs
 ```
 
 ## Metacentrum
@@ -29,23 +42,33 @@ jobs/
 ### Submitting Jobs
 
 ```bash
-# Basic preprocessing
-qsub jobs/metacentrum/preprocessing_job_template.pbs
-
 # Full preprocessing with IC metadata and plots
-qsub jobs/metacentrum/run_full_preprocessing.pbs
+qsub jobs/metacentrum/00-preprocessing/run_full_preprocessing.pbs
 
 # Just IC exclusion metadata + plots
-qsub jobs/metacentrum/run_excluded_plot.pbs
+qsub jobs/metacentrum/00-preprocessing/run_excluded_plot.pbs
+
+# Time alignment
+qsub jobs/metacentrum/00-preprocessing/run_time_alignment.pbs
+
+# Mean-variance synchrony analysis
+qsub jobs/metacentrum/01-raw-mean-variance-analysis/run_mean_variance.pbs
+
+# ISC analysis
+qsub jobs/metacentrum/02-isc-broadband-analysis/run_isc.pbs
+
+# Wavelet analysis
+qsub jobs/metacentrum/03-wavelet-analysis/run_wavelet_power.pbs
+qsub jobs/metacentrum/03-wavelet-analysis/run_wavelet_phase.pbs
 ```
 
 ### Job Resources
 
 | Script | Walltime | CPUs | Memory | Scratch |
 |--------|----------|------|--------|---------|
-| `preprocessing_job_template.pbs` | 14h | 4 | 100 GB | 100 GB |
-| `run_excluded_plot.pbs` | 8h | 4 | 100 GB | 100 GB |
-| `run_full_preprocessing.pbs` | 24h | 4 | 100 GB | 100 GB |
+| `00-preprocessing/preprocessing_job_template.pbs` | 14h | 4 | 100 GB | 100 GB |
+| `00-preprocessing/run_excluded_plot.pbs` | 8h | 4 | 100 GB | 100 GB |
+| `00-preprocessing/run_full_preprocessing.pbs` | 24h | 4 | 100 GB | 100 GB |
 
 ### How the Scripts Work
 
@@ -55,25 +78,6 @@ qsub jobs/metacentrum/run_excluded_plot.pbs
 3. Runs the script inside a Singularity container, binding the project
    directory as `/mnt`
 4. Cleans up scratch on exit
-
-## Umbriel
-
-### Prerequisites
-
-- Access to the Umbriel cluster
-- Singularity-compatible project directory at `/home/dbeinhauer/psilocybin-eeg`
-
-### Submitting Jobs
-
-```bash
-qsub jobs/umbriel/run_dataset_preprocessing.pbs
-```
-
-### Job Resources
-
-| Script | Walltime | Nodes | PPN | Queue |
-|--------|----------|-------|-----|-------|
-| `run_dataset_preprocessing.pbs` | 24h | 1 | 64 | qprodu |
 
 ## Data Transfer
 

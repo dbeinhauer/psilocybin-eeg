@@ -56,6 +56,7 @@ psilocybin-eeg/
 │   │   ├── isc.py                 #     Inter-Subject Correlation computation (Pearson, Spearman, mean-field)
 │   │   ├── mean_variance.py       #     Intersubject mean-variance synchrony analysis
 │   │   ├── data_representations.py #    AnalysisData container & adapters (time-domain, wavelet, etc.)
+│   │   ├── results_store.py       #     CSV export for analysis results (Interactive Explorer)
 │   │   └── summary.py             #     High-level analysis orchestrator (EEGSummarizedAnalyzer)
 │   │
 │   ├── visualization/             #   All plotting code
@@ -85,6 +86,7 @@ psilocybin-eeg/
 │   ├── 00-preprocessing/          #   Preprocessing inspection and time alignment
 │   ├── 01-raw-mean-variance-analysis/  #   Mean-variance synchrony (broadband + per-band)
 │   ├── 02-isc-broadband-analysis/ #   ISC analysis (broadband + per-band)
+│   ├── 03-wavelet-analysis/       #   Wavelet power and phase exploration
 │   └── [legacy notebooks]         #   data_analysis.ipynb, time_alignment.ipynb, etc.
 │
 ├── tests/                         # ── Tests ──────────────────────────
@@ -100,9 +102,12 @@ psilocybin-eeg/
 │       ├── 00-preprocessing/      #   Preprocessing job scripts
 │       ├── 01-raw-mean-variance-analysis/  #   Mean-variance job script
 │       ├── 02-isc-broadband-analysis/      #   ISC job script
+│       ├── 03-wavelet-analysis/   #   Wavelet power/phase job scripts
 │       ├── preprocessing_job_template.pbs  #   Legacy flat scripts
 │       ├── run_excluded_plot.pbs
-│       └── run_full_preprocessing.pbs
+│       ├── run_full_preprocessing.pbs
+│       ├── run_wavelet_analysis.pbs
+│       └── store_wavelet_data.pbs
 │
 └── docs/                          # ── Extended documentation ─────────
     ├── pipeline_overview.md       #   End-to-end description of the workflow
