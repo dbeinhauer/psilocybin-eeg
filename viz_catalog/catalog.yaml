@@ -223,10 +223,11 @@ analyses:
         filename_pattern: "isc_matrices*.png"
         data_shape:
           input: "(n_subjects, n_channels, n_times) — z-scored and bandpass-filtered per band"
-          output: "(n_subjects, n_subjects) — mean Pearson r per band"
+          output: "(n_subjects, n_subjects) — mean pairwise similarity per band"
         operation_order:
-          - "For each subject pair (i, j) and band: compute Pearson r per channel via mean_t(x_i * x_j), which equals Pearson correlation for z-scored (mean=0, std=1) data"
-          - "Average per-channel correlations: mean_ch(r_ch) → scalar ISC(i, j)"
+          - "For each subject pair (i, j) and band: compute the per-channel mean temporal product mean_t(x_i * x_j) on the bandpass-filtered signals"
+          - "This equals Pearson correlation only if each filtered channel is re-normalized after filtering (mean 0, std 1), or equivalently divided by its post-filter std"
+          - "Average per-channel similarity values: mean_ch(s_ch) → scalar ISC(i, j)"
           - "Assemble symmetric N×N matrix per band"
           - "Plot 5 heatmaps in a grid"
         interpretation: >
@@ -240,7 +241,7 @@ analyses:
         title: "Per-band windowed synchrony analysis"
         notebook: "notebooks/01-raw-mean-variance-analysis/mean_variance_bands.ipynb"
         section: "Per-band windowed synchrony analysis"
-        filename_pattern: "band_windowed*.png"
+        filename_pattern: "band_windowed*.png, windowed_per_band/*.png"
         data_shape:
           input: "(n_subjects, n_channels, n_times) — per-band intersubject stats"
           output: "(n_windows,) per band — bar charts, summary, and per-band detailed figures"
