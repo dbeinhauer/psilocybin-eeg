@@ -58,6 +58,25 @@ from src.visualization.isc_plots import (
     plot_band_overlap,
     print_data_overview,
 )
+from src.visualization.wavelet_plots import (
+    compute_itpc,
+    compute_phase_band_loo_iscs,
+    plot_band_itpc_timecourse,
+    plot_band_power_timecourse,
+    plot_cross_frequency_coupling,
+    plot_intersubject_variance,
+    plot_itpc_spectrum,
+    plot_itpc_vs_isc,
+    plot_phase_distribution,
+    plot_power_phase_joint,
+    plot_spectral_profile,
+    plot_tf_isc,
+    plot_tf_itpc_map,
+    plot_tf_map,
+    plot_wavelet_loo_isc_bar,
+    plot_wavelet_loo_isc_distributions,
+    plot_wavelet_topomap_isc,
+)
 
 if TYPE_CHECKING:
     from src.analysis.summary import EEGSummarizedAnalyzer
@@ -679,65 +698,500 @@ def _wavelet_transform(
     return transformed
 
 
-def _run_wavelet_isc(
-    wavelet_ds: dict[str, AnalysisData],
-    save_dir: Path,
+def _wavelet_isc_for_label(
+    wd: AnalysisData,
+    label: str,
     *,
+    loo_save_path: Path,
+    sw_save_path: Path,
     isc_threshold: float,
     window_sec: float,
     step_sec: float,
-) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], dict]:
-    """LOO-ISC and sliding-window ISC on wavelet-transformed data.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Compute & plot LOO-ISC and sliding-window ISC for a single label.
 
-    Unlike :func:`run_isc_workflow`, this function does **not** attempt
+    Unlike :func:`run_isc_workflow`, this helper does **not** attempt
     per-band splitting via :meth:`~AnalysisData.filter_to_band`, which
     would be semantically incorrect on frequency-decomposed data.
 
-    :returns: ``(loo_iscs, mean_loo_iscs, sw_results)`` — raw result dicts
-        keyed by label, suitable for building aggregated band-comparison
-        plots in :func:`run_wavelet_workflow`.
+    :returns: ``(loo_isc, mean_loo_isc, sw_isc, sw_times)``
     """
-    save_dir.mkdir(parents=True, exist_ok=True)
-    _first_wd = next(iter(wavelet_ds.values()))
+    loo_save_path.parent.mkdir(parents=True, exist_ok=True)
+    sw_save_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # ── LOO-ISC ───────────────────────────────────────────────────
-    loo_iscs: dict[str, np.ndarray] = {}
-    mean_loo_iscs: dict[str, np.ndarray] = {}
-    for label, wd in wavelet_ds.items():
-        loo, mean_loo = compute_loo_isc(wd.data)
-        loo_iscs[label] = loo
-        mean_loo_iscs[label] = mean_loo
-        _logger.info(f"[{label}]  loo_isc={loo.shape}  mean_loo_isc={mean_loo.shape}")
-
+    loo, mean_loo = compute_loo_isc(wd.data)
+    _logger.info(f"[{label}]  loo_isc={loo.shape}  mean_loo_isc={mean_loo.shape}")
     plot_loo_isc_distribution(
-        mean_loo_iscs,
-        ylabel=f"Number of {_first_wd.feature_axis_label.lower()}s",
-        save_path=save_dir / "loo_isc_distribution.png",
+        {label: mean_loo},
+        ylabel=f"Number of {wd.feature_axis_label.lower()}s",
+        save_path=loo_save_path,
     )
 
-    # ── Sliding-window ISC ────────────────────────────────────────
-    sw_results: dict = {}
-    for label, wd in wavelet_ds.items():
-        sw_isc, sw_times = compute_sliding_window_isc(
-            wd.data, window_sec=window_sec, step_sec=step_sec, sfreq=wd.sfreq
-        )
-        sw_results[label] = (sw_isc, sw_times)
-        _logger.info(f"[{label}]  sw_isc={sw_isc.shape}  sw_times={sw_times.shape}")
-
+    sw_isc, sw_times = compute_sliding_window_isc(
+        wd.data, window_sec=window_sec, step_sec=step_sec, sfreq=wd.sfreq
+    )
+    _logger.info(f"[{label}]  sw_isc={sw_isc.shape}  sw_times={sw_times.shape}")
     plot_sliding_window_isc(
-        sw_results,
+        {label: (sw_isc, sw_times)},
         isc_threshold=isc_threshold,
-        feature_axis_label=f"{_first_wd.feature_axis_label} index",
-        save_path=save_dir / "sliding_window_isc.png",
+        feature_axis_label=f"{wd.feature_axis_label} index",
+        save_path=sw_save_path,
     )
-    print_significant_intervals(sw_results, isc_threshold=isc_threshold)
+    print_significant_intervals(
+        {label: (sw_isc, sw_times)}, isc_threshold=isc_threshold
+    )
 
-    return loo_iscs, mean_loo_iscs, sw_results
+    return loo, mean_loo, sw_isc, sw_times
 
 
 # ──────────────────────────────────────────────────────────────────────
 # Wavelet workflow
 # ──────────────────────────────────────────────────────────────────────
+
+
+def _broadband_wavelet_4d(
+    ad: AnalysisData,
+    label: str,
+    *,
+    representation: str,
+    freqs: np.ndarray,
+    wavelet_dir: Path | None,
+    reuse_wavelets: bool,
+) -> AnalysisData:
+    """Return a 4D wavelet ``AnalysisData`` for ``ad``.
+
+    Forces ``keep_frequency_dim=True`` and ``reshape_frequency_dim=True`` so
+    callers can index the result as ``(n_subjects, n_channels, n_freqs, n_times)``
+    for the notebook-parity broadband plots.
+    """
+    transformed = _wavelet_transform(
+        {label: ad},
+        freqs,
+        representation,
+        keep_frequency_dim=True,
+        reshape_frequency_dim=True,
+        wavelet_dir=wavelet_dir,
+        reuse_wavelets=reuse_wavelets,
+    )
+    return transformed[label]
+
+
+def _wavelet_4d_to_3d(
+    wd_4d: AnalysisData,
+    *,
+    representation: str,
+    base_feature_names: list[str] | None,
+) -> AnalysisData:
+    """Reduce a 4D wavelet ``AnalysisData`` to 3D for ISC computation.
+
+    Power → arithmetic mean across the frequency axis.
+    Phase → circular mean across the frequency axis.
+    """
+    data_4d = wd_4d.data
+    if data_4d.ndim != 4:
+        raise ValueError(f"Expected 4D wavelet data, got shape {data_4d.shape}")
+    if representation == "power":
+        reduced = data_4d.mean(axis=2)
+    else:
+        reduced = circmean(data_4d, high=np.pi, low=-np.pi, axis=2)
+    return AnalysisData(
+        data=reduced,
+        sfreq=wd_4d.sfreq,
+        representation=wd_4d.representation,
+        label=wd_4d.label,
+        feature_names=base_feature_names,
+        info=wd_4d.info,
+        metadata={**wd_4d.metadata, "keep_frequency_dim": False},
+    )
+
+
+def _try_load_phase_band_iscs(
+    ad: AnalysisData,
+    label: str,
+    *,
+    wavelet_dir: Path | None,
+    bands: dict[str, tuple[float, float]],
+) -> dict[str, np.ndarray]:
+    """Load cached per-band phase wavelets and compute LOO-ISC(cos φ).
+
+    Used by the wavelet-power workflow to render the optional power vs.
+    phase joint plot. Returns ``{}`` (and logs a warning) when no per-band
+    phase cache exists.
+    """
+    if wavelet_dir is None:
+        return {}
+    out: dict[str, np.ndarray] = {}
+    for band, (lo, hi) in bands.items():
+        band_dir = wavelet_dir / f"band_{band}"
+        if not band_dir.exists():
+            _logger.info(
+                f"[{label}] No phase wavelet cache for band {band!r}; "
+                "skipping power_phase_joint contribution for this band."
+            )
+            continue
+        n_freqs_band = max(
+            2,
+            int(round((hi - lo) / _WAVELET_BAND_FREQ_RESOLUTION_HZ)) + 1,
+        )
+        band_freqs = np.linspace(lo, hi, n_freqs_band)
+        try:
+            phase_band = _wavelet_transform(
+                {label: ad},
+                band_freqs,
+                representation="phase",
+                keep_frequency_dim=False,
+                reshape_frequency_dim=False,
+                wavelet_dir=band_dir,
+                reuse_wavelets=True,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            _logger.warning(
+                f"[{label}] Failed to load phase cache for band {band!r}: {exc}"
+            )
+            continue
+        cos_phase = np.cos(phase_band[label].data)
+        _, mean_loo = compute_loo_isc(cos_phase)
+        out[band] = mean_loo
+    return out
+
+
+def _run_wavelet_workflow_for_label(
+    ad: AnalysisData,
+    label: str,
+    *,
+    representation: str,
+    freqs: np.ndarray,
+    save_dir: Path,
+    selected_bands: dict[str, tuple[float, float]],
+    selected_band_thresholds: dict[str, float],
+    include_broadband: bool,
+    wavelet_dir: Path | None,
+    reuse_wavelets: bool,
+    isc_threshold: float,
+    window_sec: float,
+    step_sec: float,
+    info,
+    cross_representation_wavelet_dir: Path | None,
+) -> None:
+    """Process a single ``(condition, music_type)`` label.
+
+    Writes the canonical layout::
+
+        <save_dir>/
+            broadband/<analysis_type>/<filename>_<label>.png
+            bands/<analysis_type>/<band>_<filename>_<label>.png
+    """
+    save_dir.mkdir(parents=True, exist_ok=True)
+    _logger.info(f"=== Processing {label} → {save_dir} (rep={representation}) ===")
+
+    bb_dir = save_dir / "broadband"
+    bands_dir = save_dir / "bands"
+
+    # ── Broadband ────────────────────────────────────────────────
+    bb_sw_for_overlap: tuple[np.ndarray, np.ndarray] | None = None
+    band_mean_iscs_from_bb: dict[str, np.ndarray] = {}
+
+    if include_broadband:
+        wd_4d = _broadband_wavelet_4d(
+            ad,
+            label,
+            representation=representation,
+            freqs=freqs,
+            wavelet_dir=(wavelet_dir / "broadband") if wavelet_dir else None,
+            reuse_wavelets=reuse_wavelets,
+        )
+        bb_4d_data = wd_4d.data  # (n_subj, n_ch, n_freqs, n_times)
+        _logger.info(f"[{label}] broadband 4D shape: {bb_4d_data.shape}")
+
+        # Reduce to 3D for the existing ISC distribution / sliding-window plots.
+        wd_3d = _wavelet_4d_to_3d(
+            wd_4d,
+            representation=representation,
+            base_feature_names=ad.feature_names,
+        )
+
+        loo_3d, mean_loo_3d, sw_isc_3d, sw_times_3d = _wavelet_isc_for_label(
+            wd_3d,
+            label,
+            loo_save_path=(bb_dir / "loo_isc" / f"loo_isc_distribution_{label}.png"),
+            sw_save_path=(
+                bb_dir / "sliding_window" / f"sliding_window_isc_{label}.png"
+            ),
+            isc_threshold=isc_threshold,
+            window_sec=window_sec,
+            step_sec=step_sec,
+        )
+        bb_sw_for_overlap = (sw_isc_3d, sw_times_3d)
+
+        # ── Notebook-parity broadband plots ──
+        if representation == "power":
+            plot_spectral_profile(
+                bb_4d_data,
+                freqs,
+                label=label,
+                bands=selected_bands,
+                save_path=bb_dir / "spectral_profile" / f"spectral_profile_{label}.png",
+            )
+            plot_tf_map(
+                bb_4d_data,
+                freqs,
+                wd_4d.sfreq,
+                label=label,
+                save_path=bb_dir / "tf_map" / f"tf_map_{label}.png",
+            )
+            plot_band_power_timecourse(
+                bb_4d_data,
+                freqs,
+                wd_4d.sfreq,
+                label=label,
+                bands=selected_bands,
+                save_path=(bb_dir / "band_power_tc" / f"band_power_tc_{label}.png"),
+            )
+            plot_intersubject_variance(
+                bb_4d_data,
+                freqs,
+                wd_4d.sfreq,
+                label=label,
+                bands=selected_bands,
+                save_path=(
+                    bb_dir
+                    / "intersubject_variance"
+                    / f"intersubject_variance_{label}.png"
+                ),
+            )
+
+            # Per-band LOO-ISC computed from broadband 4D, used by bar /
+            # distribution / topomap / power-phase-joint plots.
+            for band, (lo, hi) in selected_bands.items():
+                band_mask = (freqs >= lo) & (freqs <= hi)
+                if not band_mask.any():
+                    continue
+                band_power_3d = bb_4d_data[:, :, band_mask, :].mean(axis=2)
+                _, mean_loo_band = compute_loo_isc(band_power_3d)
+                band_mean_iscs_from_bb[band] = mean_loo_band
+                _logger.info(
+                    f"[{label}] {band:6s} broadband-derived "
+                    f"mean LOO-ISC = {mean_loo_band.mean():.4f}"
+                )
+
+            plot_wavelet_loo_isc_bar(
+                band_mean_iscs_from_bb,
+                label=label,
+                save_path=(bb_dir / "wavelet_loo_isc" / f"wavelet_loo_isc_{label}.png"),
+            )
+            plot_wavelet_loo_isc_distributions(
+                band_mean_iscs_from_bb,
+                label=label,
+                save_path=(
+                    bb_dir
+                    / "wavelet_loo_isc"
+                    / f"wavelet_loo_isc_distributions_{label}.png"
+                ),
+            )
+            plot_wavelet_topomap_isc(
+                band_mean_iscs_from_bb,
+                info,
+                label=label,
+                save_path=bb_dir / "topomap_isc" / f"topomap_isc_{label}.png",
+            )
+            plot_tf_isc(
+                bb_4d_data,
+                freqs,
+                label=label,
+                save_path=bb_dir / "tf_isc" / f"tf_isc_{label}.png",
+            )
+            plot_cross_frequency_coupling(
+                bb_4d_data,
+                freqs,
+                label=label,
+                bands=selected_bands,
+                save_path=(
+                    bb_dir / "cross_freq_coupling" / f"cross_freq_coupling_{label}.png"
+                ),
+            )
+
+            # Power vs Phase joint plot — only when phase cache is present.
+            phase_band_iscs = _try_load_phase_band_iscs(
+                ad,
+                label,
+                wavelet_dir=cross_representation_wavelet_dir,
+                bands=selected_bands,
+            )
+            if phase_band_iscs:
+                try:
+                    plot_power_phase_joint(
+                        band_mean_iscs_from_bb,
+                        phase_band_iscs,
+                        label=label,
+                        save_path=(
+                            bb_dir
+                            / "power_phase_joint"
+                            / f"power_phase_isc_{label}.png"
+                        ),
+                    )
+                except ValueError as exc:
+                    _logger.warning(f"[{label}] Skipping power_phase_joint plot: {exc}")
+
+        else:  # representation == "phase"
+            plot_phase_distribution(
+                bb_4d_data,
+                label=label,
+                save_path=(
+                    bb_dir / "phase_distribution" / f"phase_distribution_{label}.png"
+                ),
+            )
+            itpc_full = compute_itpc(bb_4d_data)
+            plot_itpc_spectrum(
+                itpc_full,
+                freqs,
+                label=label,
+                bands=selected_bands,
+                save_path=bb_dir / "itpc_spectrum" / f"itpc_spectrum_{label}.png",
+            )
+            plot_tf_itpc_map(
+                itpc_full,
+                freqs,
+                wd_4d.sfreq,
+                label=label,
+                save_path=bb_dir / "tf_itpc_map" / f"tf_itpc_map_{label}.png",
+            )
+            plot_band_itpc_timecourse(
+                itpc_full,
+                freqs,
+                wd_4d.sfreq,
+                label=label,
+                bands=selected_bands,
+                save_path=bb_dir / "band_itpc_tc" / f"band_itpc_tc_{label}.png",
+            )
+
+            # Phase LOO-ISC per band: cos(circmean(phase)) → compute_loo_isc.
+            band_mean_iscs_from_bb = compute_phase_band_loo_iscs(
+                bb_4d_data, freqs, bands=selected_bands
+            )
+            plot_wavelet_loo_isc_bar(
+                band_mean_iscs_from_bb,
+                label=label,
+                color="darkgreen",
+                save_path=(bb_dir / "phase_loo_isc" / f"phase_loo_isc_{label}.png"),
+            )
+            plot_wavelet_loo_isc_distributions(
+                band_mean_iscs_from_bb,
+                label=label,
+                color="darkgreen",
+                save_path=(
+                    bb_dir
+                    / "phase_loo_isc"
+                    / f"phase_loo_isc_distributions_{label}.png"
+                ),
+            )
+            plot_wavelet_topomap_isc(
+                band_mean_iscs_from_bb,
+                info,
+                label=label,
+                title_prefix="Topographic phase LOO-ISC(cos φ) per band",
+                save_path=(
+                    bb_dir / "topomap_phase_isc" / f"topomap_phase_isc_{label}.png"
+                ),
+            )
+            plot_itpc_vs_isc(
+                itpc_full,
+                band_mean_iscs_from_bb,
+                freqs,
+                label=label,
+                bands=selected_bands,
+                save_path=bb_dir / "itpc_vs_isc" / f"itpc_vs_isc_{label}.png",
+            )
+
+        del wd_4d, wd_3d, bb_4d_data
+
+    # ── Per-band wavelet ISC ─────────────────────────────────────
+    band_loo_iscs: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    band_sw_iscs: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    feature_axis_label: str | None = None
+
+    for band, (l_freq, h_freq) in selected_bands.items():
+        n_freqs_band = max(
+            2,
+            int(round((h_freq - l_freq) / _WAVELET_BAND_FREQ_RESOLUTION_HZ)) + 1,
+        )
+        _logger.info(
+            f"  [{label}] band {band} ({l_freq:.1f}–{h_freq:.1f} Hz, "
+            f"{n_freqs_band} steps)"
+        )
+        band_freqs = np.linspace(l_freq, h_freq, n_freqs_band)
+        band_ds = _wavelet_transform(
+            {label: ad},
+            band_freqs,
+            representation,
+            keep_frequency_dim=False,
+            reshape_frequency_dim=False,
+            wavelet_dir=(wavelet_dir / f"band_{band}") if wavelet_dir else None,
+            reuse_wavelets=reuse_wavelets,
+        )
+        wd = band_ds[label]
+        if feature_axis_label is None:
+            feature_axis_label = wd.feature_axis_label
+
+        loo, mean_loo, sw_isc, sw_times = _wavelet_isc_for_label(
+            wd,
+            label,
+            loo_save_path=(
+                bands_dir / "loo_isc" / f"{band}_loo_isc_distribution_{label}.png"
+            ),
+            sw_save_path=(
+                bands_dir / "sliding_window" / f"{band}_sliding_window_isc_{label}.png"
+            ),
+            isc_threshold=selected_band_thresholds[band],
+            window_sec=window_sec,
+            step_sec=step_sec,
+        )
+        band_loo_iscs[band] = (loo, mean_loo)
+        band_sw_iscs[band] = (sw_isc, sw_times)
+        del band_ds, wd
+
+    if not band_loo_iscs:
+        raise ValueError(
+            f"[{label}] No valid bands were processed; ensure at least one "
+            "band from FREQUENCY_BANDS is selected."
+        )
+
+    # ── Per-label cross-band aggregate plots (live alongside per-band ones) ─
+    feature_axis_label = feature_axis_label or "Channel"
+    plot_band_isc_distributions(
+        {label: band_loo_iscs},
+        bands=selected_bands,
+        feature_axis_label=f"Number of {feature_axis_label.lower()}s",
+        save_path=(bands_dir / "loo_isc" / f"band_isc_distributions_{label}.png"),
+    )
+    plot_band_mean_isc_bar(
+        {label: band_loo_iscs},
+        bands=selected_bands,
+        save_path=bands_dir / "loo_isc" / f"band_isc_mean_bar_{label}.png",
+    )
+    plot_band_sliding_window_isc(
+        {label: band_sw_iscs},
+        bands=selected_bands,
+        isc_threshold=selected_band_thresholds,
+        feature_axis_label=feature_axis_label,
+        save_path=(
+            bands_dir / "sliding_window" / f"band_sliding_window_isc_{label}.png"
+        ),
+    )
+    print_band_significant_intervals(
+        {label: band_sw_iscs},
+        bands=selected_bands,
+        band_thresholds=selected_band_thresholds,
+        default_threshold=isc_threshold,
+    )
+    if bb_sw_for_overlap is not None:
+        plot_band_overlap(
+            {label: band_sw_iscs},
+            bands=selected_bands,
+            band_thresholds=selected_band_thresholds,
+            broadband_sw={label: bb_sw_for_overlap},
+            broadband_threshold=isc_threshold,
+            save_path=(bands_dir / "band_overlap" / f"band_overlap_{label}.png"),
+        )
 
 
 def run_wavelet_workflow(
@@ -756,40 +1210,55 @@ def run_wavelet_workflow(
     isc_threshold: float = 0.035,
     window_sec: float = 5.0,
     step_sec: float = 2.5,
+    cross_representation_wavelet_dir: Path | None = None,
 ) -> None:
-    """Run ISC and mean/variance analyses on wavelet-transformed data.
+    """Run wavelet-domain ISC analyses and notebook-parity plots.
 
-    Runs two stages:
+    Drives one workflow per ``(condition, music_type)`` label in *datasets*,
+    writing all outputs under the canonical layout::
 
-    1. **Broadband** — transform with the full *freqs* range; saves plots
-       under ``<save_dir>/broadband/``.
-    2. **Per-band** — transform each EEG band independently using
-       :data:`FREQUENCY_BANDS` (1 Hz frequency resolution); saves per-band
-       plots under ``<save_dir>/band_<name>/`` and aggregated cross-band
-       comparison plots under ``<save_dir>/band_comparison/``.
+        <save_dir>/<label>/broadband/<analysis_type>/<filename>_<label>.png
+        <save_dir>/<label>/bands/<analysis_type>/<band>_<filename>_<label>.png
 
-    The per-band ISC and mean/variance use Morlet-wavelet-transformed data
-    restricted to each band's own frequency range; bandpass filtering of the
+    The broadband stage reproduces the figures from the exploratory wavelet
+    notebooks (spectral profile, time–frequency map, per-band power time
+    course, intersubject variance, wavelet LOO-ISC bar / distribution /
+    topomap, time–frequency ISC, cross-frequency coupling, and — for the
+    power workflow — an optional power vs. phase joint comparison).
+
+    The per-band stage computes Morlet-wavelet-restricted LOO-ISC and
+    sliding-window ISC for each canonical band; bandpass filtering of
     wavelet data is explicitly avoided as it would be semantically incorrect
     on frequency-decomposed data.
 
-    :param datasets: Time-domain :class:`AnalysisData` objects keyed by label.
-    :param analyzers: Reserved for future extension.  Not used at present.
+    :param datasets: Time-domain :class:`AnalysisData` objects keyed by label
+        (e.g. ``"Placebo_CLASSIC"``).
+    :param analyzers: Loaded :class:`EEGSummarizedAnalyzer` instances keyed
+        by the same label as *datasets*. Used only for the topomap MNE
+        ``Info`` object — pass an empty dict to skip topomaps.
     :param representation: Wavelet representation; ``"power"`` or ``"phase"``.
     :param freqs: Morlet frequencies for the broadband analysis (Hz).
-    :param save_dir: Root directory in which to save plots.
+    :param save_dir: Root output directory. Per-label subdirectories are
+        created automatically.
     :param bands: Optional subset of band names to run in per-band stage.
         Defaults to all keys from :data:`FREQUENCY_BANDS`.
-    :param include_broadband: Whether to run the broadband wavelet stage.
-    :param wavelet_dir: Optional directory for persisted wavelet transforms.
-    :param reuse_wavelets: Reuse stored wavelets from *wavelet_dir* when available.
-    :param keep_frequency_dim: Keep frequency dimension in wavelet outputs.
-    :param reshape_frequency_dim: Reshape kept frequency output into explicit 4D
-        ``(n_items, n_channels, n_freqs, n_samples)`` format.
-    :param isc_threshold: ISC significance threshold.
+    :param include_broadband: Whether to run the broadband stage.
+    :param wavelet_dir: Optional directory holding persisted wavelet caches.
+    :param reuse_wavelets: Reuse cached wavelets from *wavelet_dir* when
+        available.
+    :param keep_frequency_dim: Reserved for backwards compatibility — the
+        broadband stage always uses 4D wavelet tensors internally; per-band
+        ISC always reduces to 3D.
+    :param reshape_frequency_dim: Must be ``False`` — the per-band ISC stage
+        requires 3D arrays.
+    :param isc_threshold: Broadband ISC significance threshold.
     :param window_sec: Sliding-window length in seconds.
     :param step_sec: Sliding-window step size in seconds.
-    :raises ValueError: If *representation* is not ``"power"`` or ``"phase"``.
+    :param cross_representation_wavelet_dir: For the wavelet-power workflow,
+        the directory of cached *phase* wavelets used by the optional power
+        vs. phase joint plot. Skipped silently when missing.
+    :raises ValueError: If *representation* is not ``"power"`` or ``"phase"``,
+        or *reshape_frequency_dim* is ``True``.
     """
     if representation not in ("power", "phase"):
         raise ValueError(
@@ -804,13 +1273,20 @@ def run_wavelet_workflow(
             "Call _wavelet_transform directly if you need a 4-D output."
         )
 
-    save_dir.mkdir(parents=True, exist_ok=True)
-    _logger.info(f"Wavelet {representation} figures will be saved to: {save_dir}")
+    # The keep_frequency_dim flag is preserved for CLI compatibility but is
+    # not honoured here: the broadband stage internally toggles between 4D
+    # (for notebook-parity plots) and 3D (for ISC) as needed, and the
+    # per-band stage always operates on 3D data. Warn loudly if a caller
+    # tries to override this.
+    if keep_frequency_dim:
+        _logger.info(
+            "keep_frequency_dim=True is ignored by run_wavelet_workflow; "
+            "broadband plots use 4D internally and per-band ISC uses 3D."
+        )
 
-    # Shared keyword dicts to avoid repeating the same kwargs everywhere.
-    _isc_kw: dict = dict(
-        isc_threshold=isc_threshold, window_sec=window_sec, step_sec=step_sec
-    )
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+    _logger.info(f"Wavelet {representation} figures root: {save_dir}")
 
     selected_band_names = list(FREQUENCY_BANDS.keys()) if bands is None else list(bands)
     selected_bands = {band: FREQUENCY_BANDS[band] for band in selected_band_names}
@@ -818,114 +1294,27 @@ def run_wavelet_workflow(
         band: BAND_ISC_THRESHOLDS[band] for band in selected_band_names
     }
 
-    # ── Broadband wavelet analysis ────────────────────────────────
-    bb_sw_results: dict[str, tuple[np.ndarray, np.ndarray]] | None = None
-    if include_broadband:
-        _logger.info(f"=== Broadband Wavelet {representation.capitalize()} ===")
-        broadband_ds = _wavelet_transform(
-            datasets,
-            freqs,
-            representation,
-            keep_frequency_dim=keep_frequency_dim,
-            reshape_frequency_dim=reshape_frequency_dim,
-            wavelet_dir=(wavelet_dir / "broadband") if wavelet_dir else None,
+    for label, ad in datasets.items():
+        analyzer = analyzers.get(label) if analyzers else None
+        info = getattr(analyzer, "info", None) if analyzer is not None else None
+        label_save_dir = save_dir / label
+
+        _run_wavelet_workflow_for_label(
+            ad,
+            label,
+            representation=representation,
+            freqs=freqs,
+            save_dir=label_save_dir,
+            selected_bands=selected_bands,
+            selected_band_thresholds=selected_band_thresholds,
+            include_broadband=include_broadband,
+            wavelet_dir=wavelet_dir,
             reuse_wavelets=reuse_wavelets,
-        )
-        for label, wd in broadband_ds.items():
-            _logger.info(f"  [{label}] {wd}")
-
-        _, _, bb_sw_results = _run_wavelet_isc(
-            broadband_ds, save_dir / "broadband" / "isc", **_isc_kw
-        )
-        del broadband_ds
-
-    # ── Per-band wavelet analysis ─────────────────────────────────
-    _logger.info(f"=== Per-Band Wavelet {representation.capitalize()} ===")
-
-    # Accumulators for cross-band comparison plots.
-    band_loo_iscs: dict[str, dict] = {label: {} for label in datasets}
-    band_sw_iscs: dict[str, dict] = {label: {} for label in datasets}
-    feature_axis_label: str | None = None
-
-    for band, (l_freq, h_freq) in selected_bands.items():
-        n_freqs = max(
-            2,
-            int(round((h_freq - l_freq) / _WAVELET_BAND_FREQ_RESOLUTION_HZ)) + 1,
-        )
-        _logger.info(
-            f"  Processing band: {band} ({l_freq:.1f}–{h_freq:.1f} Hz, {n_freqs} steps)"
-        )
-        band_freqs = np.linspace(l_freq, h_freq, n_freqs)
-        band_ds = _wavelet_transform(
-            datasets,
-            band_freqs,
-            representation,
-            keep_frequency_dim=keep_frequency_dim,
-            reshape_frequency_dim=reshape_frequency_dim,
-            wavelet_dir=(wavelet_dir / f"band_{band}") if wavelet_dir else None,
-            reuse_wavelets=reuse_wavelets,
-        )
-        band_dir = save_dir / f"band_{band}"
-        if feature_axis_label is None:
-            feature_axis_label = next(iter(band_ds.values())).feature_axis_label
-
-        loo_iscs, mean_loo_iscs, sw_iscs = _run_wavelet_isc(
-            band_ds, band_dir / "isc", **_isc_kw
-        )
-
-        for label in datasets:
-            band_loo_iscs[label][band] = (loo_iscs[label], mean_loo_iscs[label])
-            band_sw_iscs[label][band] = sw_iscs[label]
-        del band_ds
-
-    # ── Cross-band comparison plots ───────────────────────────────
-    _logger.info(f"=== Band Comparison Wavelet {representation.capitalize()} ===")
-    cmp_dir_name = "band_comparison"
-    if len(selected_bands) != len(FREQUENCY_BANDS):
-        band_tag = "_".join(selected_band_names)
-        if len(band_tag) > 40:
-            band_tag = f"{len(selected_band_names)}_bands"
-        cmp_dir_name = f"band_comparison_{band_tag}"
-    cmp_dir = save_dir / cmp_dir_name
-    cmp_dir.mkdir(parents=True, exist_ok=True)
-    if feature_axis_label is None:
-        raise ValueError(
-            "No valid bands were processed in wavelet per-band analysis. "
-            "Ensure that at least one band from FREQUENCY_BANDS is selected."
-        )
-
-    plot_band_isc_distributions(
-        band_loo_iscs,
-        bands=selected_bands,
-        feature_axis_label=(f"Number of {feature_axis_label.lower()}s"),
-        save_path=cmp_dir / "band_isc_distributions.png",
-    )
-    plot_band_mean_isc_bar(
-        band_loo_iscs,
-        bands=selected_bands,
-        save_path=cmp_dir / "band_isc_mean_bar.png",
-    )
-    plot_band_sliding_window_isc(
-        band_sw_iscs,
-        bands=selected_bands,
-        isc_threshold=selected_band_thresholds,
-        feature_axis_label=feature_axis_label,
-        save_path=cmp_dir / "band_sliding_window_isc.png",
-    )
-    print_band_significant_intervals(
-        band_sw_iscs,
-        bands=selected_bands,
-        band_thresholds=selected_band_thresholds,
-        default_threshold=isc_threshold,
-    )
-    if bb_sw_results is not None:
-        plot_band_overlap(
-            band_sw_iscs,
-            bands=selected_bands,
-            band_thresholds=selected_band_thresholds,
-            broadband_sw=bb_sw_results,
-            broadband_threshold=isc_threshold,
-            save_path=cmp_dir / "band_overlap.png",
+            isc_threshold=isc_threshold,
+            window_sec=window_sec,
+            step_sec=step_sec,
+            info=info,
+            cross_representation_wavelet_dir=cross_representation_wavelet_dir,
         )
 
     _logger.info(f"Wavelet {representation} analysis complete.")

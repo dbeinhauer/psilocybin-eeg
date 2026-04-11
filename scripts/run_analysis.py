@@ -94,6 +94,16 @@ if __name__ == "__main__":
     )
     raw_datasets = analyzers_to_datasets(analyzers) if run_wavelet else None
 
+    # Canonical plot root shared by both power and phase workflows. Each
+    # analysis writes under the same ``03-wavelet-analysis`` tree so the
+    # Results Browser picks them up using the same notebook-based ID.
+    wavelet_plots_root = ProjectPaths.PLOTS_PATH / "03-wavelet-analysis"
+    # Shared wavelet cache directory — power and phase outputs coexist since
+    # the representation is encoded in the cached filename. This lets the
+    # power workflow reuse a pre-computed phase cache for the power-vs-phase
+    # joint plot.
+    wavelet_cache_root = Path(args.wavelet_data_dir)
+
     # ── Wavelet power analysis ────────────────────────────────────
     if run_wavelet_power:
         if raw_datasets is None:
@@ -103,16 +113,17 @@ if __name__ == "__main__":
             analyzers,
             representation="power",
             freqs=wavelet_freqs,
-            save_dir=ProjectPaths.PLOTS_PATH / "WaveletPowerAnalysis",
+            save_dir=wavelet_plots_root,
             bands=args.wavelet_bands,
             include_broadband=not args.skip_wavelet_broadband,
-            wavelet_dir=Path(args.wavelet_data_dir),
+            wavelet_dir=wavelet_cache_root,
             reuse_wavelets=args.reuse_wavelets,
             keep_frequency_dim=args.wavelet_keep_frequency_dim,
             reshape_frequency_dim=args.wavelet_reshape_frequency_dim,
             isc_threshold=args.isc_threshold,
             window_sec=WINDOW_SEC,
             step_sec=STEP_SEC,
+            cross_representation_wavelet_dir=wavelet_cache_root,
         )
 
     # ── Wavelet phase analysis ────────────────────────────────────
@@ -124,10 +135,10 @@ if __name__ == "__main__":
             analyzers,
             representation="phase",
             freqs=wavelet_freqs,
-            save_dir=ProjectPaths.PLOTS_PATH / "WaveletPhaseAnalysis",
+            save_dir=wavelet_plots_root,
             bands=args.wavelet_bands,
             include_broadband=not args.skip_wavelet_broadband,
-            wavelet_dir=Path(args.wavelet_data_dir),
+            wavelet_dir=wavelet_cache_root,
             reuse_wavelets=args.reuse_wavelets,
             keep_frequency_dim=args.wavelet_keep_frequency_dim,
             reshape_frequency_dim=args.wavelet_reshape_frequency_dim,
