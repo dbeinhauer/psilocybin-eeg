@@ -108,7 +108,28 @@ Self-contained Streamlit app — **no imports from `src/`**. Content defined in 
 
 - Main branch: `develop`
 - GitHub notebook links use `develop` branch (see `viz_catalog/` `GITHUB_BASE` constant)
-- Data files are gitignored (`data/`, `results/`, `.venv/`)
+- Data files are gitignored (`data/`, `results/`, `.venv/`, `.worktrees/`)
+
+### Parallel work with git worktrees
+
+Each issue gets an isolated worktree under `.worktrees/issue-N/` so multiple issues can be worked on simultaneously without branch-switching.
+
+**Setup** (handled automatically by `/work-on`):
+```bash
+git worktree add .worktrees/issue-N -b claude/issue-N origin/develop
+cd .worktrees/issue-N
+python -m venv .venv && .venv/bin/pip install -e .
+ln -s ../../data data && ln -s ../../plots plots
+ln -s ../../results results && ln -s ../../results_db results_db
+```
+
+**Starting a session**: open a new terminal, `cd .worktrees/issue-N`, then run `claude`.
+
+**Cleanup** (after PR is merged):
+```bash
+git worktree remove .worktrees/issue-N
+git branch -d claude/issue-N
+```
 
 ## Adding a New Analysis
 
