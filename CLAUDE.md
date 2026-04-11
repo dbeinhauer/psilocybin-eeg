@@ -110,26 +110,61 @@ Self-contained Streamlit app — **no imports from `src/`**. Content defined in 
 - GitHub notebook links use `develop` branch (see `viz_catalog/` `GITHUB_BASE` constant)
 - Data files are gitignored (`data/`, `results/`, `.venv/`, `.worktrees/`)
 
-### Parallel work with git worktrees
+### Automated parallel workflow (Docker + orchestrator)
 
-Each issue gets an isolated worktree under `.worktrees/issue-N/` so multiple issues can be worked on simultaneously without branch-switching.
+Each issue is worked on in an isolated Docker container with its own git
+worktree. The entire workflow — worktree creation, implementation, and PR — is
+fully automated and requires no interaction.
 
-**Setup** (handled automatically by `/work-on`):
+**One-time setup:**
 ```bash
-git worktree add .worktrees/issue-N -b claude/issue-N origin/develop
-cd .worktrees/issue-N
-python -m venv .venv && .venv/bin/pip install -e .
-ln -s ../../data data && ln -s ../../plots plots
-ln -s ../../results results && ln -s ../../results_db results_db
+# Authenticate Claude Code (stores token in named Docker volume)
+docker run --rm -it \
+  -v psilocybin-claude-config:/home/researcher/.claude \
+  psilocybin-eeg-sandbox:latest \
+  claude  # log in, then Ctrl+C
+
+# Authenticate GitHub CLI
+export GH_TOKEN=ghp_your_token_here
 ```
 
-**Starting a session**: open a new terminal, `cd .worktrees/issue-N`, then run `claude`.
+**Run everything automatically:**
+```bash
+# All open issues (auto-discovered):
+./scripts/claude-orchestrator.sh
 
-**Cleanup** (after PR is merged):
+# Specific issues only:
+./scripts/claude-orchestrator.sh --issues 12 17 23
+
+# Dry run (see what would run):
+./scripts/claude-orchestrator.sh --dry-run
+
+# Cap parallelism:
+./scripts/claude-orchestrator.sh --max-parallel 2
+```
+
+**Monitor progress:**
+```bash
+./scripts/claude-status.sh          # summary + log tails
+tail -f logs/issue-12.log           # follow a specific issue
+```
+
+**Stop everything:**
+```bash
+./scripts/claude-stop.sh
+```
+
+**Cleanup after PRs are merged:**
 ```bash
 git worktree remove .worktrees/issue-N
 git branch -d claude/issue-N
 ```
+
+Container isolation:
+- Container filesystem includes only the worktree (`/workspace`) plus the explicitly bind-mounted shared directories below — Claude cannot access the rest of the host
+- `/data`, `/plots`, `/results`, `/results_db` = bind-mounted from repo root
+- Network = DNS + HTTPS only (firewall enforced)
+- `--dangerously-skip-permissions` = no permission prompts inside container
 
 ## Adding a New Analysis
 
