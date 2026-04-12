@@ -155,8 +155,8 @@ export GH_TOKEN=ghp_...
 # All open issues (auto-discovered):
 ./scripts/claude-orchestrator.sh
 
-# Specific issues with cost controls:
-./scripts/claude-orchestrator.sh --issues 12 17 23 --max-turns 30 --timeout 900
+# Specific issues with model and cost controls:
+./scripts/claude-orchestrator.sh --issues 12 17 23 --model sonnet --max-turns 30 --timeout 900
 
 # Dry run (see what would run):
 ./scripts/claude-orchestrator.sh --dry-run
@@ -166,6 +166,7 @@ export GH_TOKEN=ghp_...
 ```
 
 **Flags:**
+- `--model MODEL` — Claude model to use (e.g. `sonnet`, `opus`, `claude-sonnet-4-6`)
 - `--max-turns N` — Max Claude conversation turns per issue (default: 50)
 - `--timeout SECS` — Kill container after this many seconds (default: 1800)
 - `--max-parallel N` — Max concurrent containers (default: 3)

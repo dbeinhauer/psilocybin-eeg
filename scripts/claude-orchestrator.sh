@@ -8,6 +8,7 @@ set -euo pipefail
 ###############################################################################
 ISSUES=()
 LABEL=""
+MODEL=""
 DRY_RUN=false
 MAX_PARALLEL=3
 MAX_TURNS=50
@@ -35,6 +36,7 @@ Usage: $(basename "$0") [OPTIONS]
 Options:
   --issues N [N ...]   Process only these issue numbers
   --label LABEL        Filter issues by GitHub label
+  --model MODEL        Claude model to use (e.g. sonnet, opus, claude-sonnet-4-6)
   --dry-run            Print plan without running anything
   --max-parallel N     Max containers to run in parallel (default: $MAX_PARALLEL)
   --max-turns N        Max Claude conversation turns per issue (default: $MAX_TURNS)
@@ -53,6 +55,7 @@ while [[ $# -gt 0 ]]; do
         ISSUES+=("$1"); shift
       done ;;
     --label)        LABEL="$2";        shift 2 ;;
+    --model)        MODEL="$2";        shift 2 ;;
     --dry-run)      DRY_RUN=true;      shift   ;;
     --max-parallel) MAX_PARALLEL="$2"; shift 2 ;;
     --max-turns)    MAX_TURNS="$2";    shift 2 ;;
@@ -123,7 +126,7 @@ if [[ ${#ISSUES[@]} -eq 0 ]]; then
 fi
 
 info "Issues to process: ${ISSUES[*]}"
-info "Config: max-parallel=$MAX_PARALLEL, max-turns=$MAX_TURNS, timeout=${TIMEOUT}s"
+info "Config: model=${MODEL:-default}, max-parallel=$MAX_PARALLEL, max-turns=$MAX_TURNS, timeout=${TIMEOUT}s"
 
 ###############################################################################
 # Build Docker image
@@ -204,7 +207,7 @@ start_container() {
     -v psilocybin-claude-config:/home/researcher/.claude \
     "${env_flags[@]}" \
     "$IMAGE" \
-    bash -c "sudo /usr/local/bin/init-firewall.sh && pip install -e /workspace --quiet && claude --dangerously-skip-permissions --print --max-turns $MAX_TURNS -p '/work-on $n'" \
+    bash -c "sudo /usr/local/bin/init-firewall.sh && pip install -e /workspace --quiet && claude --dangerously-skip-permissions --print --max-turns $MAX_TURNS ${MODEL:+--model $MODEL} -p '/work-on $n'" \
     >/dev/null 2>&1
 
   # Stream container logs to the log file in background
