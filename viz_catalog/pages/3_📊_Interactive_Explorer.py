@@ -153,7 +153,14 @@ sel_spectrum = st.sidebar.multiselect("Spectrum type", all_spectrum, default=[])
 sel_bands = st.sidebar.multiselect("Frequency band", all_bands, default=[])
 sel_analysis = st.sidebar.multiselect("Analysis type", all_analysis, default=[])
 
-any_filter = sel_analysis_names or sel_conditions or sel_music or sel_spectrum or sel_bands or sel_analysis
+any_filter = (
+    sel_analysis_names
+    or sel_conditions
+    or sel_music
+    or sel_spectrum
+    or sel_bands
+    or sel_analysis
+)
 if not any_filter:
     st.sidebar.markdown(f"**0** / {len(records)} results shown")
     st.info("👆 Select at least one filter in the sidebar to explore results.")
