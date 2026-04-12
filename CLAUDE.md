@@ -143,9 +143,11 @@ docker run --rm -it \
   psilocybin-eeg-sandbox:latest \
   claude  # log in, then Ctrl+C
 
-# Set environment variables
-export ANTHROPIC_API_KEY=sk-ant-...
+# Required: GitHub token for issue discovery and PR creation
 export GH_TOKEN=ghp_...
+
+# Optional: if not set, uses the interactive login from the Docker volume above
+# export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 **Run:**

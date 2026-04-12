@@ -74,8 +74,8 @@ for cmd in docker gh git; do
 done
 
 if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
-  error "ANTHROPIC_API_KEY is not set."
-  exit 1
+  info "ANTHROPIC_API_KEY not set — will use interactive login from Docker volume."
+  info "Run the one-time auth setup if you haven't already (see CLAUDE.md)."
 fi
 
 if [[ -z "${GH_TOKEN:-}" ]]; then
@@ -177,6 +177,18 @@ start_container() {
 
   info "[issue-$n] starting container (max-turns=$MAX_TURNS, timeout=${TIMEOUT}s)..."
 
+  # Build env var flags — only pass ANTHROPIC_API_KEY if set
+  local -a env_flags=(
+    -e GH_TOKEN="$GH_TOKEN"
+    -e CLAUDE_CONFIG_DIR=/home/researcher/.claude
+    -e MPLBACKEND=Agg
+    -e PSILOCYBIN_DATA_DIR=/data
+    -e PSILOCYBIN_RESULTS_DIR=/results
+  )
+  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+    env_flags+=(-e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY")
+  fi
+
   # Capture the container ID, not logs — logs are streamed via `docker logs` later
   docker run \
     --detach \
@@ -190,12 +202,7 @@ start_container() {
     -v "$REPO_ROOT/results":/results:ro \
     -v "$REPO_ROOT/results_db":/results_db:ro \
     -v psilocybin-claude-config:/home/researcher/.claude \
-    -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
-    -e GH_TOKEN="$GH_TOKEN" \
-    -e CLAUDE_CONFIG_DIR=/home/researcher/.claude \
-    -e MPLBACKEND=Agg \
-    -e PSILOCYBIN_DATA_DIR=/data \
-    -e PSILOCYBIN_RESULTS_DIR=/results \
+    "${env_flags[@]}" \
     "$IMAGE" \
     bash -c "sudo /usr/local/bin/init-firewall.sh && pip install -e /workspace --quiet && claude --dangerously-skip-permissions --print --max-turns $MAX_TURNS -p '/work-on $n'" \
     >/dev/null 2>&1
