@@ -192,12 +192,12 @@ start_container() {
     env_flags+=(-e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY")
   fi
 
-  # Capture the container ID, not logs — logs are streamed via `docker logs` later
   docker run \
     --detach \
     --name "$container" \
     --stop-timeout 10 \
     --security-opt label=disable \
+    --userns=keep-id \
     --cap-add=NET_ADMIN \
     --cap-add=NET_RAW \
     -v "$wt":/workspace \
@@ -211,8 +211,8 @@ start_container() {
     bash -c "sudo /usr/local/bin/init-firewall.sh && pip install -e /workspace --quiet && claude --dangerously-skip-permissions --print --max-turns $MAX_TURNS ${MODEL:+--model $MODEL} -p '/work-on $n'" \
     >/dev/null 2>&1
 
-  # Stream container logs to the log file in background
-  docker logs -f "$container" >"$log" 2>&1 &
+  # Stream container logs to both terminal and log file
+  docker logs -f "$container" 2>&1 | tee "$log" &
 }
 
 # Block until the named container exits (or times out) and return its exit code.
