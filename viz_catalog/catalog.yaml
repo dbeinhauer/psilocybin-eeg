@@ -94,6 +94,17 @@ analyses:
       subjects and channels, making the intersubject variance a meaningful synchrony
       measure: variance across subjects at each (channel, time) cell quantifies
       momentary disagreement — low variance indicates high synchrony.
+
+      **Broadband Analysis:** The broadband analysis treats the full preprocessed EEG
+      signal without frequency decomposition. It provides an overview of global
+      inter-subject synchrony across all oscillatory components simultaneously, and
+      serves as a reference baseline against which band-specific results can be compared.
+
+      **Band-Wise Analysis:** The band-wise analysis repeats the same mean-variance
+      pipeline independently for each canonical frequency band (delta 1–4 Hz, theta
+      4–8 Hz, alpha 8–13 Hz, beta 13–30 Hz, gamma 30–70 Hz) after bandpass filtering.
+      This reveals which oscillatory components drive synchrony and allows direct
+      comparison of synchrony strength across frequency ranges.
     notebooks:
       - path: "notebooks/01-raw-mean-variance-analysis/mean_variance_broadband.ipynb"
         label: "Broadband Mean-Variance"
@@ -287,15 +298,24 @@ analyses:
         sketch_type: "grid_timeseries_heatmap"
 
   - id: "02-isc-broadband"
-    title: "Stage 02 — ISC (Broadband)"
+    title: "Stage 02 — ISC (Broadband + Per-Band)"
     description: |
       Inter-Subject Correlation on the broadband (unfiltered) preprocessed EEG.
       Four analysis sections: LOO-ISC, Pairwise ISC, Multi-Scale Sliding-Window
       ISC, and Mean-Field ISC. Both Pearson and Spearman correlations are
       computed and compared in every section.
+
+      **Band-Specific Analysis:** The same four ISC analyses are also run independently
+      for each canonical EEG frequency band (delta 1–4 Hz, theta 4–8 Hz, alpha 8–13 Hz,
+      beta 13–30 Hz, gamma 30–70 Hz) after bandpass filtering. Visualisations are
+      largely identical to the broadband case; the only addition is a consensus synchrony
+      analysis (band overlap) that identifies time windows where all frequency bands
+      simultaneously show significant ISC.
     notebooks:
       - path: "notebooks/02-isc-broadband-analysis/isc_broadband.ipynb"
         label: "ISC Broadband"
+      - path: "notebooks/02-isc-broadband-analysis/isc_bands.ipynb"
+        label: "ISC Per-Band"
     plots:
       - id: "loo_isc_pearson_vs_spearman"
         title: "LOO-ISC Pearson vs Spearman (histogram + violin)"
@@ -309,12 +329,12 @@ analyses:
           - "For each subject s: correlate s with mean(all others) per channel (Pearson)"
           - "Repeat with Spearman rank correlation (optionally subsampled channels)"
           - "Average over subjects → mean_loo_isc (n_channels,)"
-          - "Figure 1: side-by-side histogram of mean LOO-ISC (Pearson vs Spearman)"
-          - "Figure 2: per-subject violin + strip plot comparing both methods"
+          - "Figure 1: two separate histograms (Pearson and Spearman) of mean per-channel LOO-ISC; negative-correlation tail shaded red; mean and median marked with vertical lines"
+          - "Figure 2: violin plot of mean per-channel LOO-ISC across subjects, with individual subject dots overlaid (Pearson vs Spearman side-by-side)"
         interpretation: |
           Distributions shifted right of zero = above-chance synchrony.
           Pearson vs Spearman discrepancy flags outlier-driven correlations.
-        sketch_type: "histogram_overlay"
+        sketch_type: "histogram_violin"
 
       - id: "pairwise_isc_pearson_vs_spearman"
         title: "Pairwise ISC Pearson vs Spearman (heatmaps + bars + distribution)"
@@ -325,15 +345,15 @@ analyses:
           input: "(n_subjects, n_channels, n_times)"
           output: "(n_subjects, n_subjects) — pairwise Pearson r + Spearman ρ matrices"
         operation_order:
-          - "For each pair (i,j): compute Pearson r per channel → nanmean across channels"
+          - "For each subject pair (i, j): compute Pearson r per channel, then average across channels to obtain a single scalar similarity score"
           - "Repeat with Spearman rank correlation"
-          - "Figure 1: side-by-side heatmaps of both pairwise matrices"
-          - "Figure 2: per-subject mean off-diagonal bar chart (Pearson vs Spearman)"
-          - "Figure 3: off-diagonal value distribution histogram"
+          - "Figure 1: side-by-side subject-to-subject correlation matrices (Pearson and Spearman) of mean correlation per channel; the main diagonal is intentionally left blank — it is always 1 and would distort the colour scale"
+          - "Figure 2: bar plots of mean off-diagonal ISC per subject (Pearson vs Spearman side-by-side) — each bar is the mean of all off-diagonal entries in that subject's row"
+          - "Figure 3: overlaid histogram of all off-diagonal matrix entries (pairwise correlations between subjects) for Pearson and Spearman, with mean markers"
         interpretation: |
           Outlier subjects (row/column near 0) = non-responders or poor data.
           Overall mean off-diagonal summarises group synchrony level.
-        sketch_type: "matrix_heatmap"
+        sketch_type: "matrix_heatmap_no_diag"
 
       - id: "multiscale_sliding_window_isc"
         title: "Multi-scale sliding-window ISC (bar + overlay + comparison)"
@@ -342,17 +362,18 @@ analyses:
         filename_pattern: "sw_isc_*.png"
         data_shape:
           input: "(n_subjects, n_channels, n_times)"
-          output: "(n_windows, n_channels) at three scales (fine/medium/large)"
+          output: "(n_windows, n_channels) at three scales (fine/medium/coarse); 50% window overlap"
         operation_order:
-          - "Slide windows at three scales (default 1 s / 5 s / 15 s) across time"
+          - "Slide windows at three scales (fine / medium / coarse) across time with 50% overlap"
           - "Compute LOO-ISC per window → (n_windows, n_channels) at each scale"
-          - "Figure 1: per-window bar chart (medium window, Pearson)"
-          - "Figure 2: 3-scale stair-step overlay with per-channel heatmap"
-          - "Figure 3: Pearson vs Spearman comparison at medium window"
+          - "Figure 1: bar chart of mean Pearson LOO-ISC across channels per medium window, with variance indicators and a grand-mean marker"
+          - "Figure 2: stair-wise line plot with multiple overlaid lines for different window sizes (light blue = fine, dark blue = medium, dashed red = coarse); below it, a heatmap at fine-time-window resolution showing per-channel ISC"
+          - "Figure 3: stepped, overlaid line plot comparing Pearson and Spearman windowed LOO-ISC at medium window resolution; area below zero shaded red"
         interpretation: |
-          Gold-shaded windows = significant synchrony epochs.
           Multi-scale view reveals both transient and sustained synchrony patterns.
-          Heatmap reveals which electrodes drive synchrony (frontal vs occipital).
+          The heatmap reveals which electrodes drive synchrony (frontal vs occipital)
+          at fine temporal resolution. Red-shaded area in Figure 3 highlights
+          windows of desynchrony.
         sketch_type: "timeseries_heatmap"
 
       - id: "mean_field_loo_isc"
@@ -360,13 +381,19 @@ analyses:
         notebook: "notebooks/02-isc-broadband-analysis/isc_broadband.ipynb"
         section: "Section 4 — Mean-Field ISC (Average Across Electrodes First)"
         filename_pattern: "mf_loo_isc_per_subject*.png"
+        description: |
+          **Mean-Field ISC:** Rather than computing ISC per channel and then averaging,
+          the mean-field approach first averages the signal across all electrodes to obtain
+          a single 1-D time series per subject, then computes ISC on that summary signal.
+          This rationale tests whether global, spatially pooled neural activity synchronises
+          across subjects — a complementary view to the channel-by-channel approach.
         data_shape:
           input: "(n_subjects, n_channels, n_times)"
           output: "(n_subjects,) — LOO-ISC on spatial mean, Pearson + Spearman"
         operation_order:
           - "mean(axis=1) → (n_subjects, n_times) spatial mean-field"
           - "LOO-ISC on mean-field signals (Pearson + Spearman)"
-          - "Bar chart per subject, Pearson vs Spearman side-by-side"
+          - "Figure 1: bar plot of mean-field LOO-ISC per subject (Pearson vs Spearman side-by-side); same layout as the per-subject bar chart in Section 2"
         interpretation: |
           Large Pearson vs Spearman discrepancy = outlier time points in signal.
           Subjects below zero = desynchronised from group.
@@ -379,46 +406,35 @@ analyses:
         filename_pattern: "mf_pairwise_isc*.png"
         data_shape:
           input: "(n_subjects, n_channels, n_times)"
-          output: "(n_subjects, n_subjects) — pairwise Pearson r on the mean-field"
+          output: "(n_subjects, n_subjects) — pairwise Pearson r and Spearman ρ on the mean-field"
         operation_order:
           - "mean(axis=1) → (n_subjects, n_times) spatial mean-field"
-          - "Pairwise Pearson r between all subject mean-fields"
-          - "Heatmap of the N×N pairwise matrix"
+          - "Figure 2: side-by-side ISC correlation matrix heatmaps (Pearson and Spearman) of the mean-field pairwise ISC; same layout as the Section 2 pairwise matrices"
         interpretation: |
           Complements LOO view — reveals specific subject pairs with high/low similarity.
           Clusters may indicate sub-groups of neural response profiles.
-        sketch_type: "matrix_heatmap"
+        sketch_type: "matrix_heatmap_no_diag"
 
       - id: "mean_field_vs_channel_avg_isc"
-        title: "Mean-field vs channel-average ISC (time course)"
+        title: "Mean-field vs channel-average ISC (time course comparison)"
         notebook: "notebooks/02-isc-broadband-analysis/isc_broadband.ipynb"
         section: "Section 4 — Mean-Field ISC (Average Across Electrodes First)"
         filename_pattern: "mf_vs_channel_avg_isc*.png"
         data_shape:
           input: "(n_subjects, n_channels, n_times)"
-          output: "(n_windows,) — two ISC time courses (mean-field vs channel-average)"
+          output: "(n_windows,) — two ISC time courses (channel-average vs mean-field)"
         operation_order:
-          - "Mean-field path: mean(channels) → sliding-window ISC on 1-D signal"
-          - "Channel-average path: sliding-window ISC per channel → mean(channels)"
-          - "Overlay both time courses with significance threshold"
+          - "Channel-average path: sliding-window LOO-ISC per channel → mean(channels) → (n_windows,)"
+          - "Mean-field path: mean(channels) → sliding-window LOO-ISC on 1-D signal → (n_windows,)"
+          - "Figure 3: stair-wise overlay plot (same style as Section 3 Figure 2); blue = channel-average ISC, green dashed = mean-field ISC; the mean-field line is colour-coded by threshold (red below zero, green above zero)"
         interpretation: |
           Mean-field ISC captures global synchrony; channel-average ISC retains
           spatially distributed effects. Large divergence highlights
           whether synchrony is spatially uniform or driven by specific regions.
-        sketch_type: "timeseries_multisubject"
+        sketch_type: "timeseries_comparison_overlay"
 
-  - id: "02-isc-bands"
-    title: "Stage 02 — ISC (Per-Band)"
-    description: |
-      ISC repeated for each EEG frequency band after bandpass filtering.
-      Bands: delta (1-4 Hz), theta (4-8 Hz), alpha (8-13 Hz),
-      beta (13-30 Hz), gamma (30-70 Hz).
-      Both Pearson and Spearman correlations are computed and compared
-      per band in each section.
-    notebooks:
-      - path: "notebooks/02-isc-broadband-analysis/isc_bands.ipynb"
-        label: "ISC Per-Band"
-    plots:
+      # ── Per-band ISC analyses (isc_bands.ipynb) ────────────────────────────
+
       - id: "band_loo_isc_pearson_vs_spearman"
         title: "Per-band LOO-ISC Pearson vs Spearman (histogram + violin)"
         notebook: "notebooks/02-isc-broadband-analysis/isc_bands.ipynb"
@@ -430,8 +446,8 @@ analyses:
         operation_order:
           - "Bandpass filter per band"
           - "compute_loo_isc per band (Pearson + Spearman)"
-          - "Per band: side-by-side histogram (Pearson vs Spearman)"
-          - "Per band: per-subject violin + strip plot"
+          - "Per band: two separate histograms (Pearson and Spearman) with red-shaded negative tail and mean/median markers"
+          - "Per band: violin plot of mean per-channel LOO-ISC across subjects with individual subject dots overlaid"
         interpretation: |
           Alpha/theta with higher ISC under psilocybin → supports thalamo-cortical
           entrainment hypothesis. Pearson vs Spearman discrepancy per band
@@ -449,11 +465,11 @@ analyses:
         operation_order:
           - "Bandpass filter per band"
           - "Pairwise ISC per band (Pearson + Spearman)"
-          - "Per band: side-by-side heatmaps, per-subject bar chart, distribution histogram"
+          - "Per band: side-by-side subject-to-subject correlation matrices (diagonal blank), per-subject mean off-diagonal bar charts, overlaid histogram of off-diagonal entries"
         interpretation: |
           Identifies frequency-specific inter-subject relationships.
           Clusters in specific bands may reveal band-selective neural coupling.
-        sketch_type: "matrix_heatmap"
+        sketch_type: "matrix_heatmap_no_diag"
 
       - id: "band_multiscale_sliding_window_isc"
         title: "Per-band multi-scale sliding-window ISC (bar + overlay + comparison)"
@@ -462,11 +478,11 @@ analyses:
         filename_pattern: "*_sw_isc_*.png"
         data_shape:
           input: "(n_subjects, n_channels, n_times) — per band"
-          output: "per band: (n_windows, n_channels) at three scales (fine/medium/large)"
+          output: "per band: (n_windows, n_channels) at three scales (fine/medium/coarse); 50% window overlap"
         operation_order:
           - "Bandpass filter per band"
-          - "Slide windows at three scales (default 1 s / 5 s / 15 s) per band"
-          - "Per band: bar chart (medium window), 3-scale overlay + heatmap, Pearson vs Spearman"
+          - "Slide windows at three scales with 50% overlap per band"
+          - "Per band: bar chart with variance indicators (medium window, Pearson), stair-wise multi-scale overlay + fine-resolution heatmap, Pearson vs Spearman stepped overlay with red-shaded below-zero area"
         interpretation: |
           Temporally stable synchrony = sustained entrainment within that band.
           Episodic bursts = frequency-specific, event-driven responses.

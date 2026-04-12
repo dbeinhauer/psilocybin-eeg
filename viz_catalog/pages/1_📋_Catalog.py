@@ -598,6 +598,156 @@ def sketch_windowed_overlay_panels() -> Figure:
     return fig
 
 
+def sketch_histogram_violin() -> Figure:
+    """Two separate histograms (Pearson/Spearman) with red negative tail + markers, plus violin."""
+    rng = np.random.default_rng(21)
+    pearson = rng.normal(0.18, 0.11, 300)
+    spearman = rng.normal(0.20, 0.10, 300)
+    fig, axes = plt.subplots(1, 3, figsize=(7, 2.5))
+    for ax, data, label, col in [
+        (axes[0], pearson, "Pearson", "steelblue"),
+        (axes[1], spearman, "Spearman", "darkorange"),
+    ]:
+        bins = np.linspace(-0.3, 0.55, 28)
+        counts, _ = np.histogram(data, bins=bins)
+        for i, (left, right, cnt) in enumerate(zip(bins[:-1], bins[1:], counts)):
+            bar_col = "tomato" if left < 0 else col
+            ax.bar(
+                left,
+                cnt,
+                width=(right - left),
+                color=bar_col,
+                edgecolor="white",
+                lw=0.3,
+                align="edge",
+            )
+        ax.axvline(data.mean(), color="black", ls="-", lw=1.0, label="mean")
+        ax.axvline(np.median(data), color="gray", ls="--", lw=0.9, label="median")
+        ax.set_xlabel("LOO-ISC", fontsize=6)
+        ax.set_ylabel("Count", fontsize=6)
+        ax.set_title(label, fontsize=7)
+        ax.legend(fontsize=5)
+        ax.tick_params(labelsize=5)
+    # Violin plot
+    ax = axes[2]
+    subj_means_p = [rng.normal(0.18, 0.08, 40).mean() for _ in range(8)]
+    subj_means_s = [rng.normal(0.20, 0.07, 40).mean() for _ in range(8)]
+    vp = ax.violinplot([subj_means_p, subj_means_s], positions=[1, 2], showmedians=True)
+    for pc, col in zip(vp["bodies"], ["steelblue", "darkorange"]):
+        pc.set_facecolor(col)
+        pc.set_alpha(0.6)
+    ax.scatter([1] * 8, subj_means_p, color="steelblue", s=15, zorder=3)
+    ax.scatter([2] * 8, subj_means_s, color="darkorange", s=15, zorder=3)
+    ax.set_xticks([1, 2])
+    ax.set_xticklabels(["Pearson", "Spearman"], fontsize=6)
+    ax.set_ylabel("Mean per-channel ISC", fontsize=6)
+    ax.set_title("Per-subject violin", fontsize=7)
+    ax.tick_params(labelsize=5)
+    fig.suptitle("LOO-ISC distribution", fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def sketch_matrix_heatmap_no_diag() -> Figure:
+    """Pairwise ISC matrix with blank diagonal, plus bar chart and overlaid histogram."""
+    rng = np.random.default_rng(22)
+    n = 6
+    mat = rng.uniform(-0.1, 0.6, (n, n))
+    mat = (mat + mat.T) / 2
+    np.fill_diagonal(mat, np.nan)
+    fig, axes = plt.subplots(1, 3, figsize=(7.5, 2.5))
+    # Heatmap with blank diagonal
+    ax = axes[0]
+    im = ax.imshow(mat, cmap="RdYlBu_r", vmin=-0.2, vmax=0.6)
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    ax.set_xticks(range(n))
+    ax.set_yticks(range(n))
+    ax.set_xticklabels([f"S{i + 1}" for i in range(n)], fontsize=5)
+    ax.set_yticklabels([f"S{i + 1}" for i in range(n)], fontsize=5)
+    ax.set_title("ISC matrix (diag blank)", fontsize=7)
+    ax.tick_params(labelsize=4)
+    # Bar chart: mean off-diagonal per subject
+    ax = axes[1]
+    x = np.arange(n)
+    w = 0.35
+    pearson_means = [np.nanmean(rng.uniform(0.05, 0.4, n - 1)) for _ in range(n)]
+    spearman_means = [np.nanmean(rng.uniform(0.04, 0.38, n - 1)) for _ in range(n)]
+    ax.bar(x - w / 2, pearson_means, w, label="Pearson", color="steelblue")
+    ax.bar(x + w / 2, spearman_means, w, label="Spearman", color="darkorange")
+    ax.axhline(0, color="gray", lw=0.6)
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"S{i + 1}" for i in range(n)], fontsize=5)
+    ax.set_ylabel("Mean off-diag ISC", fontsize=6)
+    ax.set_title("Per-subject mean ISC", fontsize=7)
+    ax.legend(fontsize=5)
+    ax.tick_params(labelsize=5)
+    # Overlaid histogram of off-diagonal entries
+    ax = axes[2]
+    off_p = rng.normal(0.22, 0.09, 120)
+    off_s = rng.normal(0.24, 0.08, 120)
+    bins = np.linspace(-0.1, 0.55, 25)
+    ax.hist(
+        off_p,
+        bins=bins,
+        alpha=0.6,
+        label="Pearson",
+        color="steelblue",
+        edgecolor="white",
+    )
+    ax.hist(
+        off_s,
+        bins=bins,
+        alpha=0.6,
+        label="Spearman",
+        color="darkorange",
+        edgecolor="white",
+    )
+    ax.axvline(off_p.mean(), color="steelblue", ls="--", lw=1.0)
+    ax.axvline(off_s.mean(), color="darkorange", ls="--", lw=1.0)
+    ax.set_xlabel("Pairwise ISC", fontsize=6)
+    ax.set_ylabel("Count", fontsize=6)
+    ax.set_title("Off-diagonal distribution", fontsize=7)
+    ax.legend(fontsize=5)
+    ax.tick_params(labelsize=5)
+    fig.suptitle("Pairwise ISC (Pearson vs Spearman)", fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def sketch_timeseries_comparison_overlay() -> Figure:
+    """Stair-wise overlay: channel-average ISC (blue) vs mean-field ISC (green/red by threshold)."""
+    rng = np.random.default_rng(23)
+    n_win = 50
+    x = np.arange(n_win)
+    channel_avg = rng.normal(0.18, 0.06, n_win)
+    mean_field = rng.normal(0.14, 0.09, n_win)
+    fig, ax = plt.subplots(figsize=(5.5, 2.8))
+    ax.step(
+        x, channel_avg, where="mid", color="steelblue", lw=1.2, label="channel-avg ISC"
+    )
+    # Mean-field line color-coded: green above zero, red below
+    for i in range(n_win - 1):
+        col = "seagreen" if mean_field[i] >= 0 else "tomato"
+        ax.step(
+            [x[i], x[i + 1]],
+            [mean_field[i], mean_field[i]],
+            where="post",
+            color=col,
+            lw=1.5,
+        )
+    # Legend proxies
+    ax.plot([], [], color="seagreen", ls="-", lw=1.5, label="mean-field ISC (≥0)")
+    ax.plot([], [], color="tomato", ls="-", lw=1.5, label="mean-field ISC (<0)")
+    ax.axhline(0, color="gray", lw=0.7, ls="--")
+    ax.set_xlabel("Window", fontsize=7)
+    ax.set_ylabel("ISC", fontsize=7)
+    ax.set_title("Mean-field vs channel-average ISC", fontsize=8)
+    ax.legend(fontsize=5)
+    ax.tick_params(labelsize=6)
+    fig.tight_layout()
+    return fig
+
+
 SKETCH_FUNCTIONS: dict[str, Callable[[], Figure]] = {
     "timeseries_multichannel": sketch_timeseries_multichannel,
     "psd": sketch_psd,
@@ -621,6 +771,10 @@ SKETCH_FUNCTIONS: dict[str, Callable[[], Figure]] = {
     "timeseries_two_panel": sketch_timeseries_two_panel,
     "windowed_mean_var_bars": sketch_windowed_mean_var_bars,
     "windowed_overlay_panels": sketch_windowed_overlay_panels,
+    # 02-isc specific sketches
+    "histogram_violin": sketch_histogram_violin,
+    "matrix_heatmap_no_diag": sketch_matrix_heatmap_no_diag,
+    "timeseries_comparison_overlay": sketch_timeseries_comparison_overlay,
 }
 
 
