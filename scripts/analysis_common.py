@@ -821,19 +821,25 @@ def _try_load_phase_band_iscs(
     if wavelet_dir is None:
         return {}
     out: dict[str, np.ndarray] = {}
+    safe_label = re.sub(r"[^A-Za-z0-9_-]", "_", label).strip("_")
+    if not safe_label:
+        safe_label = f"dataset_{hashlib.sha256(label.encode()).hexdigest()[:8]}"
     for band, (lo, hi) in bands.items():
         band_dir = wavelet_dir / f"band_{band}"
-        if not band_dir.exists():
-            _logger.info(
-                f"[{label}] No phase wavelet cache for band {band!r}; "
-                "skipping power_phase_joint contribution for this band."
-            )
-            continue
         n_freqs_band = max(
             2,
             int(round((hi - lo) / _WAVELET_BAND_FREQ_RESOLUTION_HZ)) + 1,
         )
         band_freqs = np.linspace(lo, hi, n_freqs_band)
+        freq_sig = f"{band_freqs[0]:.3f}_{band_freqs[-1]:.3f}_{len(band_freqs)}"
+        cache_file = band_dir / f"{safe_label}__wavelet_phase__{freq_sig}__freqdim1.npz"
+        if not cache_file.exists():
+            _logger.info(
+                f"[{label}] No phase wavelet cache for band {band!r} "
+                f"(expected {cache_file.name}); "
+                "skipping power_phase_joint contribution for this band."
+            )
+            continue
         try:
             phase_band = _wavelet_transform(
                 {label: ad},

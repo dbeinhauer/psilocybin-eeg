@@ -550,8 +550,11 @@ def plot_phase_distribution(
         )
     all_phases = phase_4d.ravel()
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    axes[0].hist(
+    fig = plt.figure(figsize=(14, 5))
+    ax_linear = fig.add_subplot(1, 2, 1)
+    ax_polar = fig.add_subplot(1, 2, 2, projection="polar")
+
+    ax_linear.hist(
         all_phases,
         bins=64,
         density=True,
@@ -559,15 +562,14 @@ def plot_phase_distribution(
         edgecolor="white",
         alpha=0.8,
     )
-    axes[0].axhline(
+    ax_linear.axhline(
         1.0 / (2 * np.pi), color="red", linestyle="--", label="Uniform density"
     )
-    axes[0].set_xlabel("Phase (rad)")
-    axes[0].set_ylabel("Density")
-    axes[0].set_title(f"Phase distribution — {label}")
-    axes[0].legend()
+    ax_linear.set_xlabel("Phase (rad)")
+    ax_linear.set_ylabel("Density")
+    ax_linear.set_title(f"Phase distribution — {label}")
+    ax_linear.legend()
 
-    ax_polar = fig.add_subplot(122, projection="polar")
     counts, bin_edges = np.histogram(all_phases, bins=64, range=(-np.pi, np.pi))
     centres = 0.5 * (bin_edges[:-1] + bin_edges[1:])
     widths = np.diff(bin_edges)
@@ -575,7 +577,6 @@ def plot_phase_distribution(
         centres, counts, width=widths, color="steelblue", alpha=0.7, edgecolor="white"
     )
     ax_polar.set_title(f"Polar phase histogram — {label}", pad=15)
-    axes[1].set_visible(False)
 
     fig.tight_layout()
     _save_fig(fig, save_path)
