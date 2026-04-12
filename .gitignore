@@ -4,12 +4,17 @@ data/interim
 data/excluded_participants
 config/participant_mappings/
 plots/
+results/
+results_db/
+notebooks/03-wavelet-analysis/wavelet_cache/
 src/psilocybin_eeg.egg-info/
 notebooks/preprocessing_jan.ipynb
-
 
 logs/
 *__pycache__*
 *.ipynb_checkpoints*
 .vscode/
 .python-version
+.venv/
+.venv-viz/
+.worktrees/

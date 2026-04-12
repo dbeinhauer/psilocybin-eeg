@@ -5,6 +5,8 @@ An interactive Streamlit multi-page app that serves as:
 1. **Analysis Catalog** — reference guide listing every analysis type with data shapes,
    order of operations, interpretation notes, notebook links, and matplotlib sketches.
 2. **Results Browser** — local file browser for actual computed plot images.
+3. **Interactive Explorer** — interactive visualisation of precomputed CSV analysis
+   results (time-series, ISC distributions, windowed statistics) directly in Streamlit.
 
 ---
 
@@ -18,7 +20,7 @@ Run the app in an **isolated, temporary environment** — no manual install need
 ```bash
 # From the repository root:
 uv run --with "streamlit>=1.32.0" --with "pyyaml>=6.0" --with "numpy>=1.24.0" --with "matplotlib>=3.7.0" \
-    streamlit run docs/viz_catalog/app.py
+    streamlit run viz_catalog/app.py
 ```
 
 Or install into a dedicated virtual environment and reuse it:
@@ -30,10 +32,10 @@ source .venv-viz/bin/activate          # macOS / Linux
 # .venv-viz\Scripts\activate            # Windows PowerShell
 
 # Install catalog dependencies
-uv pip install -r docs/viz_catalog/requirements.txt
+uv pip install -r viz_catalog/requirements.txt
 
 # Launch
-streamlit run docs/viz_catalog/app.py
+streamlit run viz_catalog/app.py
 ```
 
 ### Option B — with plain `pip`
@@ -42,8 +44,8 @@ streamlit run docs/viz_catalog/app.py
 # (Optionally create a venv first)
 python -m venv .venv-viz && source .venv-viz/bin/activate
 
-pip install -r docs/viz_catalog/requirements.txt
-streamlit run docs/viz_catalog/app.py
+pip install -r viz_catalog/requirements.txt
+streamlit run viz_catalog/app.py
 ```
 
 The app opens at **`http://localhost:8501`** in your browser.
@@ -151,11 +153,83 @@ Three modes are available via the **Compare mode** radio button in the sidebar:
 
 **By condition / music type** is the recommended mode for comparing Placebo vs Psilocybin or CLASSIC vs PSYTRANCE results for the same analysis.
 
+### 📊 Interactive Explorer
+
+The Interactive Explorer lets you interactively visualise precomputed analysis
+results stored as CSV files in a **results database** directory.  Unlike the
+Results Browser (which shows static `.png` images), the Interactive Explorer
+reads raw numeric data and renders interactive Streamlit charts — line charts,
+area charts, histograms, styled DataFrames — that you can zoom, hover, and
+explore.
+
+#### Results database layout
+
+The explorer expects CSV files in the following directory structure:
+
+```
+<results_db_root>/
+└── <Condition>_<MusicType>/          ← e.g. Placebo_CLASSIC
+    ├── broadband/
+    │   ├── intersubject_timeseries.csv
+    │   ├── windowed_stats.csv
+    │   ├── loo_isc.csv
+    │   └── pairwise_isc.csv
+    └── bands/
+        └── <band>/                   ← e.g. alpha, delta
+            ├── intersubject_timeseries.csv
+            ├── windowed_stats.csv
+            ├── loo_isc.csv
+            └── pairwise_isc.csv
+```
+
+These CSV files are produced by `src.analysis.results_store` save functions
+(called from analysis scripts or notebooks).
+
+#### Generating results
+
+Use the save functions from `src.analysis.results_store`:
+
+```python
+from src.analysis.results_store import (
+    save_intersubject_timeseries,
+    save_windowed_stats,
+    save_loo_isc,
+    save_pairwise_isc,
+)
+```
+
+Each function takes the analysis output (NumPy arrays or DataFrames) and writes
+a metadata-enriched CSV to the specified directory.
+
+#### Sidebar filters
+
+| Filter | Source | Example values |
+|--------|--------|---------------|
+| **Condition** | First token of directory name | `Placebo`, `Psilocybin` |
+| **Music type** | Second token of directory name | `CLASSIC`, `PSYTRANCE` |
+| **Spectrum type** | `broadband` or `bands` | `broadband`, `bands` |
+| **Frequency band** | Band subdirectory name | `broadband`, `delta`, `alpha` |
+| **Analysis type** | CSV filename stem | `intersubject_timeseries`, `windowed_stats`, `loo_isc`, `pairwise_isc` |
+
+#### Visualisation tools
+
+Each CSV type gets a dedicated interactive renderer:
+
+| Analysis type | Visualisation |
+|---------------|---------------|
+| `intersubject_timeseries` | Line chart (mean signal) + area chart (variance) with configurable downsampling |
+| `windowed_stats` | Bar charts (mean variance, signal variance) + synchrony-candidate metric |
+| `loo_isc` | Histogram (ISC distribution) + per-channel bar chart + summary metrics |
+| `pairwise_isc` | Colour-graded matrix + off-diagonal distribution histogram + summary metrics |
+
+All renderers include a collapsible **Raw data table** expander showing the full
+DataFrame for detailed inspection.
+
 ---
 
 ## How to Add a New Analysis or Plot Type
 
-All content is driven by `docs/viz_catalog/catalog.yaml` — no Python changes needed for
+All content is driven by `viz_catalog/catalog.yaml` — no Python changes needed for
 new entries.
 
 ### Add a new analysis group
@@ -187,7 +261,7 @@ analyses:
 
 ### Add a new sketch type
 
-1. Open `docs/viz_catalog/pages/1_📋_Catalog.py`.
+1. Open `viz_catalog/pages/1_📋_Catalog.py`.
 2. Find the `SKETCH_FUNCTIONS` dictionary near the top.
 3. Add a new entry:
 
@@ -209,12 +283,13 @@ SKETCH_FUNCTIONS["my_new_type"] = sketch_my_new_type
 ## Directory Structure
 
 ```
-docs/viz_catalog/
+viz_catalog/
 ├── app.py                       ← Streamlit entry point
 ├── catalog.yaml                 ← Single source of truth for all analyses/plots
-├── requirements.txt             ← Streamlit + pyyaml + matplotlib
+├── requirements.txt             ← Streamlit + pyyaml + matplotlib + pandas
 ├── README.md                    ← This file
 └── pages/
     ├── 1_📋_Catalog.py          ← Analysis catalog view
-    └── 2_🔬_Results_Browser.py  ← Real results browser
+    ├── 2_🔬_Results_Browser.py  ← Real results browser
+    └── 3_📊_Interactive_Explorer.py  ← Interactive CSV results explorer
 ```

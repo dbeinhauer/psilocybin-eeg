@@ -51,6 +51,7 @@ Defines column names for per-recording metadata:
 | `MUSIC_TYPE` | `"music_type"` | CLASSIC or PSYTRANCE |
 | `FILENAME` | `"filename"` | Exact filename of the data file |
 | `EXCLUSION_EXPLANATION` | `"explanation"` | Reason for exclusion (if applicable) |
+| `CONCATENATED_PERSON_INDEX` | `"concatenated_person_index"` | Index on axis 0 of the concatenated NumPy array |
 
 ### ChannelTypes
 
@@ -80,6 +81,28 @@ Defines column names for per-recording metadata:
 | `BAD_MUSIC` | `"bad_music"` | Wrong TAG channel signal |
 | `BAD_POWER_SPECTRUM` | `"bad_power_spectrum"` | Abnormal power spectrum |
 | `MISSING_TRIALS` | `"missing_trials"` | Some trials are missing |
+| `ARTIFACTS` | `"artifacts"` | Too many artifacts in the data (also after preprocessing) |
+
+### FrequencyBandNames
+
+| Member | Value | Range (Hz) |
+|--------|-------|------------|
+| `DELTA` | `"delta"` | 1–4 |
+| `THETA` | `"theta"` | 4–8 |
+| `ALPHA` | `"alpha"` | 8–13 |
+| `BETA` | `"beta"` | 13–30 |
+| `GAMMA` | `"gamma"` | 30–70 |
+
+### AnalysisVariants
+
+Analysis keywords accepted by `scripts/run_analysis.py`:
+
+| Member | Value |
+|--------|-------|
+| `ISC` | `"isc"` |
+| `MEAN_VARIANCE` | `"mean_variance"` |
+| `WAVELET_POWER` | `"wavelet_power"` |
+| `WAVELET_PHASE` | `"wavelet_phase"` |
 
 ### PreprocessedDataVariants
 

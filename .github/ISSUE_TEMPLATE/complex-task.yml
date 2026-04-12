@@ -1,0 +1,66 @@
+name: "Complex task (feature/refactor)"
+description: "New feature, new analysis, or complex refactor — runs on Opus"
+labels: ["claude"]
+body:
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      description: Pick the label — this determines the model (all use Opus).
+      options:
+        - "feature/analysis — New analysis (notebook -> src -> script -> job -> test -> catalog)"
+        - "feature/viz — New visualization or interactive explorer feature"
+        - "feature/pipeline — New preprocessing step or CLI script"
+        - "feature/infra — HPC job template, CI/CD, or tooling"
+        - "refactor/complex — Multi-module restructuring or API redesign"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What needs to be done
+      description: >
+        Describe the feature or change. For new analyses, explain the
+        scientific goal and expected outputs. Claude will follow the full
+        "Adding a New Analysis" workflow from CLAUDE.md.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      placeholder: |
+        - [ ] Tests pass (`pytest tests/ -v`)
+        - [ ] Linting passes (`ruff check .`)
+        - [ ] New module in src/analysis/
+        - [ ] Notebook in notebooks/NN-<name>/
+        - [ ] CLI script in scripts/
+        - [ ] HPC job template in jobs/metacentrum/
+        - [ ] catalog.yaml updated
+        - [ ] Documentation updated
+    validations:
+      required: true
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints or notes
+      description: >
+        Dependencies on other issues, files to avoid, design decisions.
+      placeholder: |
+        - Depends on issue #XX being merged first
+        - Use Placebo condition only
+        - Do not modify src/definitions/fields.py
+
+  - type: dropdown
+    id: condition
+    attributes:
+      label: Default condition
+      options:
+        - Placebo (default)
+        - Psilocybin
+        - Both
+    validations:
+      required: false

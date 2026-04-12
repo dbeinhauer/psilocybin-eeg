@@ -12,6 +12,7 @@ representations (raw channels, ICA activations, wavelet amplitudes, mean respons
 | `data_representations.py` | `AnalysisData` container + adapters to convert raw EEG into wavelet, ICA, or mean-response representations |
 | `isc.py` | Pure ISC computation functions (leave-one-out, pairwise, sliding-window) and the `FREQUENCY_BANDS` constant |
 | `mean_variance.py` | Intersubject mean-variance synchrony analysis (notebook-based implementation) |
+| `results_store.py` | CSV export for analysis results consumed by the Interactive Explorer (`viz_catalog/`) |
 | `summary.py` | `EEGSummarizedAnalyzer` — high-level orchestrator for loading data, running ISC analyses, and persisting results |
 
 ---

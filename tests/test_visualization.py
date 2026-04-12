@@ -21,6 +21,7 @@ from src.visualization.isc_plots import (
     plot_band_pairwise_isc_pearson_vs_spearman,
     plot_band_multiscale_sliding_window_isc,
 )
+from src.visualization.wavelet_plots import compute_itpc, compute_phase_band_loo_iscs
 from src.analysis.isc import FREQUENCY_BANDS
 from src.definitions.constants import ProjectPaths
 from pathlib import Path
@@ -335,3 +336,109 @@ class TestPlotBandMultiscaleSlidingWindowIsc:
             assert (tmp_path / f"sw_isc_overlay_{band}_TEST.png").exists()
             assert (tmp_path / f"sw_isc_pearson_vs_spearman_{band}_TEST.png").exists()
         plt.close("all")
+
+
+# ---------------------------------------------------------------------------
+# Tests for wavelet_plots computation helpers
+# ---------------------------------------------------------------------------
+
+_N_SUBJECTS_W = 4
+_N_CHANNELS_W = 5
+_N_FREQS_W = 8
+_N_TIMES_W = 50
+
+
+class TestComputeItpc:
+    """compute_itpc: shape, range and deterministic edge cases."""
+
+    def test_output_shape(self):
+        rng = np.random.default_rng(0)
+        phase = rng.uniform(
+            -np.pi, np.pi, (_N_SUBJECTS_W, _N_CHANNELS_W, _N_FREQS_W, _N_TIMES_W)
+        )
+        itpc = compute_itpc(phase)
+        assert itpc.shape == (_N_CHANNELS_W, _N_FREQS_W, _N_TIMES_W)
+
+    def test_values_in_range(self):
+        rng = np.random.default_rng(1)
+        phase = rng.uniform(
+            -np.pi, np.pi, (_N_SUBJECTS_W, _N_CHANNELS_W, _N_FREQS_W, _N_TIMES_W)
+        )
+        itpc = compute_itpc(phase)
+        assert float(itpc.min()) >= 0.0
+        assert float(itpc.max()) <= 1.0 + 1e-9
+
+    def test_perfect_phase_lock_gives_one(self):
+        # All subjects have exactly the same phase → ITPC should be 1
+        phase = np.full((_N_SUBJECTS_W, _N_CHANNELS_W, _N_FREQS_W, _N_TIMES_W), 0.5)
+        itpc = compute_itpc(phase)
+        np.testing.assert_allclose(itpc, 1.0, atol=1e-10)
+
+    def test_raises_on_wrong_ndim(self):
+        with pytest.raises(ValueError, match="4D"):
+            compute_itpc(np.zeros((3, 4, 5)))
+
+    def test_small_deterministic_example(self):
+        # With 2 subjects and phases 0 and π, the mean unit vector is 0 → ITPC ≈ 0
+        phase = np.array([0.0, np.pi]).reshape(2, 1, 1, 1) * np.ones(
+            (2, _N_CHANNELS_W, _N_FREQS_W, _N_TIMES_W)
+        )
+        itpc = compute_itpc(phase)
+        np.testing.assert_allclose(itpc, 0.0, atol=1e-10)
+
+
+class TestComputePhaseBandLooIscs:
+    """compute_phase_band_loo_iscs: shape, band coverage and edge cases."""
+
+    @pytest.fixture()
+    def fake_phase_4d(self):
+        rng = np.random.default_rng(42)
+        return rng.uniform(
+            -np.pi, np.pi, (_N_SUBJECTS_W, _N_CHANNELS_W, _N_FREQS_W, _N_TIMES_W)
+        ).astype(np.float32)
+
+    @pytest.fixture()
+    def freqs(self):
+        # 8 evenly-spaced freqs spanning 1–30 Hz (covers delta, theta, alpha, beta)
+        return np.linspace(1.0, 30.0, _N_FREQS_W)
+
+    def test_output_bands_present(self, fake_phase_4d, freqs):
+        result = compute_phase_band_loo_iscs(fake_phase_4d, freqs)
+        # At least some bands should be returned
+        assert len(result) > 0
+        for mean_loo in result.values():
+            assert mean_loo.shape == (_N_CHANNELS_W,)
+
+    def test_all_standard_bands_when_freqs_cover_them(self, fake_phase_4d):
+        # Use freqs spanning all standard bands (1–70 Hz)
+        freqs_full = np.linspace(1.0, 70.0, 40)
+        phase_full = np.random.default_rng(7).uniform(
+            -np.pi, np.pi, (_N_SUBJECTS_W, _N_CHANNELS_W, 40, _N_TIMES_W)
+        )
+        result = compute_phase_band_loo_iscs(phase_full, freqs_full)
+        for band in FREQUENCY_BANDS:
+            assert band in result, f"Band {band!r} missing from result"
+            assert result[band].shape == (_N_CHANNELS_W,)
+
+    def test_raises_on_wrong_ndim(self, freqs):
+        with pytest.raises(ValueError, match="4D"):
+            compute_phase_band_loo_iscs(np.zeros((3, 4, 5)), freqs)
+
+    def test_empty_when_no_freqs_in_band(self, fake_phase_4d):
+        # Very narrow frequency range that matches no standard band
+        freqs_narrow = np.array([50.0, 51.0])
+        phase_narrow = np.random.default_rng(9).uniform(
+            -np.pi, np.pi, (_N_SUBJECTS_W, _N_CHANNELS_W, 2, _N_TIMES_W)
+        )
+        result = compute_phase_band_loo_iscs(
+            phase_narrow,
+            freqs_narrow,
+            bands={"delta": (1.0, 4.0)},  # no match for 50–51 Hz
+        )
+        assert result == {}
+
+    def test_custom_band(self, fake_phase_4d, freqs):
+        custom_bands = {"my_band": (1.0, 30.0)}
+        result = compute_phase_band_loo_iscs(fake_phase_4d, freqs, bands=custom_bands)
+        assert "my_band" in result
+        assert result["my_band"].shape == (_N_CHANNELS_W,)

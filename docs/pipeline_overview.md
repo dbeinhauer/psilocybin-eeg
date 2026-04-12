@@ -72,7 +72,9 @@ exclusion categories, and participant IDs.
 | Module | Purpose |
 |--------|---------|
 | `isc.py` | Pure ISC computation functions (LOO, pairwise, sliding window) |
+| `mean_variance.py` | Intersubject mean-variance synchrony analysis |
 | `data_representations.py` | `AnalysisData` container and adapter functions (time-domain, wavelet, ICA activations, mean response) |
+| `results_store.py` | CSV export for analysis results (consumed by the Interactive Explorer) |
 | `summary.py` | High-level `EEGSummarizedAnalyzer` orchestrator for loading data and computing ISC metrics |
 
 ### ISC Methods
@@ -88,6 +90,7 @@ exclusion categories, and participant IDs.
 |--------|---------|
 | `preprocessing_plots.py` | Topomaps, power spectra, signal overlap, cross-correlation plots |
 | `isc_plots.py` | ISC heatmaps, distributions, sliding window plots, band comparisons |
+| `mean_variance_plots.py` | Mean-variance synchrony plots |
 
 ## 8. CLI Entry Points (`scripts/`)
 
@@ -98,11 +101,17 @@ python scripts/run_preprocessing.py --raw_processing --process_excluded_ic --plo
 # Time alignment
 python scripts/run_time_alignment.py --condition Placebo --music_type CLASSIC
 
-# Analysis
-python scripts/run_analysis.py --condition Placebo --music_type CLASSIC
+# ISC analysis (broadband, per-band, mean-field)
+python scripts/run_isc.py --music_type CLASSIC PSYTRANCE
+
+# Mean-variance synchrony analysis
+python scripts/run_mean_variance.py --music_type CLASSIC PSYTRANCE
 ```
+
+`scripts/analysis_common.py` provides shared helpers (`load_analyzers`, `analyzers_to_datasets`)
+used by both `run_isc.py` and `run_mean_variance.py`.
 
 ## 9. HPC Job Submission (`jobs/`)
 
-PBS job scripts for Metacentrum and Umbriel clusters are in `jobs/metacentrum/`
-and `jobs/umbriel/` respectively. See `docs/hpc_guide.md` for details.
+PBS job scripts for the Metacentrum cluster are in `jobs/metacentrum/`.
+See `docs/hpc_guide.md` for details.

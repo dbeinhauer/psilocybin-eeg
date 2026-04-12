@@ -48,12 +48,16 @@ source /opt/myproject/.venv/bin/activate
 WAVELET_DIR="/mnt/data/processed/psilo_music/wavelets"
 
 # --- Pass 1: low-freq bands + broadband ---
+# Use --reuse_wavelets so that a restart of pass 1 (e.g. after a transient
+# failure) picks up any wavelets that were already persisted to $WAVELET_DIR
+# instead of recomputing them from scratch.
 python /mnt/scripts/run_analysis.py \
     --analysis wavelet_phase \
     --condition Placebo \
     --music_type CLASSIC PSYTRANCE \
     --wavelet_bands delta theta alpha \
     --wavelet_data_dir "$WAVELET_DIR" \
+    --reuse_wavelets \
     --n_jobs -1
 
 # --- Pass 2: high-freq bands (reuse broadband) ---
