@@ -114,6 +114,7 @@ analyses:
       # ── Broadband analyses (mean_variance_broadband.ipynb) ──────────────
 
       - id: "zscore_rationale"
+        group: "Broadband Analysis"
         title: "Z-score normalization — rationale (section 0)"
         notebook: "notebooks/01-raw-mean-variance-analysis/mean_variance_broadband.ipynb"
         section: "Data preparation"
@@ -135,6 +136,7 @@ analyses:
         sketch_type: "zscore_transform"
 
       - id: "timeseries_overview"
+        group: "Broadband Analysis"
         title: "Intersubject time-series overview (two-panel)"
         notebook: "notebooks/01-raw-mean-variance-analysis/mean_variance_broadband.ipynb"
         section: "Time-series overview"
@@ -153,6 +155,7 @@ analyses:
         sketch_type: "timeseries_two_panel"
 
       - id: "variance_distribution"
+        group: "Broadband Analysis"
         title: "Intersubject variance distribution"
         notebook: "notebooks/01-raw-mean-variance-analysis/mean_variance_broadband.ipynb"
         section: "Intersubject variance distribution"
@@ -172,6 +175,7 @@ analyses:
         sketch_type: "histogram"
 
       - id: "windowed_bar"
+        group: "Broadband Analysis"
         title: "Windowed synchrony — bar charts"
         notebook: "notebooks/01-raw-mean-variance-analysis/mean_variance_broadband.ipynb"
         section: "Windowed synchrony analysis"
@@ -193,6 +197,7 @@ analyses:
         sketch_type: "windowed_mean_var_bars"
 
       - id: "windowed_overlay"
+        group: "Broadband Analysis"
         title: "Windowed synchrony — overlay with electrode heatmap"
         notebook: "notebooks/01-raw-mean-variance-analysis/mean_variance_broadband.ipynb"
         section: "Windowed synchrony analysis"
@@ -215,6 +220,7 @@ analyses:
       # ── Per-band analyses (mean_variance_bands.ipynb) ───────────────────
 
       - id: "band_timeseries"
+        group: "Band-Wise Analysis"
         title: "Per-band time-series overview"
         notebook: "notebooks/01-raw-mean-variance-analysis/mean_variance_bands.ipynb"
         section: "Per-band time-series overview"
@@ -235,6 +241,7 @@ analyses:
         sketch_type: "timeseries_multiband"
 
       - id: "band_variance_distributions"
+        group: "Band-Wise Analysis"
         title: "Per-band variance distributions"
         notebook: "notebooks/01-raw-mean-variance-analysis/mean_variance_bands.ipynb"
         section: "Per-band intersubject variance distributions"
@@ -255,6 +262,7 @@ analyses:
         sketch_type: "histogram_facet"
 
       - id: "isc_matrices"
+        group: "Band-Wise Analysis"
         title: "Pairwise ISC matrices per band"
         notebook: "notebooks/01-raw-mean-variance-analysis/mean_variance_bands.ipynb"
         section: "Pairwise inter-subject correlation (ISC) matrices"
@@ -276,6 +284,7 @@ analyses:
         sketch_type: "matrix_heatmap"
 
       - id: "band_windowed_analysis"
+        group: "Band-Wise Analysis"
         title: "Per-band windowed synchrony analysis"
         notebook: "notebooks/01-raw-mean-variance-analysis/mean_variance_bands.ipynb"
         section: "Per-band windowed synchrony analysis"
