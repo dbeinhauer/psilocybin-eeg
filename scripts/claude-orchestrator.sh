@@ -168,8 +168,9 @@ create_worktree() {
   git worktree add "$wt" -b "$branch" origin/develop
 }
 
-# Start a container and return immediately (detached).
-start_container() {
+# Run a container in the foreground, streaming output to terminal and log file.
+# Returns the container's exit code.
+run_container() {
   local n="$1"
   local container="psilocybin-issue-$n"
   local wt="$REPO_ROOT/.worktrees/issue-$n"
@@ -192,52 +193,37 @@ start_container() {
     env_flags+=(-e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY")
   fi
 
-  docker run \
-    --detach \
-    --name "$container" \
-    --stop-timeout 10 \
-    --security-opt label=disable \
-    --userns=keep-id \
-    --cap-add=NET_ADMIN \
-    --cap-add=NET_RAW \
-    -v "$wt":/workspace \
-    -v "$REPO_ROOT/data":/data:ro \
-    -v "$REPO_ROOT/plots":/plots:ro \
-    -v "$REPO_ROOT/results":/results:ro \
-    -v "$REPO_ROOT/results_db":/results_db:ro \
-    -v psilocybin-claude-config:/home/researcher/.claude \
-    "${env_flags[@]}" \
-    "$IMAGE" \
-    bash -c "sudo /usr/local/bin/init-firewall.sh && pip install -e /workspace --quiet && claude --dangerously-skip-permissions --print --max-turns $MAX_TURNS ${MODEL:+--model $MODEL} -p '/work-on $n'" \
-    >/dev/null 2>&1
+  # Run in foreground — timeout kills the container if it exceeds the limit.
+  # Output streams to both terminal and log file via tee.
+  local code=0
+  timeout "$TIMEOUT" \
+    docker run \
+      --rm \
+      --name "$container" \
+      --security-opt label=disable \
+      --userns=keep-id \
+      --cap-add=NET_ADMIN \
+      --cap-add=NET_RAW \
+      -v "$wt":/workspace \
+      -v "$REPO_ROOT/data":/data:ro \
+      -v "$REPO_ROOT/plots":/plots:ro \
+      -v "$REPO_ROOT/results":/results:ro \
+      -v "$REPO_ROOT/results_db":/results_db:ro \
+      -v psilocybin-claude-config:/home/researcher/.claude \
+      "${env_flags[@]}" \
+      "$IMAGE" \
+      bash -c "sudo /usr/local/bin/init-firewall.sh && pip install -e /workspace --quiet && claude --dangerously-skip-permissions --print --max-turns $MAX_TURNS ${MODEL:+--model $MODEL} -p '/work-on $n'" \
+    2>&1 | tee "$log" || code=$?
 
-  # Stream container logs to both terminal and log file
-  docker logs -f "$container" 2>&1 | tee "$log" &
-}
-
-# Block until the named container exits (or times out) and return its exit code.
-wait_container() {
-  local n="$1"
-  local container="psilocybin-issue-$n"
-  local log="$LOGS_DIR/issue-$n.log"
-
-  local code
-
-  # Wait with timeout — kill the container if it exceeds the limit
-  if ! code=$(timeout "$TIMEOUT" docker wait "$container" 2>/dev/null); then
-    warn "[issue-$n] timed out after ${TIMEOUT}s — stopping container..."
+  if [[ "$code" -eq 124 ]]; then
+    warn "[issue-$n] timed out after ${TIMEOUT}s"
     docker stop -t 10 "$container" &>/dev/null || true
+    docker rm -f "$container" &>/dev/null || true
     code="timeout"
-    echo "[TIMEOUT] Container killed after ${TIMEOUT}s" >>"$log"
   fi
 
-  # Clean up: kill the background `docker logs` process for this container
-  local log_pid
-  log_pid=$(jobs -p 2>/dev/null | tail -1)
-  kill "$log_pid" 2>/dev/null || true
-
-  docker rm -f "$container" &>/dev/null || true
-  echo "$code"
+  # Write exit code to a results file for the batch runner to pick up
+  echo "$code" > "$LOGS_DIR/.exit-$n"
 }
 
 ###############################################################################
@@ -247,7 +233,7 @@ declare -A STATUSES  # issue_number -> exit code
 
 run_batch() {
   local -a batch=("$@")
-  local -a started=()
+  local -A pids  # issue_number -> background PID
 
   for n in "${batch[@]}"; do
     if $DRY_RUN; then
@@ -255,14 +241,17 @@ run_batch() {
       continue
     fi
     create_worktree "$n"
-    start_container "$n"
-    started+=("$n")
+
+    # Run container in background — output streams to terminal via tee
+    run_container "$n" &
+    pids[$n]=$!
   done
 
-  # Wait for all containers in this batch
-  for n in "${started[@]}"; do
-    code=$(wait_container "$n")
-    STATUSES[$n]=$code
+  # Wait for all background jobs in this batch
+  for n in "${!pids[@]}"; do
+    wait "${pids[$n]}" || true
+    STATUSES[$n]=$(cat "$LOGS_DIR/.exit-$n" 2>/dev/null || echo "1")
+    rm -f "$LOGS_DIR/.exit-$n"
   done
 }
 
