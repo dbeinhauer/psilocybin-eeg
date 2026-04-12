@@ -353,13 +353,17 @@ class TestComputeItpc:
 
     def test_output_shape(self):
         rng = np.random.default_rng(0)
-        phase = rng.uniform(-np.pi, np.pi, (_N_SUBJECTS_W, _N_CHANNELS_W, _N_FREQS_W, _N_TIMES_W))
+        phase = rng.uniform(
+            -np.pi, np.pi, (_N_SUBJECTS_W, _N_CHANNELS_W, _N_FREQS_W, _N_TIMES_W)
+        )
         itpc = compute_itpc(phase)
         assert itpc.shape == (_N_CHANNELS_W, _N_FREQS_W, _N_TIMES_W)
 
     def test_values_in_range(self):
         rng = np.random.default_rng(1)
-        phase = rng.uniform(-np.pi, np.pi, (_N_SUBJECTS_W, _N_CHANNELS_W, _N_FREQS_W, _N_TIMES_W))
+        phase = rng.uniform(
+            -np.pi, np.pi, (_N_SUBJECTS_W, _N_CHANNELS_W, _N_FREQS_W, _N_TIMES_W)
+        )
         itpc = compute_itpc(phase)
         assert float(itpc.min()) >= 0.0
         assert float(itpc.max()) <= 1.0 + 1e-9
@@ -438,4 +442,3 @@ class TestComputePhaseBandLooIscs:
         result = compute_phase_band_loo_iscs(fake_phase_4d, freqs, bands=custom_bands)
         assert "my_band" in result
         assert result["my_band"].shape == (_N_CHANNELS_W,)
-
