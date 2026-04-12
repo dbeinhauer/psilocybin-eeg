@@ -880,33 +880,55 @@ def sketch_timeseries_comparison_overlay() -> Figure:
 
     Mean-field line is dashed green when >= 0, dashed red when < 0.
     Style mirrors Section 3 Figure 3 (Pearson vs Spearman stepped comparison).
+
+    The mean-field staircase is built by drawing each window's horizontal dashed
+    segment explicitly (x[i] → x[i+1]) then a solid thin vertical transition to
+    the next value. This avoids gaps that occur when ax.step() is called in pieces.
     """
     rng = np.random.default_rng(23)
     n_win = 40
-    x = np.arange(n_win)
+    x = np.arange(n_win + 1)  # x[0]…x[n_win]; x[i+1]-x[i] = 1 window width
     channel_avg = rng.normal(0.18, 0.06, n_win)
     mean_field = rng.normal(0.12, 0.10, n_win)
 
     fig, ax = plt.subplots(figsize=(5.5, 2.8))
 
-    # Channel-average ISC: solid blue stair-wise line
+    # Channel-average ISC: single solid blue step call — no gaps
     ax.step(
-        x, channel_avg, where="post", color="steelblue", lw=1.4, label="channel-avg ISC"
+        x[:-1],
+        channel_avg,
+        where="post",
+        color="steelblue",
+        lw=1.4,
+        label="channel-avg ISC",
+    )
+    # Extend final horizontal to x[n_win]
+    ax.plot(
+        [x[-2], x[-1]], [channel_avg[-1], channel_avg[-1]], color="steelblue", lw=1.4
     )
 
-    # Mean-field ISC: dashed, colour-coded — draw contiguous same-colour runs as one step call
-    i = 0
-    while i < n_win:
+    # Mean-field ISC: draw window-by-window so each horizontal segment has the
+    # right colour.  Horizontal bars are dashed; vertical transitions are thin
+    # solid lines in the colour of the outgoing window so the staircase is gapless.
+    for i in range(n_win):
         col = "seagreen" if mean_field[i] >= 0 else "tomato"
-        j = i + 1
-        while j < n_win and (mean_field[j] >= 0) == (mean_field[i] >= 0):
-            j += 1
-        ax.step(x[i:j], mean_field[i:j], where="post", color=col, lw=1.4, ls="--")
-        i = j
+        # Horizontal dashed bar for this window
+        ax.plot(
+            [x[i], x[i + 1]], [mean_field[i], mean_field[i]], color=col, lw=1.5, ls="--"
+        )
+        # Vertical transition to next window (solid, same colour)
+        if i < n_win - 1:
+            ax.plot(
+                [x[i + 1], x[i + 1]],
+                [mean_field[i], mean_field[i + 1]],
+                color=col,
+                lw=1.0,
+                ls="-",
+            )
 
     # Legend proxies
-    ax.plot([], [], color="seagreen", ls="--", lw=1.4, label="mean-field ISC (≥ 0)")
-    ax.plot([], [], color="tomato", ls="--", lw=1.4, label="mean-field ISC (< 0)")
+    ax.plot([], [], color="seagreen", ls="--", lw=1.5, label="mean-field ISC (≥ 0)")
+    ax.plot([], [], color="tomato", ls="--", lw=1.5, label="mean-field ISC (< 0)")
 
     ax.axhline(0, color="gray", lw=0.6)
     ax.set_xlabel("Medium window index", fontsize=7)
