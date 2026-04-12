@@ -822,10 +822,27 @@ if not plots:
     st.info("No plots defined for this analysis yet.")
 else:
     st.subheader("🖼 Plot Cards")
-    # Two columns
-    cols = st.columns(2, gap="large")
-    for idx, plot in enumerate(plots):
-        col = cols[idx % 2]
+
+    current_group: str | None = None
+    col_index = 0  # tracks position within the current 2-column row
+
+    for plot in plots:
+        plot_group = plot.get("group")
+
+        # Render a group header whenever the group label changes
+        if plot_group and plot_group != current_group:
+            st.markdown(f"### {plot_group}")
+            st.divider()
+            current_group = plot_group
+            col_index = 0  # reset column position for the new group
+            cols = st.columns(2, gap="large")
+        elif col_index == 0:
+            # First plot of a groupless section — create initial columns
+            cols = st.columns(2, gap="large")
+
+        col = cols[col_index % 2]
+        col_index += 1
+
         with col:
             with st.container(border=True):
                 st.markdown(f"**{plot['title']}**")
@@ -862,3 +879,7 @@ else:
                 if sketch_type:
                     st.markdown("**Sketch**")
                     render_sketch(sketch_type)
+
+        # When we've just filled the right column, create a fresh pair for the next row
+        if col_index % 2 == 0:
+            cols = st.columns(2, gap="large")

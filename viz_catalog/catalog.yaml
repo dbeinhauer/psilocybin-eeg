@@ -300,17 +300,31 @@ analyses:
   - id: "02-isc-broadband"
     title: "Stage 02 — ISC (Broadband + Per-Band)"
     description: |
-      Inter-Subject Correlation on the broadband (unfiltered) preprocessed EEG.
-      Four analysis sections: LOO-ISC, Pairwise ISC, Multi-Scale Sliding-Window
-      ISC, and Mean-Field ISC. Both Pearson and Spearman correlations are
-      computed and compared in every section.
+      Inter-Subject Correlation (ISC) quantifies how similarly two or more subjects'
+      brain responses track a shared stimulus. Both Pearson and Spearman correlations
+      are computed and compared in every section.
 
-      **Band-Specific Analysis:** The same four ISC analyses are also run independently
-      for each canonical EEG frequency band (delta 1–4 Hz, theta 4–8 Hz, alpha 8–13 Hz,
-      beta 13–30 Hz, gamma 30–70 Hz) after bandpass filtering. Visualisations are
-      largely identical to the broadband case; the only addition is a consensus synchrony
-      analysis (band overlap) that identifies time windows where all frequency bands
-      simultaneously show significant ISC.
+      **Broadband ISC:** Computed on the full preprocessed EEG signal without frequency
+      decomposition. Four analysis sections are run: (1) LOO-ISC distribution —
+      leave-one-out ISC histograms and per-subject violin plots; (2) Pairwise ISC matrix —
+      subject-to-subject correlation matrices with per-subject summaries; (3) Multi-Scale
+      Sliding-Window ISC — time-resolved LOO-ISC at three window scales with 50 % overlap;
+      (4) Mean-Field ISC — see below. Broadband results serve as the reference baseline
+      across the analysis.
+
+      **Per-Band ISC:** The same three channel-level ISC analyses (LOO-ISC, Pairwise ISC,
+      Sliding-Window ISC) are repeated independently for each canonical EEG frequency band
+      (delta 1–4 Hz, theta 4–8 Hz, alpha 8–13 Hz, beta 13–30 Hz, gamma 30–70 Hz) after
+      bandpass filtering. Visualisations are largely identical to the broadband case. The
+      only addition is a consensus synchrony analysis (band overlap) that identifies time
+      windows where all frequency bands simultaneously show significant ISC.
+
+      **Mean-Field ISC:** Rather than computing ISC per channel, the spatial mean across
+      all electrodes is first taken to produce a single 1-D signal per subject, and ISC
+      is then computed on that summary signal. This tests whether globally pooled neural
+      activity synchronises across subjects and provides a complementary view to the
+      channel-by-channel approach. Includes LOO-ISC bar charts, pairwise ISC matrices,
+      and a time-course comparison of mean-field ISC vs channel-average ISC.
     notebooks:
       - path: "notebooks/02-isc-broadband-analysis/isc_broadband.ipynb"
         label: "ISC Broadband"
@@ -318,6 +332,7 @@ analyses:
         label: "ISC Per-Band"
     plots:
       - id: "loo_isc_pearson_vs_spearman"
+        group: "Broadband ISC"
         title: "LOO-ISC Pearson vs Spearman (histogram + violin)"
         notebook: "notebooks/02-isc-broadband-analysis/isc_broadband.ipynb"
         section: "Section 1 — LOO-ISC Distribution (Pearson vs. Spearman)"
@@ -337,6 +352,7 @@ analyses:
         sketch_type: "histogram_violin"
 
       - id: "pairwise_isc_pearson_vs_spearman"
+        group: "Broadband ISC"
         title: "Pairwise ISC Pearson vs Spearman (heatmaps + bars + distribution)"
         notebook: "notebooks/02-isc-broadband-analysis/isc_broadband.ipynb"
         section: "Section 2 — Pairwise ISC Matrix (Pearson vs. Spearman)"
@@ -356,6 +372,7 @@ analyses:
         sketch_type: "matrix_heatmap_no_diag"
 
       - id: "multiscale_sliding_window_isc"
+        group: "Broadband ISC"
         title: "Multi-scale sliding-window ISC (bar + overlay + comparison)"
         notebook: "notebooks/02-isc-broadband-analysis/isc_broadband.ipynb"
         section: "Section 3 — Time-Resolved LOO-ISC (Multi-Scale Windowed Analysis)"
@@ -377,6 +394,7 @@ analyses:
         sketch_type: "timeseries_heatmap"
 
       - id: "mean_field_loo_isc"
+        group: "Mean-Field ISC"
         title: "Mean-field LOO-ISC per subject (bar chart)"
         notebook: "notebooks/02-isc-broadband-analysis/isc_broadband.ipynb"
         section: "Section 4 — Mean-Field ISC (Average Across Electrodes First)"
@@ -400,6 +418,7 @@ analyses:
         sketch_type: "bar_grouped"
 
       - id: "mean_field_pairwise_isc"
+        group: "Mean-Field ISC"
         title: "Mean-field pairwise ISC (heatmap)"
         notebook: "notebooks/02-isc-broadband-analysis/isc_broadband.ipynb"
         section: "Section 4 — Mean-Field ISC (Average Across Electrodes First)"
@@ -416,6 +435,7 @@ analyses:
         sketch_type: "matrix_heatmap_no_diag"
 
       - id: "mean_field_vs_channel_avg_isc"
+        group: "Mean-Field ISC"
         title: "Mean-field vs channel-average ISC (time course comparison)"
         notebook: "notebooks/02-isc-broadband-analysis/isc_broadband.ipynb"
         section: "Section 4 — Mean-Field ISC (Average Across Electrodes First)"
@@ -436,6 +456,7 @@ analyses:
       # ── Per-band ISC analyses (isc_bands.ipynb) ────────────────────────────
 
       - id: "band_loo_isc_pearson_vs_spearman"
+        group: "Per-Band ISC"
         title: "Per-band LOO-ISC Pearson vs Spearman (histogram + violin)"
         notebook: "notebooks/02-isc-broadband-analysis/isc_bands.ipynb"
         section: "Section 1 — Per-Band LOO-ISC Distribution (Pearson vs. Spearman)"
@@ -455,6 +476,7 @@ analyses:
         sketch_type: "histogram_facet"
 
       - id: "band_pairwise_isc_pearson_vs_spearman"
+        group: "Per-Band ISC"
         title: "Per-band pairwise ISC Pearson vs Spearman (heatmaps + bars + distribution)"
         notebook: "notebooks/02-isc-broadband-analysis/isc_bands.ipynb"
         section: "Section 2 — Per-Band Pairwise ISC Matrix (Pearson vs. Spearman)"
@@ -472,6 +494,7 @@ analyses:
         sketch_type: "matrix_heatmap_no_diag"
 
       - id: "band_multiscale_sliding_window_isc"
+        group: "Per-Band ISC"
         title: "Per-band multi-scale sliding-window ISC (bar + overlay + comparison)"
         notebook: "notebooks/02-isc-broadband-analysis/isc_bands.ipynb"
         section: "Section 3 — Per-Band Sliding-Window ISC (Multi-Scale)"
@@ -489,6 +512,7 @@ analyses:
         sketch_type: "grid_timeseries_heatmap"
 
       - id: "band_overlap"
+        group: "Per-Band ISC"
         title: "Band overlap — consensus synchrony"
         notebook: "notebooks/02-isc-broadband-analysis/isc_bands.ipynb"
         section: "Section 4 — Band-Overlap Analysis"
