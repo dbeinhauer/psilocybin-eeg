@@ -301,6 +301,167 @@ def sketch_timeseries_heatmap() -> Figure:
     return fig
 
 
+def sketch_multiscale_sw_isc() -> Figure:
+    """Three-figure composite for multi-scale sliding-window LOO-ISC.
+
+    Figure 1 — bar chart of mean Pearson ISC per medium window, colour-coded:
+      green = above threshold, blue = positive below threshold, red = negative.
+      Error bars show per-window variance; dashed line shows grand mean.
+    Figure 2 — stair-wise multi-scale overlay (light blue = fine, dark blue =
+      medium, dashed red = coarse) above a fine-resolution per-channel heatmap.
+    Figure 3 — stepped Pearson vs Spearman comparison at medium resolution;
+      area below zero shaded red.
+    """
+    rng = np.random.default_rng(24)
+    n_med = 30  # medium-window count
+    n_fine = 90  # fine-window count (3× denser)
+    n_coarse = 10  # coarse-window count
+    n_ch = 40
+
+    # --- synthetic data ---
+    med_isc_p = rng.normal(0.12, 0.09, n_med)
+    med_isc_s = rng.normal(0.10, 0.10, n_med)
+    med_var = np.abs(rng.normal(0.04, 0.02, n_med))
+    grand_mean = med_isc_p.mean()
+    threshold = 0.18
+
+    fine_isc = rng.normal(0.11, 0.08, n_fine)
+    coarse_isc = rng.normal(0.13, 0.07, n_coarse)
+    heatmap = rng.uniform(-0.15, 0.45, (n_ch, n_fine))
+
+    fig = plt.figure(figsize=(6, 8))
+    gs = fig.add_gridspec(4, 1, height_ratios=[1.4, 1.0, 1.5, 1.0], hspace=0.55)
+
+    # ── Figure 1: colour-coded bar chart ─────────────────────────────────────
+    ax1 = fig.add_subplot(gs[0])
+    ax1.set_title("Fig 1 — Mean Pearson LOO-ISC per medium window", fontsize=7, pad=3)
+    x = np.arange(n_med)
+    bar_colors = [
+        "seagreen" if v >= threshold else ("tomato" if v < 0 else "steelblue")
+        for v in med_isc_p
+    ]
+    ax1.bar(x, med_isc_p, color=bar_colors, width=0.8, zorder=2)
+    ax1.errorbar(
+        x,
+        med_isc_p,
+        yerr=med_var,
+        fmt="none",
+        ecolor="black",
+        elinewidth=0.6,
+        capsize=2,
+        zorder=3,
+    )
+    ax1.axhline(
+        grand_mean,
+        color="black",
+        ls="--",
+        lw=0.9,
+        label=f"grand mean ({grand_mean:.2f})",
+    )
+    ax1.axhline(0, color="gray", lw=0.5)
+    ax1.axhline(threshold, color="seagreen", ls=":", lw=0.8, label="threshold")
+    # legend proxies for bar colours
+    from matplotlib.patches import Patch
+
+    ax1.legend(
+        handles=[
+            Patch(facecolor="seagreen", label="above threshold"),
+            Patch(facecolor="steelblue", label="positive"),
+            Patch(facecolor="tomato", label="negative"),
+        ],
+        fontsize=5,
+        loc="upper right",
+        ncol=3,
+    )
+    ax1.set_ylabel("Mean ISC (Pearson)", fontsize=6)
+    ax1.set_xlabel("Medium window index", fontsize=6)
+    ax1.tick_params(labelsize=5)
+
+    # ── Figure 2: multi-scale stair-wise overlay ──────────────────────────────
+    ax2 = fig.add_subplot(gs[1])
+    ax2.set_title(
+        "Fig 2 — Multi-scale overlay + fine-resolution heatmap", fontsize=7, pad=3
+    )
+
+    fine_x = np.linspace(0, n_med, n_fine)
+    med_x = np.linspace(0, n_med, n_med)
+    coarse_x = np.linspace(0, n_med, n_coarse)
+
+    ax2.step(
+        fine_x,
+        fine_isc,
+        where="post",
+        color="lightsteelblue",
+        lw=0.8,
+        label="fine window",
+        alpha=0.9,
+    )
+    ax2.step(
+        med_x, med_isc_p, where="post", color="steelblue", lw=1.3, label="medium window"
+    )
+    ax2.step(
+        coarse_x,
+        coarse_isc,
+        where="post",
+        color="tomato",
+        lw=1.1,
+        ls="--",
+        label="coarse window",
+    )
+    ax2.axhline(0, color="gray", lw=0.5)
+    ax2.set_ylabel("LOO-ISC", fontsize=6)
+    ax2.legend(fontsize=5, loc="upper right")
+    ax2.tick_params(labelsize=5)
+    ax2.set_xticklabels([])
+
+    # ── Figure 2 continued: fine-resolution heatmap ───────────────────────────
+    ax3 = fig.add_subplot(gs[2])
+    im = ax3.imshow(heatmap, aspect="auto", cmap="RdYlBu_r", vmin=-0.2, vmax=0.5)
+    ax3.set_ylabel("Channel", fontsize=6)
+    ax3.set_xlabel("Fine window index", fontsize=6)
+    ax3.tick_params(labelsize=5)
+    plt.colorbar(im, ax=ax3, fraction=0.025, pad=0.02)
+
+    # ── Figure 3: Pearson vs Spearman stepped comparison ─────────────────────
+    ax4 = fig.add_subplot(gs[3])
+    ax4.set_title("Fig 3 — Pearson vs Spearman at medium resolution", fontsize=7, pad=3)
+    ax4.step(med_x, med_isc_p, where="post", color="steelblue", lw=1.2, label="Pearson")
+    ax4.step(
+        med_x,
+        med_isc_s,
+        where="post",
+        color="darkorange",
+        lw=1.2,
+        ls="--",
+        label="Spearman",
+    )
+    # Red-shade the area below zero
+    ax4.fill_between(
+        med_x,
+        np.minimum(med_isc_p, 0),
+        0,
+        step="post",
+        color="tomato",
+        alpha=0.35,
+        label="below zero",
+    )
+    ax4.fill_between(
+        med_x,
+        np.minimum(med_isc_s, 0),
+        0,
+        step="post",
+        color="tomato",
+        alpha=0.20,
+    )
+    ax4.axhline(0, color="gray", lw=0.6)
+    ax4.set_ylabel("LOO-ISC", fontsize=6)
+    ax4.set_xlabel("Medium window index", fontsize=6)
+    ax4.legend(fontsize=5, loc="upper right")
+    ax4.tick_params(labelsize=5)
+
+    return fig
+
+
 def sketch_bar_grouped() -> Figure:
     rng = np.random.default_rng(11)
     fig, ax = plt.subplots(figsize=(5, 2.5))
@@ -598,6 +759,187 @@ def sketch_windowed_overlay_panels() -> Figure:
     return fig
 
 
+def sketch_histogram_violin() -> Figure:
+    """Two separate histograms (Pearson/Spearman) with red negative tail + markers, plus violin."""
+    rng = np.random.default_rng(21)
+    pearson = rng.normal(0.18, 0.11, 300)
+    spearman = rng.normal(0.20, 0.10, 300)
+    fig, axes = plt.subplots(1, 3, figsize=(7, 2.5))
+    for ax, data, label, col in [
+        (axes[0], pearson, "Pearson", "steelblue"),
+        (axes[1], spearman, "Spearman", "darkorange"),
+    ]:
+        bins = np.linspace(-0.3, 0.55, 28)
+        counts, _ = np.histogram(data, bins=bins)
+        for i, (left, right, cnt) in enumerate(zip(bins[:-1], bins[1:], counts)):
+            bar_col = "tomato" if left < 0 else col
+            ax.bar(
+                left,
+                cnt,
+                width=(right - left),
+                color=bar_col,
+                edgecolor="white",
+                lw=0.3,
+                align="edge",
+            )
+        ax.axvline(data.mean(), color="black", ls="-", lw=1.0, label="mean")
+        ax.axvline(np.median(data), color="gray", ls="--", lw=0.9, label="median")
+        ax.set_xlabel("LOO-ISC", fontsize=6)
+        ax.set_ylabel("Count", fontsize=6)
+        ax.set_title(label, fontsize=7)
+        ax.legend(fontsize=5)
+        ax.tick_params(labelsize=5)
+    # Violin plot
+    ax = axes[2]
+    subj_means_p = [rng.normal(0.18, 0.08, 40).mean() for _ in range(8)]
+    subj_means_s = [rng.normal(0.20, 0.07, 40).mean() for _ in range(8)]
+    vp = ax.violinplot([subj_means_p, subj_means_s], positions=[1, 2], showmedians=True)
+    for pc, col in zip(vp["bodies"], ["steelblue", "darkorange"]):
+        pc.set_facecolor(col)
+        pc.set_alpha(0.6)
+    ax.scatter([1] * 8, subj_means_p, color="steelblue", s=15, zorder=3)
+    ax.scatter([2] * 8, subj_means_s, color="darkorange", s=15, zorder=3)
+    ax.set_xticks([1, 2])
+    ax.set_xticklabels(["Pearson", "Spearman"], fontsize=6)
+    ax.set_ylabel("Mean per-channel ISC", fontsize=6)
+    ax.set_title("Per-subject violin", fontsize=7)
+    ax.tick_params(labelsize=5)
+    fig.suptitle("LOO-ISC distribution", fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def sketch_matrix_heatmap_no_diag() -> Figure:
+    """Pairwise ISC matrix with blank diagonal, plus bar chart and overlaid histogram."""
+    rng = np.random.default_rng(22)
+    n = 6
+    mat = rng.uniform(-0.1, 0.6, (n, n))
+    mat = (mat + mat.T) / 2
+    np.fill_diagonal(mat, np.nan)
+    fig, axes = plt.subplots(1, 3, figsize=(7.5, 2.5))
+    # Heatmap with blank diagonal
+    ax = axes[0]
+    im = ax.imshow(mat, cmap="RdYlBu_r", vmin=-0.2, vmax=0.6)
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    ax.set_xticks(range(n))
+    ax.set_yticks(range(n))
+    ax.set_xticklabels([f"S{i + 1}" for i in range(n)], fontsize=5)
+    ax.set_yticklabels([f"S{i + 1}" for i in range(n)], fontsize=5)
+    ax.set_title("ISC matrix (diag blank)", fontsize=7)
+    ax.tick_params(labelsize=4)
+    # Bar chart: mean off-diagonal per subject
+    ax = axes[1]
+    x = np.arange(n)
+    w = 0.35
+    pearson_means = [np.nanmean(rng.uniform(0.05, 0.4, n - 1)) for _ in range(n)]
+    spearman_means = [np.nanmean(rng.uniform(0.04, 0.38, n - 1)) for _ in range(n)]
+    ax.bar(x - w / 2, pearson_means, w, label="Pearson", color="steelblue")
+    ax.bar(x + w / 2, spearman_means, w, label="Spearman", color="darkorange")
+    ax.axhline(0, color="gray", lw=0.6)
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"S{i + 1}" for i in range(n)], fontsize=5)
+    ax.set_ylabel("Mean off-diag ISC", fontsize=6)
+    ax.set_title("Per-subject mean ISC", fontsize=7)
+    ax.legend(fontsize=5)
+    ax.tick_params(labelsize=5)
+    # Overlaid histogram of off-diagonal entries
+    ax = axes[2]
+    off_p = rng.normal(0.22, 0.09, 120)
+    off_s = rng.normal(0.24, 0.08, 120)
+    bins = np.linspace(-0.1, 0.55, 25)
+    ax.hist(
+        off_p,
+        bins=bins,
+        alpha=0.6,
+        label="Pearson",
+        color="steelblue",
+        edgecolor="white",
+    )
+    ax.hist(
+        off_s,
+        bins=bins,
+        alpha=0.6,
+        label="Spearman",
+        color="darkorange",
+        edgecolor="white",
+    )
+    ax.axvline(off_p.mean(), color="steelblue", ls="--", lw=1.0)
+    ax.axvline(off_s.mean(), color="darkorange", ls="--", lw=1.0)
+    ax.set_xlabel("Pairwise ISC", fontsize=6)
+    ax.set_ylabel("Count", fontsize=6)
+    ax.set_title("Off-diagonal distribution", fontsize=7)
+    ax.legend(fontsize=5)
+    ax.tick_params(labelsize=5)
+    fig.suptitle("Pairwise ISC (Pearson vs Spearman)", fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def sketch_timeseries_comparison_overlay() -> Figure:
+    """Stair-wise overlay: channel-average ISC (solid blue) vs mean-field ISC (dashed, colour-coded).
+
+    Mean-field line is dashed green when >= 0, dashed red when < 0.
+    Style mirrors Section 3 Figure 3 (Pearson vs Spearman stepped comparison).
+
+    The mean-field staircase is built by drawing each window's horizontal dashed
+    segment explicitly (x[i] → x[i+1]) then a solid thin vertical transition to
+    the next value. This avoids gaps that occur when ax.step() is called in pieces.
+    """
+    rng = np.random.default_rng(23)
+    n_win = 40
+    x = np.arange(n_win + 1)  # x[0]…x[n_win]; x[i+1]-x[i] = 1 window width
+    channel_avg = rng.normal(0.18, 0.06, n_win)
+    mean_field = rng.normal(0.12, 0.10, n_win)
+
+    fig, ax = plt.subplots(figsize=(5.5, 2.8))
+
+    # Channel-average ISC: single solid blue step call — no gaps
+    ax.step(
+        x[:-1],
+        channel_avg,
+        where="post",
+        color="steelblue",
+        lw=1.4,
+        label="channel-avg ISC",
+    )
+    # Extend final horizontal to x[n_win]
+    ax.plot(
+        [x[-2], x[-1]], [channel_avg[-1], channel_avg[-1]], color="steelblue", lw=1.4
+    )
+
+    # Mean-field ISC: draw window-by-window so each horizontal segment has the
+    # right colour.  Horizontal bars are dashed; vertical transitions are thin
+    # solid lines in the colour of the outgoing window so the staircase is gapless.
+    for i in range(n_win):
+        col = "seagreen" if mean_field[i] >= 0 else "tomato"
+        # Horizontal dashed bar for this window
+        ax.plot(
+            [x[i], x[i + 1]], [mean_field[i], mean_field[i]], color=col, lw=1.5, ls="--"
+        )
+        # Vertical transition to next window (solid, same colour)
+        if i < n_win - 1:
+            ax.plot(
+                [x[i + 1], x[i + 1]],
+                [mean_field[i], mean_field[i + 1]],
+                color=col,
+                lw=1.0,
+                ls="-",
+            )
+
+    # Legend proxies
+    ax.plot([], [], color="seagreen", ls="--", lw=1.5, label="mean-field ISC (≥ 0)")
+    ax.plot([], [], color="tomato", ls="--", lw=1.5, label="mean-field ISC (< 0)")
+
+    ax.axhline(0, color="gray", lw=0.6)
+    ax.set_xlabel("Medium window index", fontsize=7)
+    ax.set_ylabel("ISC", fontsize=7)
+    ax.set_title("Mean-field vs channel-average ISC", fontsize=8)
+    ax.legend(fontsize=5, loc="upper right")
+    ax.tick_params(labelsize=6)
+    fig.tight_layout()
+    return fig
+
+
 SKETCH_FUNCTIONS: dict[str, Callable[[], Figure]] = {
     "timeseries_multichannel": sketch_timeseries_multichannel,
     "psd": sketch_psd,
@@ -621,6 +963,11 @@ SKETCH_FUNCTIONS: dict[str, Callable[[], Figure]] = {
     "timeseries_two_panel": sketch_timeseries_two_panel,
     "windowed_mean_var_bars": sketch_windowed_mean_var_bars,
     "windowed_overlay_panels": sketch_windowed_overlay_panels,
+    # 02-isc specific sketches
+    "histogram_violin": sketch_histogram_violin,
+    "matrix_heatmap_no_diag": sketch_matrix_heatmap_no_diag,
+    "timeseries_comparison_overlay": sketch_timeseries_comparison_overlay,
+    "multiscale_sw_isc": sketch_multiscale_sw_isc,
 }
 
 
@@ -668,10 +1015,27 @@ if not plots:
     st.info("No plots defined for this analysis yet.")
 else:
     st.subheader("🖼 Plot Cards")
-    # Two columns
-    cols = st.columns(2, gap="large")
-    for idx, plot in enumerate(plots):
-        col = cols[idx % 2]
+
+    current_group: str | None = None
+    col_index = 0  # tracks position within the current 2-column row
+
+    for plot in plots:
+        plot_group = plot.get("group")
+
+        # Render a group header whenever the group label changes
+        if plot_group and plot_group != current_group:
+            st.markdown(f"### {plot_group}")
+            st.divider()
+            current_group = plot_group
+            col_index = 0  # reset column position for the new group
+            cols = st.columns(2, gap="large")
+        elif col_index == 0:
+            # First plot of a groupless section — create initial columns
+            cols = st.columns(2, gap="large")
+
+        col = cols[col_index % 2]
+        col_index += 1
+
         with col:
             with st.container(border=True):
                 st.markdown(f"**{plot['title']}**")
@@ -708,3 +1072,7 @@ else:
                 if sketch_type:
                     st.markdown("**Sketch**")
                     render_sketch(sketch_type)
+
+        # When we've just filled the right column, create a fresh pair for the next row
+        if col_index % 2 == 0:
+            cols = st.columns(2, gap="large")
