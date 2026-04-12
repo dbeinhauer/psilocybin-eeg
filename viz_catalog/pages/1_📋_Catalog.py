@@ -301,6 +301,167 @@ def sketch_timeseries_heatmap() -> Figure:
     return fig
 
 
+def sketch_multiscale_sw_isc() -> Figure:
+    """Three-figure composite for multi-scale sliding-window LOO-ISC.
+
+    Figure 1 — bar chart of mean Pearson ISC per medium window, colour-coded:
+      green = above threshold, blue = positive below threshold, red = negative.
+      Error bars show per-window variance; dashed line shows grand mean.
+    Figure 2 — stair-wise multi-scale overlay (light blue = fine, dark blue =
+      medium, dashed red = coarse) above a fine-resolution per-channel heatmap.
+    Figure 3 — stepped Pearson vs Spearman comparison at medium resolution;
+      area below zero shaded red.
+    """
+    rng = np.random.default_rng(24)
+    n_med = 30  # medium-window count
+    n_fine = 90  # fine-window count (3× denser)
+    n_coarse = 10  # coarse-window count
+    n_ch = 40
+
+    # --- synthetic data ---
+    med_isc_p = rng.normal(0.12, 0.09, n_med)
+    med_isc_s = rng.normal(0.10, 0.10, n_med)
+    med_var = np.abs(rng.normal(0.04, 0.02, n_med))
+    grand_mean = med_isc_p.mean()
+    threshold = 0.18
+
+    fine_isc = rng.normal(0.11, 0.08, n_fine)
+    coarse_isc = rng.normal(0.13, 0.07, n_coarse)
+    heatmap = rng.uniform(-0.15, 0.45, (n_ch, n_fine))
+
+    fig = plt.figure(figsize=(6, 8))
+    gs = fig.add_gridspec(4, 1, height_ratios=[1.4, 1.0, 1.5, 1.0], hspace=0.55)
+
+    # ── Figure 1: colour-coded bar chart ─────────────────────────────────────
+    ax1 = fig.add_subplot(gs[0])
+    ax1.set_title("Fig 1 — Mean Pearson LOO-ISC per medium window", fontsize=7, pad=3)
+    x = np.arange(n_med)
+    bar_colors = [
+        "seagreen" if v >= threshold else ("tomato" if v < 0 else "steelblue")
+        for v in med_isc_p
+    ]
+    ax1.bar(x, med_isc_p, color=bar_colors, width=0.8, zorder=2)
+    ax1.errorbar(
+        x,
+        med_isc_p,
+        yerr=med_var,
+        fmt="none",
+        ecolor="black",
+        elinewidth=0.6,
+        capsize=2,
+        zorder=3,
+    )
+    ax1.axhline(
+        grand_mean,
+        color="black",
+        ls="--",
+        lw=0.9,
+        label=f"grand mean ({grand_mean:.2f})",
+    )
+    ax1.axhline(0, color="gray", lw=0.5)
+    ax1.axhline(threshold, color="seagreen", ls=":", lw=0.8, label="threshold")
+    # legend proxies for bar colours
+    from matplotlib.patches import Patch
+
+    ax1.legend(
+        handles=[
+            Patch(facecolor="seagreen", label="above threshold"),
+            Patch(facecolor="steelblue", label="positive"),
+            Patch(facecolor="tomato", label="negative"),
+        ],
+        fontsize=5,
+        loc="upper right",
+        ncol=3,
+    )
+    ax1.set_ylabel("Mean ISC (Pearson)", fontsize=6)
+    ax1.set_xlabel("Medium window index", fontsize=6)
+    ax1.tick_params(labelsize=5)
+
+    # ── Figure 2: multi-scale stair-wise overlay ──────────────────────────────
+    ax2 = fig.add_subplot(gs[1])
+    ax2.set_title(
+        "Fig 2 — Multi-scale overlay + fine-resolution heatmap", fontsize=7, pad=3
+    )
+
+    fine_x = np.linspace(0, n_med, n_fine)
+    med_x = np.linspace(0, n_med, n_med)
+    coarse_x = np.linspace(0, n_med, n_coarse)
+
+    ax2.step(
+        fine_x,
+        fine_isc,
+        where="post",
+        color="lightsteelblue",
+        lw=0.8,
+        label="fine window",
+        alpha=0.9,
+    )
+    ax2.step(
+        med_x, med_isc_p, where="post", color="steelblue", lw=1.3, label="medium window"
+    )
+    ax2.step(
+        coarse_x,
+        coarse_isc,
+        where="post",
+        color="tomato",
+        lw=1.1,
+        ls="--",
+        label="coarse window",
+    )
+    ax2.axhline(0, color="gray", lw=0.5)
+    ax2.set_ylabel("LOO-ISC", fontsize=6)
+    ax2.legend(fontsize=5, loc="upper right")
+    ax2.tick_params(labelsize=5)
+    ax2.set_xticklabels([])
+
+    # ── Figure 2 continued: fine-resolution heatmap ───────────────────────────
+    ax3 = fig.add_subplot(gs[2])
+    im = ax3.imshow(heatmap, aspect="auto", cmap="RdYlBu_r", vmin=-0.2, vmax=0.5)
+    ax3.set_ylabel("Channel", fontsize=6)
+    ax3.set_xlabel("Fine window index", fontsize=6)
+    ax3.tick_params(labelsize=5)
+    plt.colorbar(im, ax=ax3, fraction=0.025, pad=0.02)
+
+    # ── Figure 3: Pearson vs Spearman stepped comparison ─────────────────────
+    ax4 = fig.add_subplot(gs[3])
+    ax4.set_title("Fig 3 — Pearson vs Spearman at medium resolution", fontsize=7, pad=3)
+    ax4.step(med_x, med_isc_p, where="post", color="steelblue", lw=1.2, label="Pearson")
+    ax4.step(
+        med_x,
+        med_isc_s,
+        where="post",
+        color="darkorange",
+        lw=1.2,
+        ls="--",
+        label="Spearman",
+    )
+    # Red-shade the area below zero
+    ax4.fill_between(
+        med_x,
+        np.minimum(med_isc_p, 0),
+        0,
+        step="post",
+        color="tomato",
+        alpha=0.35,
+        label="below zero",
+    )
+    ax4.fill_between(
+        med_x,
+        np.minimum(med_isc_s, 0),
+        0,
+        step="post",
+        color="tomato",
+        alpha=0.20,
+    )
+    ax4.axhline(0, color="gray", lw=0.6)
+    ax4.set_ylabel("LOO-ISC", fontsize=6)
+    ax4.set_xlabel("Medium window index", fontsize=6)
+    ax4.legend(fontsize=5, loc="upper right")
+    ax4.tick_params(labelsize=5)
+
+    return fig
+
+
 def sketch_bar_grouped() -> Figure:
     rng = np.random.default_rng(11)
     fig, ax = plt.subplots(figsize=(5, 2.5))
@@ -775,6 +936,7 @@ SKETCH_FUNCTIONS: dict[str, Callable[[], Figure]] = {
     "histogram_violin": sketch_histogram_violin,
     "matrix_heatmap_no_diag": sketch_matrix_heatmap_no_diag,
     "timeseries_comparison_overlay": sketch_timeseries_comparison_overlay,
+    "multiscale_sw_isc": sketch_multiscale_sw_isc,
 }
 
 

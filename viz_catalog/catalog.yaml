@@ -383,15 +383,15 @@ analyses:
         operation_order:
           - "Slide windows at three scales (fine / medium / coarse) across time with 50% overlap"
           - "Compute LOO-ISC per window → (n_windows, n_channels) at each scale"
-          - "Figure 1: bar chart of mean Pearson LOO-ISC across channels per medium window, with variance indicators and a grand-mean marker"
-          - "Figure 2: stair-wise line plot with multiple overlaid lines for different window sizes (light blue = fine, dark blue = medium, dashed red = coarse); below it, a heatmap at fine-time-window resolution showing per-channel ISC"
-          - "Figure 3: stepped, overlaid line plot comparing Pearson and Spearman windowed LOO-ISC at medium window resolution; area below zero shaded red"
+          - "Figure 1: bar chart of mean Pearson LOO-ISC across channels per medium window; bars are colour-coded (green = above threshold, blue = positive below threshold, red = negative); error bars show per-window variance; dashed line marks the grand mean"
+          - "Figure 2: stair-wise line plot with three overlaid traces (light blue = fine window, dark blue = medium window, dashed red = coarse window); below it, a heatmap at fine-time-window resolution showing per-channel ISC"
+          - "Figure 3: stepped, overlaid line plot comparing Pearson (solid blue) and Spearman (dashed orange) windowed LOO-ISC per medium window; area below zero shaded red"
         interpretation: |
           Multi-scale view reveals both transient and sustained synchrony patterns.
           The heatmap reveals which electrodes drive synchrony (frontal vs occipital)
           at fine temporal resolution. Red-shaded area in Figure 3 highlights
           windows of desynchrony.
-        sketch_type: "timeseries_heatmap"
+        sketch_type: "multiscale_sw_isc"
 
       - id: "mean_field_loo_isc"
         group: "Mean-Field ISC"
