@@ -11,18 +11,19 @@ Streamlit app, which renders interactive plots directly from the stored data.
 Canonical directory structure::
 
     <results_root>/
-    └── <Condition>_<MusicType>/
-        ├── broadband/
-        │   ├── intersubject_timeseries.csv
-        │   ├── windowed_stats.csv
-        │   ├── loo_isc.csv
-        │   └── pairwise_isc.csv
-        └── bands/
-            └── <band>/
-                ├── intersubject_timeseries.csv
-                ├── windowed_stats.csv
-                ├── loo_isc.csv
-                └── pairwise_isc.csv
+    └── <NN>-<analysis-name>/
+        └── <Condition>_<MusicType>/
+            ├── broadband/
+            │   ├── intersubject_timeseries.csv
+            │   ├── windowed_stats.csv
+            │   ├── loo_isc.csv
+            │   └── pairwise_isc.csv
+            └── bands/
+                └── <band>/
+                    ├── intersubject_timeseries.csv
+                    ├── windowed_stats.csv
+                    ├── loo_isc.csv
+                    └── pairwise_isc.csv
 """
 
 from __future__ import annotations
