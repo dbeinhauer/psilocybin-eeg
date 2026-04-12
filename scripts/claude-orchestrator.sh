@@ -197,6 +197,7 @@ start_container() {
     --detach \
     --name "$container" \
     --stop-timeout 10 \
+    --security-opt label=disable \
     --cap-add=NET_ADMIN \
     --cap-add=NET_RAW \
     -v "$wt":/workspace \
