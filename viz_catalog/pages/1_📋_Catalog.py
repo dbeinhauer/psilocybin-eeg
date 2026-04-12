@@ -876,34 +876,43 @@ def sketch_matrix_heatmap_no_diag() -> Figure:
 
 
 def sketch_timeseries_comparison_overlay() -> Figure:
-    """Stair-wise overlay: channel-average ISC (blue) vs mean-field ISC (green/red by threshold)."""
+    """Stair-wise overlay: channel-average ISC (solid blue) vs mean-field ISC (dashed, colour-coded).
+
+    Mean-field line is dashed green when >= 0, dashed red when < 0.
+    Style mirrors Section 3 Figure 3 (Pearson vs Spearman stepped comparison).
+    """
     rng = np.random.default_rng(23)
-    n_win = 50
+    n_win = 40
     x = np.arange(n_win)
     channel_avg = rng.normal(0.18, 0.06, n_win)
-    mean_field = rng.normal(0.14, 0.09, n_win)
+    mean_field = rng.normal(0.12, 0.10, n_win)
+
     fig, ax = plt.subplots(figsize=(5.5, 2.8))
+
+    # Channel-average ISC: solid blue stair-wise line
     ax.step(
-        x, channel_avg, where="mid", color="steelblue", lw=1.2, label="channel-avg ISC"
+        x, channel_avg, where="post", color="steelblue", lw=1.4, label="channel-avg ISC"
     )
-    # Mean-field line color-coded: green above zero, red below
-    for i in range(n_win - 1):
+
+    # Mean-field ISC: dashed, colour-coded — draw contiguous same-colour runs as one step call
+    i = 0
+    while i < n_win:
         col = "seagreen" if mean_field[i] >= 0 else "tomato"
-        ax.step(
-            [x[i], x[i + 1]],
-            [mean_field[i], mean_field[i]],
-            where="post",
-            color=col,
-            lw=1.5,
-        )
+        j = i + 1
+        while j < n_win and (mean_field[j] >= 0) == (mean_field[i] >= 0):
+            j += 1
+        ax.step(x[i:j], mean_field[i:j], where="post", color=col, lw=1.4, ls="--")
+        i = j
+
     # Legend proxies
-    ax.plot([], [], color="seagreen", ls="-", lw=1.5, label="mean-field ISC (≥0)")
-    ax.plot([], [], color="tomato", ls="-", lw=1.5, label="mean-field ISC (<0)")
-    ax.axhline(0, color="gray", lw=0.7, ls="--")
-    ax.set_xlabel("Window", fontsize=7)
+    ax.plot([], [], color="seagreen", ls="--", lw=1.4, label="mean-field ISC (≥ 0)")
+    ax.plot([], [], color="tomato", ls="--", lw=1.4, label="mean-field ISC (< 0)")
+
+    ax.axhline(0, color="gray", lw=0.6)
+    ax.set_xlabel("Medium window index", fontsize=7)
     ax.set_ylabel("ISC", fontsize=7)
     ax.set_title("Mean-field vs channel-average ISC", fontsize=8)
-    ax.legend(fontsize=5)
+    ax.legend(fontsize=5, loc="upper right")
     ax.tick_params(labelsize=6)
     fig.tight_layout()
     return fig
