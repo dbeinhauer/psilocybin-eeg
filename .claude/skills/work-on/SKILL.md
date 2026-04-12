@@ -29,12 +29,11 @@ If the model matches (or the user has already been warned), continue.
 
 ## 3. Create a git worktree
 
-The worktree and container are set up automatically by `scripts/claude-orchestrator.sh`.
-When this skill runs, the worktree is already active at `/workspace` and shared directories
-are mounted at `/data`, `/plots`, `/results`, `/results_db`.
-Skip directly to step 4.
+**When running inside the Docker orchestrator** (`/workspace` exists and data dirs are
+bind-mounted at `/data`, `/plots`, `/results`, `/results_db`):
+The worktree is already set up — skip directly to step 4.
 
-If running manually (outside the orchestrator), create the worktree from the **root of the
+**When running manually** (the default), create the worktree from the **root of the
 main checkout**:
 
 ```bash
@@ -42,10 +41,33 @@ git fetch origin develop
 git worktree add .worktrees/issue-{{ issue_number }} -b claude/issue-{{ issue_number }} origin/develop
 ```
 
-No symlinking needed — data/plots/results are bind-mounted by the container.
+Then set up an isolated Python environment inside the worktree:
 
-**STOP here.** Do not implement in the main checkout. All implementation happens inside the
-worktree session (container or otherwise).
+```bash
+cd .worktrees/issue-{{ issue_number }}
+python -m venv .venv
+.venv/bin/pip install -e .
+```
+
+Then symlink the gitignored shared directories so the worktree can access data, plots, and results:
+
+```bash
+ln -s ../../data data
+ln -s ../../plots plots
+ln -s ../../results results
+ln -s ../../results_db results_db
+```
+
+Finally, tell the user:
+
+> **Worktree ready.** Open a new terminal and start a Claude Code session there:
+> ```
+> cd .worktrees/issue-{{ issue_number }}
+> claude
+> ```
+> Then run `/work-on {{ issue_number }}` again in that session to begin implementing.
+
+**STOP here.** Do not implement in the main checkout. All implementation happens inside the worktree session.
 
 ---
 

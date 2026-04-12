@@ -110,11 +110,30 @@ Self-contained Streamlit app — **no imports from `src/`**. Content defined in 
 - GitHub notebook links use `develop` branch (see `viz_catalog/` `GITHUB_BASE` constant)
 - Data files are gitignored (`data/`, `results/`, `.venv/`, `.worktrees/`)
 
-### Automated parallel workflow (Docker + orchestrator)
+### Parallel work with git worktrees
 
-Each issue is worked on in an isolated Docker container with its own git
-worktree. The entire workflow — worktree creation, implementation, and PR — is
-fully automated and requires no interaction.
+Each issue gets an isolated worktree under `.worktrees/issue-N/` so multiple issues can be worked on simultaneously without branch-switching.
+
+**Setup** (handled automatically by `/work-on`):
+```bash
+git worktree add .worktrees/issue-N -b claude/issue-N origin/develop
+cd .worktrees/issue-N
+python -m venv .venv && .venv/bin/pip install -e .
+ln -s ../../data data && ln -s ../../plots plots
+ln -s ../../results results && ln -s ../../results_db results_db
+```
+
+**Starting a session**: open a new terminal, `cd .worktrees/issue-N`, then run `claude`.
+
+**Cleanup** (after PR is merged):
+```bash
+git worktree remove .worktrees/issue-N
+git branch -d claude/issue-N
+```
+
+### Automated parallel workflow (Docker orchestrator)
+
+Optionally, multiple issues can be processed fully unattended using the Docker orchestrator. Each issue runs in an isolated container with its own worktree.
 
 **One-time setup:**
 ```bash
@@ -124,17 +143,18 @@ docker run --rm -it \
   psilocybin-eeg-sandbox:latest \
   claude  # log in, then Ctrl+C
 
-# Authenticate GitHub CLI
-export GH_TOKEN=ghp_your_token_here
+# Set environment variables
+export ANTHROPIC_API_KEY=sk-ant-...
+export GH_TOKEN=ghp_...
 ```
 
-**Run everything automatically:**
+**Run:**
 ```bash
 # All open issues (auto-discovered):
 ./scripts/claude-orchestrator.sh
 
-# Specific issues only:
-./scripts/claude-orchestrator.sh --issues 12 17 23
+# Specific issues with cost controls:
+./scripts/claude-orchestrator.sh --issues 12 17 23 --max-turns 30 --timeout 900
 
 # Dry run (see what would run):
 ./scripts/claude-orchestrator.sh --dry-run
@@ -143,28 +163,24 @@ export GH_TOKEN=ghp_your_token_here
 ./scripts/claude-orchestrator.sh --max-parallel 2
 ```
 
-**Monitor progress:**
+**Flags:**
+- `--max-turns N` — Max Claude conversation turns per issue (default: 50)
+- `--timeout SECS` — Kill container after this many seconds (default: 1800)
+- `--max-parallel N` — Max concurrent containers (default: 3)
+- `--rebuild` — Force Docker image rebuild
+
+**Monitor / stop:**
 ```bash
 ./scripts/claude-status.sh          # summary + log tails
 tail -f logs/issue-12.log           # follow a specific issue
+./scripts/claude-stop.sh            # stop all containers
 ```
 
-**Stop everything:**
-```bash
-./scripts/claude-stop.sh
-```
-
-**Cleanup after PRs are merged:**
-```bash
-git worktree remove .worktrees/issue-N
-git branch -d claude/issue-N
-```
-
-Container isolation:
-- Container filesystem includes only the worktree (`/workspace`) plus the explicitly bind-mounted shared directories below — Claude cannot access the rest of the host
-- `/data`, `/plots`, `/results`, `/results_db` = bind-mounted from repo root
-- Network = DNS + HTTPS only (firewall enforced)
-- `--dangerously-skip-permissions` = no permission prompts inside container
+**Container isolation:**
+- Worktree mounted read-write at `/workspace`
+- `/data`, `/plots`, `/results`, `/results_db` = bind-mounted read-only from repo root
+- Network restricted to DNS + HTTPS only (iptables firewall)
+- `--dangerously-skip-permissions` — no permission prompts inside container
 
 ## Adding a New Analysis
 

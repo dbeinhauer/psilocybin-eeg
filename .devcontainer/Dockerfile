@@ -2,8 +2,14 @@ FROM python:3.12-slim
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl sudo less procps fzf zsh unzip gnupg2 \
+# GitHub CLI requires its own APT repository
+RUN apt-get update && apt-get install -y --no-install-recommends gnupg2 curl \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+       -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+       > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    git sudo less procps fzf unzip \
     gh iptables ipset iproute2 \
     build-essential libgl1 libglib2.0-0 \
     libxcb-xinerama0 libxkbcommon-x11-0 \

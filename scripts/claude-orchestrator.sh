@@ -10,6 +10,8 @@ ISSUES=()
 LABEL=""
 DRY_RUN=false
 MAX_PARALLEL=3
+MAX_TURNS=50
+TIMEOUT=1800
 REBUILD=false
 IMAGE="psilocybin-eeg-sandbox:latest"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -26,6 +28,23 @@ error()   { echo -e "${RED}[orchestrator]${NC} $*" >&2; }
 ###############################################################################
 # CLI argument parsing
 ###############################################################################
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [OPTIONS]
+
+Options:
+  --issues N [N ...]   Process only these issue numbers
+  --label LABEL        Filter issues by GitHub label
+  --dry-run            Print plan without running anything
+  --max-parallel N     Max containers to run in parallel (default: $MAX_PARALLEL)
+  --max-turns N        Max Claude conversation turns per issue (default: $MAX_TURNS)
+  --timeout SECS       Kill container after this many seconds (default: $TIMEOUT)
+  --rebuild            Force rebuild of the Docker image
+  -h, --help           Show this help message
+EOF
+  exit 0
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --issues)
@@ -33,10 +52,13 @@ while [[ $# -gt 0 ]]; do
       while [[ $# -gt 0 && "$1" != --* ]]; do
         ISSUES+=("$1"); shift
       done ;;
-    --label)      LABEL="$2";        shift 2 ;;
-    --dry-run)    DRY_RUN=true;       shift   ;;
+    --label)        LABEL="$2";        shift 2 ;;
+    --dry-run)      DRY_RUN=true;      shift   ;;
     --max-parallel) MAX_PARALLEL="$2"; shift 2 ;;
-    --rebuild)    REBUILD=true;       shift   ;;
+    --max-turns)    MAX_TURNS="$2";    shift 2 ;;
+    --timeout)      TIMEOUT="$2";      shift 2 ;;
+    --rebuild)      REBUILD=true;      shift   ;;
+    -h|--help)      usage ;;
     *) error "Unknown flag: $1"; exit 1 ;;
   esac
 done
@@ -65,7 +87,7 @@ fi
 # Discover issues
 ###############################################################################
 if [[ ${#ISSUES[@]} -eq 0 ]]; then
-  info "Discovering open issues…"
+  info "Discovering open issues..."
   GH_ARGS=(issue list --state open --limit 200 --json number)
   if [[ -n "$LABEL" ]]; then
     GH_ARGS+=(--label "$LABEL")
@@ -81,14 +103,14 @@ fi
 ###############################################################################
 # Filter issues that already have an open claude/issue-N PR
 ###############################################################################
-info "Checking for existing Claude PRs…"
+info "Checking for existing Claude PRs..."
 OPEN_CLAUDE_PRS=$(gh pr list --state open --json headRefName --jq '.[].headRefName' 2>/dev/null || true)
 
 FILTERED_ISSUES=()
 for n in "${ISSUES[@]}"; do
   BRANCH="claude/issue-$n"
   if echo "$OPEN_CLAUDE_PRS" | grep -qx "$BRANCH"; then
-    warn "Issue #$n already has an open PR on branch $BRANCH — skipping."
+    warn "Issue #$n already has an open PR on branch $BRANCH -- skipping."
   else
     FILTERED_ISSUES+=("$n")
   fi
@@ -101,13 +123,14 @@ if [[ ${#ISSUES[@]} -eq 0 ]]; then
 fi
 
 info "Issues to process: ${ISSUES[*]}"
+info "Config: max-parallel=$MAX_PARALLEL, max-turns=$MAX_TURNS, timeout=${TIMEOUT}s"
 
 ###############################################################################
 # Build Docker image
 ###############################################################################
 build_image() {
   if $REBUILD || ! docker image inspect "$IMAGE" &>/dev/null; then
-    info "Building Docker image $IMAGE…"
+    info "Building Docker image $IMAGE..."
     docker build \
       -f "$REPO_ROOT/.devcontainer/Dockerfile" \
       -t "$IMAGE" \
@@ -132,18 +155,17 @@ create_worktree() {
   local branch="claude/issue-$n"
 
   if [[ -d "$wt" ]]; then
-    warn "Worktree $wt already exists — reusing."
+    warn "Worktree $wt already exists -- reusing."
     return
   fi
 
-  info "Creating worktree for issue #$n…"
+  info "Creating worktree for issue #$n..."
   cd "$REPO_ROOT"
   git fetch origin develop --quiet
   git worktree add "$wt" -b "$branch" origin/develop
 }
 
 # Start a container and return immediately (detached).
-# Uses --detach so we can later call `docker wait` for the exit code.
 start_container() {
   local n="$1"
   local container="psilocybin-issue-$n"
@@ -153,17 +175,20 @@ start_container() {
   # Remove any leftover container with the same name
   docker rm -f "$container" &>/dev/null || true
 
-  info "[issue-$n] 🟡 starting container…"
+  info "[issue-$n] starting container (max-turns=$MAX_TURNS, timeout=${TIMEOUT}s)..."
+
+  # Capture the container ID, not logs — logs are streamed via `docker logs` later
   docker run \
     --detach \
     --name "$container" \
+    --stop-timeout 10 \
     --cap-add=NET_ADMIN \
     --cap-add=NET_RAW \
     -v "$wt":/workspace \
-    -v "$REPO_ROOT/data":/data \
-    -v "$REPO_ROOT/plots":/plots \
-    -v "$REPO_ROOT/results":/results \
-    -v "$REPO_ROOT/results_db":/results_db \
+    -v "$REPO_ROOT/data":/data:ro \
+    -v "$REPO_ROOT/plots":/plots:ro \
+    -v "$REPO_ROOT/results":/results:ro \
+    -v "$REPO_ROOT/results_db":/results_db:ro \
     -v psilocybin-claude-config:/home/researcher/.claude \
     -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
     -e GH_TOKEN="$GH_TOKEN" \
@@ -172,24 +197,34 @@ start_container() {
     -e PSILOCYBIN_DATA_DIR=/data \
     -e PSILOCYBIN_RESULTS_DIR=/results \
     "$IMAGE" \
-    bash -c "sudo /usr/local/bin/init-firewall.sh && pip install -e /workspace --quiet && claude --dangerously-skip-permissions --print -p '/work-on $n'" \
-    >"$log" 2>&1
+    bash -c "sudo /usr/local/bin/init-firewall.sh && pip install -e /workspace --quiet && claude --dangerously-skip-permissions --print --max-turns $MAX_TURNS -p '/work-on $n'" \
+    >/dev/null 2>&1
+
+  # Stream container logs to the log file in background
+  docker logs -f "$container" >"$log" 2>&1 &
 }
 
-# Block until the named container exits and return its exit code.
+# Block until the named container exits (or times out) and return its exit code.
 wait_container() {
   local n="$1"
   local container="psilocybin-issue-$n"
   local log="$LOGS_DIR/issue-$n.log"
 
-  # Redirect docker logs to the file while waiting
-  docker logs -f "$container" >>"$log" 2>&1 &
-  local log_pid=$!
-
   local code
-  code=$(docker wait "$container" 2>/dev/null || echo 1)
-  # Clean up log-tail process and remove the stopped container
+
+  # Wait with timeout — kill the container if it exceeds the limit
+  if ! code=$(timeout "$TIMEOUT" docker wait "$container" 2>/dev/null); then
+    warn "[issue-$n] timed out after ${TIMEOUT}s — stopping container..."
+    docker stop -t 10 "$container" &>/dev/null || true
+    code="timeout"
+    echo "[TIMEOUT] Container killed after ${TIMEOUT}s" >>"$log"
+  fi
+
+  # Clean up: kill the background `docker logs` process for this container
+  local log_pid
+  log_pid=$(jobs -p 2>/dev/null | tail -1)
   kill "$log_pid" 2>/dev/null || true
+
   docker rm -f "$container" &>/dev/null || true
   echo "$code"
 }
@@ -197,7 +232,7 @@ wait_container() {
 ###############################################################################
 # Main loop — process issues with bounded parallelism
 ###############################################################################
-declare -A STATUSES  # issue_number → exit code
+declare -A STATUSES  # issue_number -> exit code
 
 run_batch() {
   local -a batch=("$@")
@@ -236,22 +271,24 @@ if $DRY_RUN; then
 fi
 
 echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "======================================"
 echo " Results"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "======================================"
 for n in "${ISSUES[@]}"; do
   code=${STATUSES[$n]:-"skipped"}
   if [[ "$code" == "0" ]]; then
     pr=$(gh pr list --head "claude/issue-$n" --state open --json number,url --jq '.[0].url' 2>/dev/null || true)
     if [[ -n "$pr" ]]; then
-      echo -e "[issue-$n] ${GREEN}✅ PR opened: $pr${NC}"
+      echo -e "[issue-$n] ${GREEN}OK — PR opened: $pr${NC}"
     else
-      echo -e "[issue-$n] ${GREEN}✅ done (no new PR — may already exist)${NC}"
+      echo -e "[issue-$n] ${GREEN}OK — done (no new PR, may already exist)${NC}"
     fi
+  elif [[ "$code" == "timeout" ]]; then
+    echo -e "[issue-$n] ${YELLOW}TIMEOUT — killed after ${TIMEOUT}s, see $LOGS_DIR/issue-$n.log${NC}"
   elif [[ "$code" == "skipped" ]]; then
-    echo -e "[issue-$n] ${YELLOW}⏭  skipped (dry-run)${NC}"
+    echo -e "[issue-$n] ${YELLOW}SKIPPED (dry-run)${NC}"
   else
-    echo -e "[issue-$n] ${RED}❌ failed (exit $code) — see $LOGS_DIR/issue-$n.log${NC}"
+    echo -e "[issue-$n] ${RED}FAILED (exit $code) — see $LOGS_DIR/issue-$n.log${NC}"
   fi
 done
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "======================================"
