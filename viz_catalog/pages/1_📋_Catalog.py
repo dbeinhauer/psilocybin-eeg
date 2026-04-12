@@ -179,12 +179,15 @@ def sketch_histogram() -> Figure:
     rng = np.random.default_rng(6)
     fig, ax = plt.subplots(figsize=(4, 2.5))
     data = rng.gamma(2, 0.3, 400)
-    ax.hist(data, bins=30, color="steelblue", edgecolor="white", lw=0.4)
-    threshold = np.percentile(data, 10)
-    ax.axvline(threshold, color="tomato", ls="--", lw=1, label="10th pct")
-    ax.set_xlabel("Window variance", fontsize=7)
+    clip99 = np.percentile(data, 99)
+    data_clipped = data[data <= clip99]
+    ax.hist(data_clipped, bins=30, color="darkorange", edgecolor="white", lw=0.4)
+    median = np.median(data_clipped)
+    ax.axvline(median, color="steelblue", ls="-", lw=1.2, label="median")
+    ax.axvline(clip99, color="tomato", ls="--", lw=1, label="99th pct")
+    ax.set_xlabel("Intersubject variance", fontsize=7)
     ax.set_ylabel("Count", fontsize=7)
-    ax.set_title("Windowed variance distribution", fontsize=8)
+    ax.set_title("Variance distribution (channel × time)", fontsize=8)
     ax.legend(fontsize=6)
     ax.tick_params(labelsize=6)
     fig.tight_layout()
@@ -211,18 +214,35 @@ def sketch_timeseries_multisubject() -> Figure:
 
 def sketch_timeseries_multiband() -> Figure:
     rng = np.random.default_rng(8)
-    bands = ["δ", "θ", "α", "β", "γ"]
-    colors = ["#4C72B0", "#55A868", "#C44E52", "#8172B2", "#CCB974"]
+    bands = ["delta", "theta", "alpha", "beta", "gamma"]
+    colors = ["steelblue", "darkorange", "seagreen", "tomato", "mediumpurple"]
     t = np.linspace(0, 8, 300)
-    fig, axes = plt.subplots(5, 1, figsize=(5, 3.5), sharex=True)
-    for ax, band, col in zip(axes, bands, colors):
-        y = np.abs(rng.standard_normal(300)) * 0.4 + 0.4
-        ax.plot(t, y, lw=0.8, color=col)
-        ax.set_ylabel(band, fontsize=7, rotation=0, labelpad=14)
-        ax.tick_params(labelsize=5)
-        ax.set_yticks([])
-    axes[-1].set_xlabel("Time (s)", fontsize=7)
-    axes[0].set_title("Per-band variance traces", fontsize=8)
+    fig, axes = plt.subplots(5, 2, figsize=(5.5, 3.5), sharex=True)
+    for row, (band, col) in enumerate(zip(bands, colors)):
+        # Left: mean signal
+        n_subj = 4
+        mean_y = rng.standard_normal(300) * 0.3
+        ax_l = axes[row, 0]
+        for _ in range(n_subj):
+            ax_l.plot(
+                t, mean_y + rng.standard_normal(300) * 0.1, lw=0.5, alpha=0.4, color=col
+            )
+        ax_l.plot(t, mean_y, lw=0.9, color=col)
+        ax_l.set_ylabel(band, fontsize=6, rotation=0, labelpad=28)
+        ax_l.tick_params(labelsize=4)
+        ax_l.set_yticks([])
+        # Right: variance
+        var_y = np.abs(rng.standard_normal(300)) * 0.4 + 0.4
+        threshold = np.percentile(var_y, 10)
+        ax_r = axes[row, 1]
+        ax_r.plot(t, var_y, lw=0.8, color=col)
+        ax_r.axhline(threshold, color="gray", ls="--", lw=0.6)
+        ax_r.tick_params(labelsize=4)
+        ax_r.set_yticks([])
+    axes[-1, 0].set_xlabel("Time (s)", fontsize=6)
+    axes[-1, 1].set_xlabel("Time (s)", fontsize=6)
+    axes[0, 0].set_title("Mean signal", fontsize=7)
+    axes[0, 1].set_title("Variance", fontsize=7)
     fig.tight_layout()
     return fig
 
@@ -304,27 +324,29 @@ def sketch_bar_grouped() -> Figure:
 
 def sketch_histogram_facet() -> Figure:
     rng = np.random.default_rng(12)
-    bands = ["δ", "θ", "α", "β", "γ"]
-    colors = ["#4C72B0", "#55A868", "#C44E52", "#8172B2", "#CCB974"]
+    bands = ["delta", "theta", "alpha", "beta", "gamma"]
+    colors = ["steelblue", "darkorange", "seagreen", "tomato", "mediumpurple"]
     fig, axes = plt.subplots(1, 5, figsize=(6, 2.2), sharey=True)
     for ax, band, col in zip(axes, bands, colors):
-        d = rng.normal(0.1 + rng.uniform(-0.05, 0.1), 0.1, 200)
-        ax.hist(
-            d, bins=15, color=col, edgecolor="white", lw=0.3, orientation="vertical"
-        )
-        ax.axvline(0, color="gray", ls="--", lw=0.6)
-        ax.set_title(band, fontsize=7)
-        ax.tick_params(labelsize=5)
-        ax.set_xlabel("r", fontsize=6)
+        d = rng.gamma(2, 0.3, 200)
+        clip99 = np.percentile(d, 99)
+        d_clipped = d[d <= clip99]
+        ax.hist(d_clipped, bins=15, color=col, edgecolor="white", lw=0.3)
+        median = np.median(d_clipped)
+        ax.axvline(median, color="black", ls="-", lw=0.8)
+        ax.axvline(clip99, color="gray", ls="--", lw=0.6)
+        ax.set_title(band, fontsize=6)
+        ax.tick_params(labelsize=4)
+        ax.set_xlabel("variance", fontsize=5)
     axes[0].set_ylabel("Count", fontsize=6)
-    fig.suptitle("Per-band LOO-ISC distributions", fontsize=8, y=1.02)
+    fig.suptitle("Per-band variance distributions", fontsize=8, y=1.02)
     fig.tight_layout()
     return fig
 
 
 def sketch_bar_grouped_bands() -> Figure:
     rng = np.random.default_rng(13)
-    bands = ["δ", "θ", "α", "β", "γ"]
+    bands = ["delta", "theta", "alpha", "beta", "gamma"]
     x = np.arange(len(bands))
     w = 0.35
     classic = rng.uniform(0.05, 0.3, len(bands))
@@ -346,10 +368,10 @@ def sketch_grid_timeseries_heatmap() -> Figure:
     rng = np.random.default_rng(14)
     fig, axes = plt.subplots(2, 2, figsize=(5.5, 3.2))
     titles = [
-        ("α Classic", "steelblue"),
-        ("α Psytrance", "darkorange"),
-        ("β Classic", "seagreen"),
-        ("β Psytrance", "tomato"),
+        ("alpha Classic", "steelblue"),
+        ("alpha Psytrance", "darkorange"),
+        ("beta Classic", "seagreen"),
+        ("beta Psytrance", "tomato"),
     ]
     n_w, n_ch = 40, 20
     for ax, (title, col) in zip(axes.flat, titles):
@@ -366,8 +388,8 @@ def sketch_grid_timeseries_heatmap() -> Figure:
 
 def sketch_raster_overlap() -> Figure:
     rng = np.random.default_rng(15)
-    bands = ["δ", "θ", "α", "β", "γ"]
-    colors = ["#4C72B0", "#55A868", "#C44E52", "#8172B2", "#CCB974"]
+    bands = ["delta", "theta", "alpha", "beta", "gamma"]
+    colors = ["steelblue", "darkorange", "seagreen", "tomato", "mediumpurple"]
     n_w = 60
     masks = (rng.uniform(0, 1, (5, n_w)) > 0.6).astype(float)
     fig, (ax_raster, ax_count) = plt.subplots(
@@ -430,6 +452,152 @@ def sketch_polar_histogram() -> Figure:
     return fig
 
 
+def sketch_zscore_transform() -> Figure:
+    """Before/after Z-score illustration."""
+    rng = np.random.default_rng(17)
+    fig, axes = plt.subplots(1, 2, figsize=(5.5, 2.5))
+    t = np.linspace(0, 4, 200)
+    amps = [0.5, 1.2, 2.0, 0.8]
+    offsets = [0.0, 1.0, -0.5, 1.5]
+    colors = ["steelblue", "darkorange", "seagreen", "tomato"]
+    # Left: raw (different amplitudes)
+    ax_raw = axes[0]
+    for amp, off, col in zip(amps, offsets, colors):
+        y = amp * np.sin(2 * np.pi * t) + off + rng.standard_normal(200) * 0.1
+        ax_raw.plot(t, y, lw=0.9, color=col, alpha=0.8)
+    ax_raw.set_title("Raw (unscaled)", fontsize=8)
+    ax_raw.set_xlabel("Time (s)", fontsize=7)
+    ax_raw.set_ylabel("Amplitude", fontsize=7)
+    ax_raw.tick_params(labelsize=6)
+    # Right: z-scored (normalized)
+    ax_z = axes[1]
+    for amp, off, col in zip(amps, offsets, colors):
+        y = amp * np.sin(2 * np.pi * t) + off + rng.standard_normal(200) * 0.1
+        y_z = (y - y.mean()) / y.std()
+        ax_z.plot(t, y_z, lw=0.9, color=col, alpha=0.8)
+    ax_z.set_title("Z-scored (mean=0, std=1)", fontsize=8)
+    ax_z.set_xlabel("Time (s)", fontsize=7)
+    ax_z.set_ylabel("Z-score", fontsize=7)
+    ax_z.axhline(0, color="gray", ls="--", lw=0.6)
+    ax_z.tick_params(labelsize=6)
+    fig.tight_layout()
+    return fig
+
+
+def sketch_timeseries_two_panel() -> Figure:
+    """Two-panel: top = mean signal overlay (blue), bottom = variance trace (orange)."""
+    rng = np.random.default_rng(18)
+    t = np.linspace(0, 10, 500)
+    n_subj = 6
+    group_mean = np.sin(0.5 * t) * 0.3 + rng.standard_normal(500) * 0.1
+    fig, (ax_top, ax_bot) = plt.subplots(
+        2, 1, figsize=(5, 3.2), sharex=True, gridspec_kw={"height_ratios": [1.2, 1]}
+    )
+    # Top: per-subject traces + group mean + ±1 SD band
+    sd = np.zeros(500)
+    for _ in range(n_subj):
+        y = group_mean + rng.standard_normal(500) * 0.25
+        ax_top.plot(t, y, lw=0.5, alpha=0.35, color="steelblue")
+        sd += (y - group_mean) ** 2
+    sd = np.sqrt(sd / n_subj)
+    ax_top.plot(t, group_mean, lw=1.2, color="steelblue", label="group mean")
+    ax_top.fill_between(
+        t, group_mean - sd, group_mean + sd, alpha=0.2, color="steelblue", label="±1 SD"
+    )
+    ax_top.set_ylabel("Mean signal", fontsize=7)
+    ax_top.legend(fontsize=6)
+    ax_top.tick_params(labelsize=6)
+    ax_top.set_title("Inter-subject time-series overview", fontsize=8)
+    # Bottom: channel-averaged variance
+    var_trace = np.abs(rng.standard_normal(500)) * 0.5 + 0.5
+    var_trace[100:150] *= 0.3
+    var_trace[330:380] *= 0.25
+    ax_bot.plot(t, var_trace, lw=0.8, color="darkorange")
+    ax_bot.set_xlabel("Time (s)", fontsize=7)
+    ax_bot.set_ylabel("Variance", fontsize=7)
+    ax_bot.tick_params(labelsize=6)
+    fig.tight_layout()
+    return fig
+
+
+def sketch_windowed_mean_var_bars() -> Figure:
+    """Two stacked bar charts: mean signal (blue) and variance (orange, green=sync)."""
+    rng = np.random.default_rng(19)
+    n_win = 20
+    x = np.arange(n_win)
+    mean_vals = rng.standard_normal(n_win) * 0.3
+    var_vals = np.abs(rng.standard_normal(n_win)) * 0.4 + 0.3
+    threshold = np.percentile(var_vals, 10)
+    sync_mask = var_vals < threshold
+    fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(5, 3), sharex=True)
+    # Top: mean signal per window (blue)
+    ax_top.bar(x, mean_vals, color="steelblue", width=0.8)
+    ax_top.axhline(0, color="gray", lw=0.6)
+    ax_top.set_ylabel("Mean signal", fontsize=7)
+    ax_top.tick_params(labelsize=6)
+    ax_top.set_title("Windowed synchrony — bar charts", fontsize=8)
+    # Bottom: variance per window (orange, green=sync)
+    bar_colors = ["seagreen" if s else "darkorange" for s in sync_mask]
+    ax_bot.bar(x, var_vals, color=bar_colors, width=0.8)
+    ax_bot.axhline(threshold, color="gray", ls="--", lw=0.8, label="10th pct")
+    ax_bot.set_xlabel("Window index", fontsize=7)
+    ax_bot.set_ylabel("Variance", fontsize=7)
+    ax_bot.legend(fontsize=6)
+    ax_bot.tick_params(labelsize=6)
+    fig.tight_layout()
+    return fig
+
+
+def sketch_windowed_overlay_panels() -> Figure:
+    """Three-panel windowed overlay: mean signal, variance+windowed line, channel heatmap."""
+    rng = np.random.default_rng(20)
+    t = np.linspace(0, 10, 500)
+    n_ch = 30
+    fig, axes = plt.subplots(
+        3, 1, figsize=(5, 4), gridspec_kw={"height_ratios": [1, 1, 1.5]}
+    )
+    # Panel 1: mean signal (blue) with per-subject traces
+    group_mean = np.sin(0.4 * t) * 0.3 + rng.standard_normal(500) * 0.1
+    for _ in range(4):
+        axes[0].plot(
+            t,
+            group_mean + rng.standard_normal(500) * 0.2,
+            lw=0.5,
+            alpha=0.3,
+            color="steelblue",
+        )
+    axes[0].plot(t, group_mean, lw=1.0, color="steelblue")
+    axes[0].set_ylabel("Mean signal", fontsize=7)
+    axes[0].tick_params(labelsize=5)
+    axes[0].set_title("Windowed overlay", fontsize=8)
+    # Panel 2: continuous variance (orange) + windowed mean line (red step)
+    var_cont = np.abs(rng.standard_normal(500)) * 0.4 + 0.5
+    n_win = 25
+    win_edges = np.linspace(0, len(t), n_win + 1, dtype=int)
+    win_means = [var_cont[win_edges[i] : win_edges[i + 1]].mean() for i in range(n_win)]
+    win_t = [
+        (t[win_edges[i]] + t[min(win_edges[i + 1], len(t) - 1)]) / 2
+        for i in range(n_win)
+    ]
+    axes[1].plot(t, var_cont, lw=0.8, color="darkorange")
+    axes[1].step(
+        win_t, win_means, where="mid", lw=1.2, color="tomato", label="windowed mean"
+    )
+    axes[1].set_ylabel("Variance", fontsize=7)
+    axes[1].legend(fontsize=5)
+    axes[1].tick_params(labelsize=5)
+    # Panel 3: heatmap (channels × time), reddish colormap, positive only
+    heatmap = np.abs(rng.standard_normal((n_ch, 500))) * 0.5 + 0.1
+    im = axes[2].imshow(heatmap, aspect="auto", cmap="Reds", vmin=0, vmax=1.5)
+    axes[2].set_ylabel("Channel", fontsize=7)
+    axes[2].set_xlabel("Time (s)", fontsize=7)
+    axes[2].tick_params(labelsize=5)
+    axes[2].set_xticks([])
+    plt.colorbar(im, ax=axes[2], fraction=0.03, pad=0.02)
+    fig.tight_layout()
+    return fig
+
+
 SKETCH_FUNCTIONS: dict[str, Callable[[], Figure]] = {
     "timeseries_multichannel": sketch_timeseries_multichannel,
     "psd": sketch_psd,
@@ -448,6 +616,11 @@ SKETCH_FUNCTIONS: dict[str, Callable[[], Figure]] = {
     "grid_timeseries_heatmap": sketch_grid_timeseries_heatmap,
     "raster_overlap": sketch_raster_overlap,
     "polar_histogram": sketch_polar_histogram,
+    # 01-mean-variance specific sketches
+    "zscore_transform": sketch_zscore_transform,
+    "timeseries_two_panel": sketch_timeseries_two_panel,
+    "windowed_mean_var_bars": sketch_windowed_mean_var_bars,
+    "windowed_overlay_panels": sketch_windowed_overlay_panels,
 }
 
 
