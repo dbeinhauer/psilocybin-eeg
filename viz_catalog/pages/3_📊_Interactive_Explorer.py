@@ -41,7 +41,19 @@ _KNOWN_CSV: frozenset[str] = frozenset(
 
 @st.cache_data(ttl=30)
 def scan_results_db(directory: str) -> list[dict[str, str]]:
-    """Scan *directory* for recognised CSV result files."""
+    """Scan *directory* for recognised CSV result files.
+
+    Expected layout (produced by the analysis pipeline)::
+
+        <directory>/
+        └── <NN>-<analysis-name>/
+            └── <Condition>_<MusicType>/
+                ├── broadband/
+                │   └── <analysis>.csv
+                └── bands/
+                    └── <band>/
+                        └── <analysis>.csv
+    """
     root = Path(directory)
     records: list[dict[str, str]] = []
     if not root.exists():
@@ -51,26 +63,29 @@ def scan_results_db(directory: str) -> list[dict[str, str]]:
             continue
         rel = csv_path.relative_to(root)
         parts = list(rel.parts)
-        if len(parts) < 3:
+        # Expected: [analysis_name, condition_music, spectrum_type, ...]
+        if len(parts) < 4:
             continue
-        condition_music = parts[0]
+        analysis_name = parts[0]
+        condition_music = parts[1]
         if "_" not in condition_music:
             continue
-        spectrum_type = parts[1]
+        spectrum_type = parts[2]
         if spectrum_type not in ("broadband", "bands"):
             continue
         condition, music_type = condition_music.split("_", 1)
         analysis_type = csv_path.stem
         if spectrum_type == "broadband":
             band = "broadband"
-        elif len(parts) >= 4:
-            band = parts[2]
+        elif len(parts) >= 5:
+            band = parts[3]
         else:
             continue
         records.append(
             {
                 "path": str(csv_path),
                 "filename": csv_path.name,
+                "analysis_name": analysis_name,
                 "condition_music": condition_music,
                 "condition": condition,
                 "music_type": music_type,
@@ -91,7 +106,7 @@ results_dir_str = st.text_input(
     help=(
         "Path to the results-database folder containing CSV files. "
         "The expected layout is: "
-        "<Condition>_<MusicType>/<broadband|bands/band>/<analysis>.csv"
+        "<NN>-<analysis-name>/<Condition>_<MusicType>/<broadband|bands/band>/<analysis>.csv"
     ),
 )
 results_dir = Path(results_dir_str).expanduser().resolve()
@@ -124,19 +139,21 @@ st.success(f"Found **{len(records)}** result file(s) in `{results_dir}`.")
 # ---------------------------------------------------------------------------
 st.sidebar.header("Filters")
 
+all_analysis_names = sorted({r["analysis_name"] for r in records})
 all_conditions = sorted({r["condition"] for r in records})
 all_music = sorted({r["music_type"] for r in records})
 all_spectrum = sorted({r["spectrum_type"] for r in records})
 all_bands = sorted({r["band"] for r in records})
 all_analysis = sorted({r["analysis_type"] for r in records})
 
+sel_analysis_names = st.sidebar.multiselect("Analysis", all_analysis_names, default=[])
 sel_conditions = st.sidebar.multiselect("Condition", all_conditions, default=[])
 sel_music = st.sidebar.multiselect("Music type", all_music, default=[])
 sel_spectrum = st.sidebar.multiselect("Spectrum type", all_spectrum, default=[])
 sel_bands = st.sidebar.multiselect("Frequency band", all_bands, default=[])
 sel_analysis = st.sidebar.multiselect("Analysis type", all_analysis, default=[])
 
-any_filter = sel_conditions or sel_music or sel_spectrum or sel_bands or sel_analysis
+any_filter = sel_analysis_names or sel_conditions or sel_music or sel_spectrum or sel_bands or sel_analysis
 if not any_filter:
     st.sidebar.markdown(f"**0** / {len(records)} results shown")
     st.info("👆 Select at least one filter in the sidebar to explore results.")
@@ -145,7 +162,8 @@ if not any_filter:
 filtered = [
     r
     for r in records
-    if (not sel_conditions or r["condition"] in sel_conditions)
+    if (not sel_analysis_names or r["analysis_name"] in sel_analysis_names)
+    and (not sel_conditions or r["condition"] in sel_conditions)
     and (not sel_music or r["music_type"] in sel_music)
     and (not sel_spectrum or r["spectrum_type"] in sel_spectrum)
     and (not sel_bands or r["band"] in sel_bands)
