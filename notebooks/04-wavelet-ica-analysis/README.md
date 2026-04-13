@@ -21,7 +21,7 @@ processing that emerge during music listening.
 
 ---
 
-## Two Decomposition Approaches
+## Three Decomposition Approaches
 
 ### Approach 1 — Super-Brain (temporal decomposition)
 
@@ -57,6 +57,8 @@ can be decomposed into:
 | 6 | Component power spectrogram | Time–frequency view of each component |
 | 7 | ISC of component time courses | Which components are shared across subjects? |
 | 8 | Cross-component correlation | Dependence between temporal components |
+| 8.2 | ICA topomap — mean loading | Mean ICA channel loading across subjects |
+| 8.3 | ICA topomap — variance | Variance of ICA channel loading across subjects |
 
 ### Approach 2 — Inter-Subject Frequency-Channel (spatial-spectral decomposition)
 
@@ -91,14 +93,59 @@ appear across subjects and time.
 | 6 | Band-resolved component loadings | Aggregate component weights per frequency band |
 | 7 | Temporal dynamics of components | Time-averaged component activation across subjects |
 | 8 | Component correlation matrix | Dependence between spatial-spectral components |
+| 8.2 | ICA topomap — mean loading | Mean ICA channel loading across subjects |
+| 8.3 | ICA topomap — variance | Variance of ICA channel loading across subjects |
+
+### Approach 3 — Temporal (temporal-spectral decomposition)
+
+**Notebook:** `wavelet_ica_temporal.ipynb`
+
+Concatenate person and channel into the *observation* axis, with frequency
+and time as *features*:
+
+```
+(n_subjects, n_channels, n_freqs, n_times)
+  → reshape →  (n_subjects × n_channels,  n_freqs × n_times)
+```
+
+Each observation is a single electrode from a single subject, described by
+its full frequency × time power surface.  ICA discovers **temporal-spectral
+components** — recurring frequency × time patterns shared across subjects
+and channels.  The focus is on **time**: components that are active in the
+same temporal intervals across subjects indicate stimulus-driven processing.
+
+| Loading dimension | Interpretation |
+|-------------------|----------------|
+| Subject loadings  | Which participants contribute most to the component |
+| Channel loadings  | Spatial topography (scalp map) of the component |
+
+| Component dimension | Interpretation |
+|---------------------|----------------|
+| Frequency × time map | When and at what frequency the component is active |
+
+**Analyses in the notebook:**
+
+| # | Analysis | Purpose |
+|---|----------|---------|
+| 1 | PCA scree plot | Intrinsic dimensionality of the freq × time space |
+| 2 | ICA frequency × time maps | Temporal-spectral component patterns |
+| 3 | ICA topomap — mean loading | Mean channel loading across subjects |
+| 4 | ICA topomap — variance | Inter-individual variability in channel loading |
+| 5 | Per-subject ICA channel loadings | Subject-specific topographic maps |
+| 6 | ICA time courses | Frequency-marginalized temporal profiles |
+| 7 | ICA spectral profiles | Time-marginalized frequency profiles |
+| 8 | Inter-subject similarity | Correlation of channel loadings across subjects |
+| 9 | Band-resolved energy | Which frequency bands dominate each component |
+| 10 | Component correlation matrix | Dependence between temporal-spectral components |
 
 ---
 
 ## Data Requirements
 
-Both notebooks load wavelet-power data via `scripts.analysis_common` utilities
-(the same pipeline used in `notebooks/03-wavelet-analysis/`).  The wavelet
-cache directory defaults to `notebooks/04-wavelet-ica-analysis/wavelet_cache/`.
+All three notebooks load wavelet-power data via `scripts.analysis_common`
+utilities (the same pipeline used in `notebooks/03-wavelet-analysis/`).
+The wavelet cache directory defaults to
+`notebooks/04-wavelet-ica-analysis/wavelet_cache/`.
 
 Subject, channel, and time subsets are controlled in the configuration cell so
 that the notebooks remain fast for interactive exploration (defaults:
