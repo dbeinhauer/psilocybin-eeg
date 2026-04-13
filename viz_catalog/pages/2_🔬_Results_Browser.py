@@ -212,19 +212,23 @@ _SPECTRUM_TYPES: frozenset[str] = frozenset({"broadband", "bands"})
 
 # Stage-03 analysis_type directory names, classified by domain.
 # Slugs in neither set default to "power".
-_STAGE03_PHASE_SLUGS: frozenset[str] = frozenset({
-    "band_itpc_tc",
-    "itpc_spectrum",
-    "itpc_vs_isc",
-    "phase_distribution",
-    "phase_loo_isc",
-    "tf_itpc_map",
-    "topomap_phase_isc",
-})
+_STAGE03_PHASE_SLUGS: frozenset[str] = frozenset(
+    {
+        "band_itpc_tc",
+        "itpc_spectrum",
+        "itpc_vs_isc",
+        "phase_distribution",
+        "phase_loo_isc",
+        "tf_itpc_map",
+        "topomap_phase_isc",
+    }
+)
 # Slugs that belong to both domains (shown in both sections).
-_STAGE03_BOTH_SLUGS: frozenset[str] = frozenset({
-    "power_phase_joint",
-})
+_STAGE03_BOTH_SLUGS: frozenset[str] = frozenset(
+    {
+        "power_phase_joint",
+    }
+)
 
 _BAND_CANONICAL: dict[str, str] = {
     "delta": "delta",
@@ -710,7 +714,9 @@ for vstage, analysis_type in section_order:
                         if rec["music_type"]:
                             st.markdown(f"- **Music type**: `{rec['music_type']}`")
                         if rec["spectrum_type"]:
-                            st.markdown(f"- **Spectrum type**: `{rec['spectrum_type']}`")
+                            st.markdown(
+                                f"- **Spectrum type**: `{rec['spectrum_type']}`"
+                            )
                         if rec["analysis_type"]:
                             st.markdown(
                                 f"- **Analysis type**: {slug_to_display(rec['analysis_type'])}"
