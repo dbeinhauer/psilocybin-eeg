@@ -21,7 +21,7 @@ processing that emerge during music listening.
 
 ---
 
-## Three Decomposition Approaches
+## Four Decomposition Approaches
 
 ### Approach 1 — Super-Brain (temporal decomposition)
 
@@ -138,11 +138,57 @@ same temporal intervals across subjects indicate stimulus-driven processing.
 | 9 | Band-resolved energy | Which frequency bands dominate each component |
 | 10 | Component correlation matrix | Dependence between temporal-spectral components |
 
+### Approach 4 — Inverted Super-Brain (observation-per-triplet temporal decomposition)
+
+**Notebook:** `wavelet_ica_inverted_superbrain.ipynb`
+
+Uses the same 2-D matrix as the super-brain, but **swaps observations and
+features** — person × channel × frequency are *observations* and time is the
+*feature* axis:
+
+```
+(n_subjects, n_channels, n_freqs, n_times)
+  → reshape →  (n_subjects × n_channels × n_freqs,  n_times)
+                ─────── observations ───────────────  features
+```
+
+Each observation is a specific subject–electrode–frequency combination,
+described by its T-length power time course.  PCA/ICA discover **temporal
+component patterns** (each of length T) shared across the S × C × F
+observations.  The score vector for each component can be reshaped to
+`(n_subjects, n_channels, n_freqs)` and decomposed into subject, channel, and
+frequency loadings — exactly as in the super-brain, but from the score side.
+
+| Quantity | Shape | Interpretation |
+|----------|-------|----------------|
+| Component pattern | `(T,)` | Temporal pattern shared across observations |
+| Subject loadings | `(n_subjects,)` | Mean |score| over channels and frequencies |
+| Channel loadings | `(n_channels,)` | Spatial topography (scalp map) |
+| Frequency loadings | `(n_freqs,)` | Spectral profile |
+
+**Key advantage:** the observation-to-feature ratio is very high (S×C×F >> T
+after subsampling), which makes ICA estimation statistically robust.
+
+**Analyses in the notebook:**
+
+| # | Analysis | Purpose |
+|---|----------|---------|
+| 1 | PCA scree plot | Intrinsic dimensionality of the temporal feature space |
+| 2 | ICA temporal component patterns | Time-domain components shared across observations |
+| 3 | Subject loadings per IC | Inter-individual variability |
+| 4 | ICA channel loadings (topomap) | Spatial distribution from ICA scores |
+| 5 | ICA topomap — mean loading | Mean channel loading across subjects |
+| 6 | ICA topomap — variance | Inter-individual variability in channel loading |
+| 7 | Frequency loadings per IC | Spectral profile of each component |
+| 8 | ICA component spectrograms | Time–frequency view of each component pattern |
+| 9 | Inter-individual IC correlations | Consistency of channel loadings across subjects |
+| 10 | Cross-component correlation | PCA vs ICA score dependence |
+
 ---
 
 ## Data Requirements
 
-All three notebooks load wavelet-power data via `scripts.analysis_common`
+All four notebooks load wavelet-power data via `scripts.analysis_common`
 utilities (the same pipeline used in `notebooks/03-wavelet-analysis/`).
 The wavelet cache directory defaults to
 `notebooks/04-wavelet-ica-analysis/wavelet_cache/`.
