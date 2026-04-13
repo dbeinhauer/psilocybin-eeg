@@ -22,7 +22,7 @@ st.markdown(
 )
 
 # ---------------------------------------------------------------------------
-# Catalog loading — used for info boxes in each result image
+# Catalog loading — used for info boxes and human-readable labels
 # ---------------------------------------------------------------------------
 _CATALOG_PATH = Path(__file__).parent.parent / "catalog.yaml"
 GITHUB_BASE = "https://github.com/dbeinhauer/psilocybin-eeg/blob/develop"
@@ -30,7 +30,7 @@ GITHUB_BASE = "https://github.com/dbeinhauer/psilocybin-eeg/blob/develop"
 
 @st.cache_data
 def load_catalog() -> dict:
-    """Load catalog.yaml for info-box lookup."""
+    """Load catalog.yaml for info-box lookup and analysis-type label mapping."""
     if not _CATALOG_PATH.exists():
         return {}
     with open(_CATALOG_PATH) as f:
@@ -38,6 +38,32 @@ def load_catalog() -> dict:
 
 
 _catalog = load_catalog()
+
+
+def build_analysis_type_label_map(catalog: dict) -> dict[str, str]:
+    """Return a flat {slug: display_name} mapping from all analyses in catalog.
+
+    Each analysis entry may carry an ``analysis_type_labels`` dict that maps
+    directory-name slugs (e.g. ``loo_isc``) to human-readable display names
+    (e.g. ``"Leave-one-out ISC"``).  Labels from later entries override
+    earlier ones for the same slug (last writer wins).
+    """
+    mapping: dict[str, str] = {}
+    for analysis in catalog.get("analyses", []):
+        for slug, label in analysis.get("analysis_type_labels", {}).items():
+            mapping[slug] = label
+    return mapping
+
+
+_analysis_type_labels: dict[str, str] = build_analysis_type_label_map(_catalog)
+
+
+def slug_to_display(slug: str) -> str:
+    """Return a human-readable display name for an analysis-type slug.
+
+    Falls back to a title-cased version of the slug if no catalog entry exists.
+    """
+    return _analysis_type_labels.get(slug, slug.replace("_", " ").title())
 
 
 def find_catalog_entry(record: dict) -> tuple[dict | None, dict | None]:
@@ -215,17 +241,30 @@ all_stages = sorted({r["stage"] for r in images if r["stage"]})
 all_conditions = sorted({r["condition"] for r in images if r["condition"]})
 all_music_types = sorted({r["music_type"] for r in images if r["music_type"]})
 all_spectrum_types = sorted({r["spectrum_type"] for r in images if r["spectrum_type"]})
-all_analysis_types = sorted({r["analysis_type"] for r in images if r["analysis_type"]})
 all_bands = sorted({r["band"] for r in images if r["band"]})
+
+# Build slug→label and label→slug mappings for the Analysis type filter.
+# Options are shown as human-readable display names; slugs are used internally.
+all_analysis_type_slugs = sorted(
+    {r["analysis_type"] for r in images if r["analysis_type"]}
+)
+_slug_to_label: dict[str, str] = {
+    s: slug_to_display(s) for s in all_analysis_type_slugs
+}
+_label_to_slug: dict[str, str] = {v: k for k, v in _slug_to_label.items()}
+all_analysis_type_display = sorted(_slug_to_label.values())
 
 # All filters default to empty — nothing is shown until the user selects something.
 sel_stages = st.sidebar.multiselect("Analysis stage", all_stages, default=[])
 sel_conditions = st.sidebar.multiselect("Condition", all_conditions, default=[])
 sel_music = st.sidebar.multiselect("Music type", all_music_types, default=[])
 sel_spectrum = st.sidebar.multiselect("Spectrum type", all_spectrum_types, default=[])
-sel_analysis_types = st.sidebar.multiselect(
-    "Analysis type", all_analysis_types, default=[]
+sel_analysis_type_display = st.sidebar.multiselect(
+    "Analysis type", all_analysis_type_display, default=[]
 )
+# Convert display names back to slugs for filtering
+sel_analysis_types = [_label_to_slug[lbl] for lbl in sel_analysis_type_display]
+
 if all_bands:
     sel_bands = st.sidebar.multiselect("Frequency band", all_bands, default=[])
 else:
@@ -238,7 +277,7 @@ any_filter_active = (
     or sel_conditions
     or sel_music
     or sel_spectrum
-    or sel_analysis_types
+    or sel_analysis_type_display
     or sel_bands
     or free_text
 )
@@ -276,6 +315,10 @@ compare_mode = st.sidebar.radio(
     ["None", "Manual (select 2–4)", "By condition / music type"],
     index=0,
 )
+
+# Grid column count — shown only in Grid + None mode, but defined here so it
+# is available before the compare-mode early-returns below.
+n_cols = st.sidebar.slider("Columns", min_value=1, max_value=6, value=3)
 
 
 # ---------------------------------------------------------------------------
@@ -358,10 +401,9 @@ if compare_mode == "Manual (select 2–4)":
     )
 
     selected_for_compare: list[str] = []
-    n_cols = 4
-    cols = st.columns(n_cols)
+    cmp_cols = st.columns(n_cols)
     for i, rec in enumerate(filtered):
-        col = cols[i % n_cols]
+        col = cmp_cols[i % n_cols]
         with col:
             checked = st.checkbox(
                 rec["filename"], key=f"cmp_{rec['path']}", value=False
@@ -373,8 +415,8 @@ if compare_mode == "Manual (select 2–4)":
     if 2 <= len(selected_for_compare) <= 4:
         st.divider()
         st.subheader("Side-by-side comparison")
-        cmp_cols = st.columns(len(selected_for_compare))
-        for col, img_path in zip(cmp_cols, selected_for_compare):
+        side_cols = st.columns(len(selected_for_compare))
+        for col, img_path in zip(side_cols, selected_for_compare):
             with col:
                 st.image(img_path, use_container_width=True)
                 st.caption(Path(img_path).name)
@@ -383,39 +425,63 @@ if compare_mode == "Manual (select 2–4)":
     st.stop()
 
 # ---------------------------------------------------------------------------
-# Normal view — grid or list
+# Normal view — results grouped by analysis type
 # ---------------------------------------------------------------------------
-if view_mode == "Grid":
-    n_cols = st.sidebar.slider("Columns", min_value=1, max_value=6, value=3)
-    cols = st.columns(n_cols)
-    for i, rec in enumerate(filtered):
-        col = cols[i % n_cols]
-        with col:
-            st.image(rec["path"], use_container_width=True)
-            st.caption(rec["relative"])
-            render_info(rec)
-else:
-    # List view — full-width with metadata
-    for rec in filtered:
-        with st.container(border=True):
-            col_img, col_meta = st.columns([2, 3])
-            with col_img:
+# Build ordered groups: (stage, analysis_type) → [records], preserving the
+# order records appear in the filtered list (already sorted by path).
+section_order: list[tuple[str, str]] = []
+section_records: dict[tuple[str, str], list[dict]] = {}
+for rec in filtered:
+    key = (rec["stage"], rec["analysis_type"])
+    if key not in section_records:
+        section_order.append(key)
+        section_records[key] = []
+    section_records[key].append(rec)
+
+for stage, analysis_type in section_order:
+    group = section_records[(stage, analysis_type)]
+    display_name = slug_to_display(analysis_type)
+
+    # Section header — show human-readable analysis-type name.
+    # Include stage prefix when multiple stages are present so the user can
+    # tell sections apart at a glance.
+    if len(section_order) > 1 and len({s for s, _ in section_order}) > 1:
+        st.subheader(f"{stage} — {display_name}")
+    else:
+        st.subheader(display_name)
+
+    if view_mode == "Grid":
+        cols = st.columns(n_cols)
+        for i, rec in enumerate(group):
+            col = cols[i % n_cols]
+            with col:
                 st.image(rec["path"], use_container_width=True)
+                st.caption(rec["relative"])
                 render_info(rec)
-            with col_meta:
-                st.markdown(f"**{rec['filename']}**")
-                st.markdown(f"- **Path**: `{rec['relative']}`")
-                if rec["stage"]:
-                    st.markdown(f"- **Stage**: `{rec['stage']}`")
-                if rec["condition"]:
-                    st.markdown(f"- **Condition**: `{rec['condition']}`")
-                if rec["music_type"]:
-                    st.markdown(f"- **Music type**: `{rec['music_type']}`")
-                if rec["spectrum_type"]:
-                    st.markdown(f"- **Spectrum type**: `{rec['spectrum_type']}`")
-                if rec["analysis_type"]:
-                    st.markdown(f"- **Analysis type**: `{rec['analysis_type']}`")
-                if rec.get("band"):
-                    st.markdown(f"- **Frequency band**: `{rec['band']}`")
-                file_size = os.path.getsize(rec["path"])
-                st.markdown(f"- **Size**: {file_size / 1024:.1f} KB")
+    else:
+        # List view — full-width with metadata
+        for rec in group:
+            with st.container(border=True):
+                col_img, col_meta = st.columns([2, 3])
+                with col_img:
+                    st.image(rec["path"], use_container_width=True)
+                    render_info(rec)
+                with col_meta:
+                    st.markdown(f"**{rec['filename']}**")
+                    st.markdown(f"- **Path**: `{rec['relative']}`")
+                    if rec["stage"]:
+                        st.markdown(f"- **Stage**: `{rec['stage']}`")
+                    if rec["condition"]:
+                        st.markdown(f"- **Condition**: `{rec['condition']}`")
+                    if rec["music_type"]:
+                        st.markdown(f"- **Music type**: `{rec['music_type']}`")
+                    if rec["spectrum_type"]:
+                        st.markdown(f"- **Spectrum type**: `{rec['spectrum_type']}`")
+                    if rec["analysis_type"]:
+                        st.markdown(
+                            f"- **Analysis type**: {slug_to_display(rec['analysis_type'])}"
+                        )
+                    if rec.get("band"):
+                        st.markdown(f"- **Frequency band**: `{rec['band']}`")
+                    file_size = os.path.getsize(rec["path"])
+                    st.markdown(f"- **Size**: {file_size / 1024:.1f} KB")

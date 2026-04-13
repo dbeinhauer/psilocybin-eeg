@@ -85,6 +85,11 @@ analyses:
 
   - id: "01-mean-variance"
     title: "Stage 01 — Mean-Variance Synchrony"
+    analysis_type_labels:
+      timeseries: "Intersubject time-series overview"
+      variance: "Intersubject variance distribution"
+      windowed: "Windowed synchrony analysis"
+      isc_matrices: "Pairwise ISC matrices per band"
     description: |
       Model-free inter-subject synchrony proxy.
       Z-scoring is applied per subject and per channel along the time axis (axis=2)
@@ -308,6 +313,12 @@ analyses:
 
   - id: "02-isc-broadband"
     title: "Stage 02 — ISC (Broadband + Per-Band)"
+    analysis_type_labels:
+      loo_isc: "Leave-one-out ISC"
+      pairwise_isc: "Pairwise ISC matrix"
+      sliding_window: "Sliding-window ISC"
+      mean_field: "Mean-Field ISC"
+      band_overlap: "Band-overlap analysis"
     description: |
       Inter-Subject Correlation (ISC) quantifies how similarly two or more subjects'
       brain responses track a shared stimulus. Both Pearson and Spearman correlations
