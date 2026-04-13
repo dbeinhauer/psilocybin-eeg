@@ -153,10 +153,7 @@ analyses:
           - "From (n_subjects, n_channels, n_times): var(axis=0) → (n_channels, n_times), then mean over channels → (n_times,)"
           - "Top panel: overlay per-subject traces, group mean, ±1 SD band"
           - "Bottom panel: channel-averaged intersubject variance over time"
-        interpretation: >
-          Top panel shows how individual subjects' channel-averaged signals
-          relate to the group mean. Bottom panel reveals temporal fluctuations
-          in intersubject variance — dips indicate moments of high synchrony.
+        interpretation: "Two-panel: per-subject traces vs group mean (top); channel-averaged intersubject variance over time (bottom) — dips mark peak synchrony moments."
         sketch_type: "timeseries_two_panel"
 
       - id: "variance_distribution"
@@ -172,11 +169,7 @@ analyses:
           - "Flatten (n_channels, n_times) variance array"
           - "Clip at 99th percentile — values beyond this are outliers and not displayed"
           - "Plot histogram with median marker and 99th-percentile right-boundary marker"
-        interpretation: >
-          Shows the distribution of intersubject variance across all channel and
-          time pairs. The 99th-percentile marker marks the right boundary — values
-          beyond it are clipped as outliers. A heavy left tail indicates many
-          low-variance (high-synchrony) time-channel pairs.
+        interpretation: "Left-heavy tail = many high-synchrony moments; 99th-percentile line marks the outlier clip boundary."
         sketch_type: "histogram"
 
       - id: "windowed_bar"
@@ -194,11 +187,7 @@ analyses:
           - "Label windows below the 10th-percentile variance (lowest 10%) as sync candidates"
           - "Top bar chart (blue): mean of the z-scored signal per window (x = time, y = mean value)"
           - "Bottom bar chart (orange): mean variance per window; green bars mark sync-candidate windows"
-        interpretation: >
-          Green bars mark windows where intersubject variance is below the 10th-percentile
-          synchrony threshold (lowest 10% variance). The top panel shows the corresponding
-          mean z-scored signal level in those windows. Windowed statistics reduce noise at
-          the cost of fine temporal resolution.
+        interpretation: "Green bars = lowest-10% variance windows (peak synchrony); top panel shows their mean z-scored signal level."
         sketch_type: "windowed_mean_var_bars"
 
       - id: "windowed_overlay"
@@ -214,12 +203,7 @@ analyses:
           - "Panel 1: mean signal time-series — per-subject traces overlaid with group mean (same as timeseries_overview panel 1)"
           - "Panel 2: continuous intersubject variance (orange) overlaid with windowed mean variance step function (red)"
           - "Panel 3: heatmap of variance per channel over time — values are positive only, reddish colormap (no blue scale)"
-        interpretation: >
-          Panel 1 shows individual subject responses relative to the group mean.
-          Panel 2 shows how the windowed step approximation tracks the continuous variance —
-          useful for identifying synchrony episodes. The heatmap reveals which electrodes
-          drive synchrony or desynchrony at each moment. Windowed statistics reduce noise
-          at the cost of fine temporal resolution.
+        interpretation: "3 panels: subject traces vs mean (1), continuous vs windowed variance (2), per-channel variance heatmap (3) — shows which electrodes drive synchrony."
         sketch_type: "windowed_overlay_panels"
 
       # ── Per-band analyses (mean_variance_bands.ipynb) ───────────────────
@@ -258,12 +242,7 @@ analyses:
           - "For each band: flatten (n_channels, n_times) variance"
           - "Clip at 99th percentile — right boundary, values beyond are outliers"
           - "Plot histogram with median marker and 99th-percentile right-boundary marker"
-        interpretation: >
-          Shows the distribution of intersubject variance across all channel and
-          time pairs for each frequency band. The 99th-percentile marker is the
-          right boundary; values beyond it are clipped as outliers. Compares
-          the shape and spread across bands — narrower, left-shifted distributions
-          indicate higher overall synchrony in that band.
+        interpretation: "Narrower, left-shifted distribution = higher overall synchrony in that band; compare shapes across delta–gamma."
         sketch_type: "histogram_facet"
 
       - id: "isc_matrices"
@@ -281,11 +260,7 @@ analyses:
           - "Average per-channel similarity values: mean_ch(s_ch) → scalar ISC(i, j)"
           - "Assemble symmetric N×N matrix per band"
           - "Plot 5 heatmaps in a grid"
-        interpretation: >
-          Each heatmap shows the pairwise intersubject correlation for one
-          frequency band. Outlier rows/columns (near zero) may indicate
-          non-responders or poor data quality. Off-diagonal mean summarises
-          group-level synchrony.
+        interpretation: "Outlier rows/columns near zero = possible non-responders; off-diagonal mean = group-level synchrony per band."
         sketch_type: "matrix_heatmap"
 
       - id: "band_windowed_analysis"
@@ -303,12 +278,7 @@ analyses:
           - "Bar figure: multi-row bar chart — top row per band = mean signal (band color), bottom row = variance (band color, green = sync)"
           - "Summary figure: windowed variance with sync spans highlighted per band"
           - "Per-band overlay figure (3 panels per band): mean signal trace, continuous variance (band color) + windowed mean line (red), channel variance heatmap (reddish colormap, positive only)"
-        interpretation: >
-          Shows time-resolved synchrony detection independently per frequency band.
-          Band colors: delta=blue, theta=orange, alpha=green, beta=red, gamma=violet.
-          The summary figure enables quick cross-band comparison of where synchrony
-          episodes occur. Per-band overlay figures add electrode-level detail.
-          Windowed statistics reduce noise at the cost of fine temporal resolution.
+        interpretation: "Time-resolved synchrony per band (delta=blue … gamma=violet); summary figure enables cross-band comparison; per-band overlay adds electrode-level detail."
         sketch_type: "grid_timeseries_heatmap"
 
   - id: "02-isc-broadband"
@@ -406,11 +376,7 @@ analyses:
           - "Figure 1: bar chart of mean Pearson LOO-ISC across channels per medium window; bars are colour-coded (green = above threshold, blue = positive below threshold, red = negative); error bars show per-window variance; dashed line marks the grand mean"
           - "Figure 2: stair-wise line plot with three overlaid traces (light blue = fine window, dark blue = medium window, dashed red = coarse window); below it, a heatmap at fine-time-window resolution showing per-channel ISC"
           - "Figure 3: stepped, overlaid line plot comparing Pearson (solid blue) and Spearman (dashed orange) windowed LOO-ISC per medium window; area below zero shaded red"
-        interpretation: |
-          Multi-scale view reveals both transient and sustained synchrony patterns.
-          The heatmap reveals which electrodes drive synchrony (frontal vs occipital)
-          at fine temporal resolution. Red-shaded area in Figure 3 highlights
-          windows of desynchrony.
+        interpretation: "3-scale overlay identifies transient vs sustained synchrony; electrode heatmap shows spatial drivers (frontal vs occipital); red shading = desynchrony windows."
         sketch_type: "multiscale_sw_isc"
 
       - id: "mean_field_loo_isc"
@@ -508,9 +474,7 @@ analyses:
           - "Bandpass filter per band"
           - "Pairwise ISC per band (Pearson + Spearman)"
           - "Per band: side-by-side subject-to-subject correlation matrices (diagonal blank), per-subject mean off-diagonal bar charts, overlaid histogram of off-diagonal entries"
-        interpretation: |
-          Identifies frequency-specific inter-subject relationships.
-          Clusters in specific bands may reveal band-selective neural coupling.
+        interpretation: "Frequency-specific pairwise synchrony; outlier subjects visible per band; clusters reveal band-selective neural coupling."
         sketch_type: "matrix_heatmap_no_diag"
 
       - id: "band_multiscale_sliding_window_isc"
@@ -590,7 +554,7 @@ analyses:
           - "Average wavelet power across subjects"
           - "Average across channels → (n_freqs, n_times) image"
           - "Plot as 2D heatmap (frequency × time)"
-        interpretation: "Bright regions = high power at that frequency and time. Alpha suppression during high-arousal musical passages and theta entrainment to rhythmic stimuli (e.g. psytrance beats) are expected markers of stimulus-driven engagement."
+        interpretation: "Bright regions = high power; expect alpha suppression during high-arousal passages and theta entrainment to psytrance beats."
         sketch_type: "timeseries_heatmap"
 
       - id: "band_power_tc"
