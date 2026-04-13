@@ -990,7 +990,20 @@ def render_sketch(sketch_type: str) -> None:
 # ---------------------------------------------------------------------------
 st.sidebar.header("Analysis Group")
 group_options = {f"{a['id']} — {a['title']}": a for a in analyses}
-selected_label = st.sidebar.selectbox("Select analysis:", list(group_options.keys()))
+_group_keys = list(group_options.keys())
+
+# Pre-select analysis when arriving from the Results Browser via ?analysis_id=
+_requested_aid = st.query_params.get("analysis_id", "")
+_default_index = 0
+if _requested_aid:
+    for _i, _key in enumerate(_group_keys):
+        if _key.startswith(_requested_aid):
+            _default_index = _i
+            break
+
+selected_label = st.sidebar.selectbox(
+    "Select analysis:", _group_keys, index=_default_index
+)
 selected = group_options[selected_label]
 
 # ---------------------------------------------------------------------------
