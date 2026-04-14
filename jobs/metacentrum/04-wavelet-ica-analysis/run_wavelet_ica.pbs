@@ -8,15 +8,17 @@
 # ---------------------------------------------------------------------------
 # Stage-04 wavelet-ICA / PCA analysis (broadband + per-band).
 #
-# Runs all four decomposition strategies (Super-Brain, Inter-Subject,
-# Temporal, Inverted Super-Brain) on both broadband and five frequency
-# bands (delta, theta, alpha, beta, gamma) for the Placebo condition on
-# both music types.  Each approach is saved under its own stage directory:
+# Runs all five decomposition strategies (Super-Brain, Inter-Subject,
+# Temporal, Inverted Super-Brain, Subject-Frequency) on both broadband
+# and five frequency bands (delta, theta, alpha, beta, gamma) for the
+# Placebo condition on both music types.  Each approach is saved under
+# its own stage directory:
 #
 #   plots/04-superbrain-wavelet-ica-analysis/
 #   plots/04-intersubject-wavelet-ica-analysis/
 #   plots/04-temporal-wavelet-ica-analysis/
 #   plots/04-inverted-superbrain-wavelet-ica-analysis/
+#   plots/04-subject-frequency-wavelet-ica-analysis/
 #   plots/04-wavelet-ica-cross-band-summary/
 #
 # Matches the notebooks under notebooks/04-wavelet-ica-analysis/ and

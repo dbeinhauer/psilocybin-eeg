@@ -12,14 +12,17 @@ from src.analysis.wavelet_ica import (
     InterSubjectResult,
     TemporalResult,
     InvertedSuperBrainResult,
+    SubjectFrequencyResult,
     reshape_superbrain,
     reshape_intersubject,
     reshape_temporal,
     reshape_inverted_superbrain,
+    reshape_subject_frequency,
     decompose_superbrain,
     decompose_intersubject,
     decompose_temporal,
     decompose_inverted_superbrain,
+    decompose_subject_frequency,
 )
 
 # ---------------------------------------------------------------------------
@@ -84,6 +87,16 @@ class TestReshapeInvertedSuperbrain:
     def test_wrong_ndim_raises(self) -> None:
         with pytest.raises(ValueError, match="4-D"):
             reshape_inverted_superbrain(np.zeros((3, 4, 5)))
+
+
+class TestReshapeSubjectFrequency:
+    def test_output_shape(self, synthetic_data: np.ndarray) -> None:
+        result = reshape_subject_frequency(synthetic_data)
+        assert result.shape == (N_SUBJECTS * N_FREQS, N_CHANNELS * N_TIMES)
+
+    def test_wrong_ndim_raises(self) -> None:
+        with pytest.raises(ValueError, match="4-D"):
+            reshape_subject_frequency(np.zeros((3, 4, 5)))
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +226,41 @@ class TestDecomposeInvertedSuperbrain:
             decompose_inverted_superbrain(np.zeros((3, 4, 5)), n_pca=5, n_ica=3)
 
 
+class TestDecomposeSubjectFrequency:
+    def test_result_type(self, synthetic_data: np.ndarray) -> None:
+        result = decompose_subject_frequency(synthetic_data, n_pca=N_PCA, n_ica=N_ICA)
+        assert isinstance(result, SubjectFrequencyResult)
+
+    def test_shapes(self, synthetic_data: np.ndarray) -> None:
+        r = decompose_subject_frequency(synthetic_data, n_pca=N_PCA, n_ica=N_ICA)
+        assert r.pca_scores.shape == (N_SUBJECTS * N_FREQS, N_PCA)
+        assert r.pca_components.shape == (N_PCA, N_CHANNELS * N_TIMES)
+        assert r.pca_explained_variance_ratio.shape == (N_PCA,)
+        assert r.ica_sources.shape == (N_SUBJECTS * N_FREQS, N_ICA)
+        assert r.ica_mixing.shape == (N_CHANNELS * N_TIMES, N_ICA)
+
+    def test_dimension_attrs(self, synthetic_data: np.ndarray) -> None:
+        r = decompose_subject_frequency(synthetic_data, n_pca=N_PCA, n_ica=N_ICA)
+        assert r.n_subjects == N_SUBJECTS
+        assert r.n_channels == N_CHANNELS
+        assert r.n_freqs == N_FREQS
+        assert r.n_times == N_TIMES
+
+    def test_reproducibility(self, synthetic_data: np.ndarray) -> None:
+        r1 = decompose_subject_frequency(
+            synthetic_data, n_pca=N_PCA, n_ica=N_ICA, random_state=0
+        )
+        r2 = decompose_subject_frequency(
+            synthetic_data, n_pca=N_PCA, n_ica=N_ICA, random_state=0
+        )
+        np.testing.assert_allclose(r1.pca_scores, r2.pca_scores, rtol=1e-5, atol=1e-8)
+        np.testing.assert_allclose(r1.ica_sources, r2.ica_sources, rtol=1e-5, atol=1e-8)
+
+    def test_wrong_ndim_raises(self) -> None:
+        with pytest.raises(ValueError, match="4-D"):
+            decompose_subject_frequency(np.zeros((3, 4, 5)), n_pca=5, n_ica=3)
+
+
 # ---------------------------------------------------------------------------
 # Cross-cutting tests
 # ---------------------------------------------------------------------------
@@ -228,6 +276,7 @@ class TestExplainedVariance:
             decompose_intersubject,
             decompose_temporal,
             decompose_inverted_superbrain,
+            decompose_subject_frequency,
         ],
     )
     def test_variance_ratio_valid(
@@ -248,6 +297,7 @@ class TestInputNotMutated:
             decompose_intersubject,
             decompose_temporal,
             decompose_inverted_superbrain,
+            decompose_subject_frequency,
         ],
     )
     def test_input_unchanged(self, synthetic_data: np.ndarray, decompose_fn) -> None:

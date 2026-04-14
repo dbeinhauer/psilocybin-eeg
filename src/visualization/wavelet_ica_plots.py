@@ -1403,6 +1403,251 @@ def plot_inverted_cross_component_correlation(
 
 
 # ===================================================================
+# Subject-Frequency plots (10)
+# ===================================================================
+
+
+def plot_subjfreq_pca_scree(
+    explained_variance_ratio: np.ndarray,
+    *,
+    label: str,
+    save_path: Optional[Path] = None,
+) -> Figure:
+    """PCA scree plot for the Subject-Frequency decomposition."""
+    return plot_superbrain_pca_scree(
+        explained_variance_ratio, label=f"SubjFreq — {label}", save_path=save_path
+    )
+
+
+def plot_subjfreq_pca_channel_time_maps(
+    components_2d: np.ndarray,
+    sfreq: float,
+    *,
+    n_show: int = 6,
+    label: str,
+    save_path: Optional[Path] = None,
+) -> Figure:
+    """Channel × time component maps (heatmaps).
+
+    :param components_2d: ``(n_pca, C, T)`` PCA components reshaped.
+    :param sfreq: Sampling frequency (Hz).
+    """
+    n_show = min(n_show, components_2d.shape[0])
+    n_cols = min(3, n_show)
+    n_rows = int(np.ceil(n_show / n_cols))
+    T = components_2d.shape[2]
+    time_extent = T / sfreq
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows))
+    flat = np.array(axes).flatten() if n_show > 1 else [axes]
+    for i in range(n_show):
+        ax = flat[i]
+        im = ax.imshow(
+            components_2d[i],
+            aspect="auto",
+            origin="lower",
+            extent=[0, time_extent, 0, components_2d.shape[1]],
+            cmap="RdBu_r",
+        )
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("Channel index")
+        ax.set_title(f"PC {i + 1}")
+        fig.colorbar(im, ax=ax)
+    for i in range(n_show, len(flat)):
+        flat[i].set_visible(False)
+    fig.suptitle(f"Channel × Time Component Maps — {label}", fontsize=13)
+    fig.tight_layout()
+    _save_fig(fig, save_path)
+    plt.close(fig)
+    return fig
+
+
+def plot_subjfreq_pca_subject_freq_profiles(
+    scores_3d: np.ndarray,
+    freqs: np.ndarray,
+    *,
+    n_show: int = 4,
+    label: str,
+    save_path: Optional[Path] = None,
+) -> Figure:
+    """Per-subject frequency profiles of PCA component scores.
+
+    :param scores_3d: ``(S, F, n_pca)`` per-subject PCA scores.
+    :param freqs: Morlet frequencies (Hz).
+    """
+    n_show = min(n_show, scores_3d.shape[2])
+    n_subj = scores_3d.shape[0]
+
+    fig, axes = plt.subplots(n_show, 1, figsize=(10, 2.5 * n_show), sharex=True)
+    axes = _ensure_axes_iterable(axes)
+    for i, ax in enumerate(axes):
+        for s in range(n_subj):
+            ax.plot(freqs, scores_3d[s, :, i], lw=0.8, alpha=0.6, label=f"S{s + 1}")
+        ax.set_ylabel(f"PC {i + 1}")
+    axes[-1].set_xlabel("Frequency (Hz)")
+    axes[0].legend(fontsize=6, ncol=min(n_subj, 8), loc="upper right")
+    fig.suptitle(f"Per-Subject Frequency Profiles — {label}", fontsize=13)
+    fig.tight_layout()
+    _save_fig(fig, save_path)
+    plt.close(fig)
+    return fig
+
+
+def plot_subjfreq_pca_topomaps(
+    channel_marginal: np.ndarray,
+    info,
+    *,
+    n_show: int = 6,
+    label: str,
+    save_path: Optional[Path] = None,
+) -> Optional[Figure]:
+    """Topomaps of time-averaged PCA channel loadings.
+
+    :param channel_marginal: ``(n_pca, C)`` mean loading across time.
+    :param info: MNE Info.
+    """
+    return plot_intersubject_pca_topomaps(
+        channel_marginal, info, n_show=n_show, label=label, save_path=save_path
+    )
+
+
+def plot_subjfreq_cross_component_correlation(
+    pca_scores: np.ndarray,
+    ica_sources: np.ndarray,
+    *,
+    label: str,
+    save_path: Optional[Path] = None,
+) -> Figure:
+    """Cross-component correlation (PCA + ICA, subject-frequency approach)."""
+    return plot_superbrain_cross_component_correlation(
+        pca_scores, ica_sources, label=label, save_path=save_path
+    )
+
+
+def plot_subjfreq_ica_channel_time_maps(
+    ica_mixing_2d: np.ndarray,
+    sfreq: float,
+    *,
+    n_show: int = 6,
+    label: str,
+    save_path: Optional[Path] = None,
+) -> Figure:
+    """ICA channel × time mixing maps.
+
+    :param ica_mixing_2d: ``(C, T, n_ica)`` ICA mixing reshaped.
+    :param sfreq: Sampling frequency (Hz).
+    """
+    n_ica = ica_mixing_2d.shape[2]
+    n_show = min(n_show, n_ica)
+    n_cols = min(3, n_show)
+    n_rows = int(np.ceil(n_show / n_cols))
+    T = ica_mixing_2d.shape[1]
+    time_extent = T / sfreq
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows))
+    flat = np.array(axes).flatten() if n_show > 1 else [axes]
+    for i in range(n_show):
+        ax = flat[i]
+        im = ax.imshow(
+            ica_mixing_2d[:, :, i],
+            aspect="auto",
+            origin="lower",
+            extent=[0, time_extent, 0, ica_mixing_2d.shape[0]],
+            cmap="RdBu_r",
+        )
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("Channel index")
+        ax.set_title(f"IC {i + 1}")
+        fig.colorbar(im, ax=ax)
+    for i in range(n_show, len(flat)):
+        flat[i].set_visible(False)
+    fig.suptitle(f"ICA Channel × Time Maps — {label}", fontsize=13)
+    fig.tight_layout()
+    _save_fig(fig, save_path)
+    plt.close(fig)
+    return fig
+
+
+def plot_subjfreq_ica_topomap_mean(
+    ica_ch_mean: np.ndarray,
+    info,
+    *,
+    n_show: int = 6,
+    label: str,
+    save_path: Optional[Path] = None,
+) -> Optional[Figure]:
+    """ICA topomap (mean across time) for Subject-Frequency.
+
+    :param ica_ch_mean: ``(C, n_ica)`` time-averaged channel ICA loadings.
+    :param info: MNE Info.
+    """
+    return plot_superbrain_ica_topomap_mean(
+        ica_ch_mean, info, n_show=n_show, label=label, save_path=save_path
+    )
+
+
+def plot_subjfreq_ica_topomap_variance(
+    ica_ch_var: np.ndarray,
+    info,
+    *,
+    n_show: int = 6,
+    label: str,
+    save_path: Optional[Path] = None,
+) -> Optional[Figure]:
+    """ICA topomap (variance across time) for Subject-Frequency.
+
+    :param ica_ch_var: ``(C, n_ica)`` variance of channel ICA loadings.
+    :param info: MNE Info.
+    """
+    return plot_superbrain_ica_topomap_variance(
+        ica_ch_var, info, n_show=n_show, label=label, save_path=save_path
+    )
+
+
+def plot_subjfreq_ica_timecourses(
+    ica_time_profiles: np.ndarray,
+    sfreq: float,
+    *,
+    label: str,
+    save_path: Optional[Path] = None,
+) -> Figure:
+    """ICA time courses (channel-averaged) for Subject-Frequency.
+
+    :param ica_time_profiles: ``(n_ica, T)`` channel-averaged IC time profiles.
+    :param sfreq: Sampling frequency (Hz).
+    """
+    n_ica = ica_time_profiles.shape[0]
+    time = np.arange(ica_time_profiles.shape[1]) / sfreq
+
+    fig, axes = plt.subplots(n_ica, 1, figsize=(14, 2 * n_ica), sharex=True)
+    axes = _ensure_axes_iterable(axes)
+    for i, ax in enumerate(axes):
+        ax.plot(time, ica_time_profiles[i], lw=0.6, color="steelblue")
+        ax.set_ylabel(f"IC {i + 1}")
+    axes[-1].set_xlabel("Time (s)")
+    fig.suptitle(f"ICA Time Courses (channel-averaged) — {label}", fontsize=13)
+    fig.tight_layout()
+    _save_fig(fig, save_path)
+    plt.close(fig)
+    return fig
+
+
+def plot_subjfreq_ica_interindividual_correlation(
+    ica_scores_3d: np.ndarray,
+    *,
+    label: str,
+    save_path: Optional[Path] = None,
+) -> Figure:
+    """Inter-individual IC correlations (frequency-based) for Subject-Frequency.
+
+    :param ica_scores_3d: ``(S, F, n_ica)`` per-subject frequency IC scores.
+    """
+    return plot_intersubject_ica_interindividual_correlation(
+        ica_scores_3d, label=label, save_path=save_path
+    )
+
+
+# ===================================================================
 # Cross-band comparison plots
 # ===================================================================
 

@@ -8,6 +8,7 @@ Implements the production version of the workflows demonstrated in
 * ``wavelet_ica_intersubject.ipynb``
 * ``wavelet_ica_temporal.ipynb``
 * ``wavelet_ica_inverted_superbrain.ipynb``
+* ``wavelet_ica_subject_frequency.ipynb``
 
 For each requested ``(condition, music_type)`` the script:
 
@@ -39,6 +40,10 @@ For each requested ``(condition, music_type)`` the script:
            04-inverted-superbrain-wavelet-ica-analysis/<Condition>_<MusicType>/
                broadband/inverted_superbrain/*.png
                bands/inverted_superbrain/<band>_*.png
+               bands/cross_band_scree/*.png
+           04-subject-frequency-wavelet-ica-analysis/<Condition>_<MusicType>/
+               broadband/subject_frequency/*.png
+               bands/subject_frequency/<band>_*.png
                bands/cross_band_scree/*.png
            04-wavelet-ica-cross-band-summary/<Condition>_<MusicType>/
                bands/variance_summary/variance_summary_*.png
@@ -82,10 +87,12 @@ from src.analysis.isc import FREQUENCY_BANDS, compute_loo_isc  # noqa: E402
 from src.analysis.wavelet_ica import (  # noqa: E402
     InterSubjectResult,
     InvertedSuperBrainResult,
+    SubjectFrequencyResult,
     SuperBrainResult,
     TemporalResult,
     decompose_intersubject,
     decompose_inverted_superbrain,
+    decompose_subject_frequency,
     decompose_superbrain,
     decompose_temporal,
 )
@@ -121,6 +128,16 @@ from src.visualization.wavelet_ica_plots import (  # noqa: E402
     plot_inverted_ica_topomap_mean,
     plot_inverted_ica_topomap_variance,
     plot_inverted_pca_scree,
+    plot_subjfreq_cross_component_correlation,
+    plot_subjfreq_ica_channel_time_maps,
+    plot_subjfreq_ica_interindividual_correlation,
+    plot_subjfreq_ica_timecourses,
+    plot_subjfreq_ica_topomap_mean,
+    plot_subjfreq_ica_topomap_variance,
+    plot_subjfreq_pca_channel_time_maps,
+    plot_subjfreq_pca_scree,
+    plot_subjfreq_pca_subject_freq_profiles,
+    plot_subjfreq_pca_topomaps,
     plot_superbrain_cross_component_correlation,
     plot_superbrain_ica_interindividual_correlation,
     plot_superbrain_ica_timecourses,
@@ -159,6 +176,7 @@ _APPROACH_STAGE_DIRS: dict[str, str] = {
     "intersubject": "04-intersubject-wavelet-ica-analysis",
     "temporal": "04-temporal-wavelet-ica-analysis",
     "inverted_superbrain": "04-inverted-superbrain-wavelet-ica-analysis",
+    "subject_frequency": "04-subject-frequency-wavelet-ica-analysis",
 }
 
 #: Maps approach key → human-readable display name used in plot titles and
@@ -169,6 +187,7 @@ _APPROACH_DISPLAY_NAMES: dict[str, str] = {
     "intersubject": "Inter-Subject",
     "temporal": "Temporal",
     "inverted_superbrain": "Inverted Super-Brain",
+    "subject_frequency": "Subject-Frequency",
 }
 
 #: Stage directory for cross-approach band comparison plots.
@@ -184,9 +203,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Run the Stage-04 wavelet-ICA / PCA analysis on preprocessed EEG "
-            "data. Produces all four decomposition approaches (Super-Brain, "
-            "Inter-Subject, Temporal, Inverted Super-Brain) and writes every "
-            "plot into the canonical per-condition layout."
+            "data. Produces all five decomposition approaches (Super-Brain, "
+            "Inter-Subject, Temporal, Inverted Super-Brain, Subject-Frequency) "
+            "and writes every plot into the canonical per-condition layout."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -828,6 +847,121 @@ def _run_inverted_superbrain(
 
 
 # ---------------------------------------------------------------------------
+# Subject-Frequency approach
+# ---------------------------------------------------------------------------
+
+
+def _run_subject_frequency(
+    data_4d: np.ndarray,
+    sfreq: float,
+    freqs: np.ndarray,
+    info,
+    *,
+    label: str,
+    n_pca: int,
+    n_ica: int,
+    random_state: int,
+    save_dir: Path,
+) -> SubjectFrequencyResult:
+    """Subject-Frequency decomposition + 10 plots."""
+    _logger.info(f"[{label}] === Subject-Frequency decomposition ===")
+    out_dir = save_dir / "broadband" / "subject_frequency"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    r = decompose_subject_frequency(
+        data_4d, n_pca=n_pca, n_ica=n_ica, random_state=random_state
+    )
+    S, C, F, T = r.n_subjects, r.n_channels, r.n_freqs, r.n_times
+
+    # PCA components in (K, C, T) — channel × time maps.
+    pca_components_ct = r.pca_components.reshape(n_pca, C, T)
+    # Scores reshape: (S*F, K) -> (S, F, K).
+    scores_3d = r.pca_scores.reshape(S, F, n_pca)
+    # Channel marginal across time: (K, C).
+    channel_marginal = pca_components_ct.mean(axis=2)
+
+    # ICA mixing in (C, T, n_ica).
+    ica_mixing_ct = r.ica_mixing.reshape(C, T, n_ica)
+    # ICA scores in (S, F, n_ica).
+    ica_scores_3d = r.ica_sources.reshape(S, F, n_ica)
+    # Channel-averaged ICA time profiles: mean over C → (n_ica, T).
+    ica_time_profiles = ica_mixing_ct.mean(axis=0).T  # (n_ica, T)
+    # Time-averaged ICA channel loadings for topomaps.
+    ica_ch_mean = ica_mixing_ct.mean(axis=1)  # (C, n_ica)
+    ica_ch_var = ica_mixing_ct.var(axis=1)  # (C, n_ica)
+
+    # Plot 1 — PCA scree.
+    plot_subjfreq_pca_scree(
+        r.pca_explained_variance_ratio,
+        label=label,
+        save_path=out_dir / f"pca_scree_{label}.png",
+    )
+    # Plot 2 — PCA channel × time maps.
+    plot_subjfreq_pca_channel_time_maps(
+        pca_components_ct,
+        sfreq,
+        label=label,
+        save_path=out_dir / f"pca_channel_time_maps_{label}.png",
+    )
+    # Plot 3 — per-subject frequency profiles.
+    plot_subjfreq_pca_subject_freq_profiles(
+        scores_3d,
+        freqs,
+        label=label,
+        save_path=out_dir / f"pca_subject_freq_profiles_{label}.png",
+    )
+    # Plot 4 — PCA topomaps (time-averaged).
+    plot_subjfreq_pca_topomaps(
+        channel_marginal,
+        info,
+        label=label,
+        save_path=out_dir / f"pca_topomaps_{label}.png",
+    )
+    # Plot 5 — Cross-component correlation.
+    plot_subjfreq_cross_component_correlation(
+        r.pca_scores,
+        r.ica_sources,
+        label=label,
+        save_path=out_dir / f"cross_component_correlation_{label}.png",
+    )
+    # Plot 6 — ICA channel × time maps.
+    plot_subjfreq_ica_channel_time_maps(
+        ica_mixing_ct,
+        sfreq,
+        label=label,
+        save_path=out_dir / f"ica_channel_time_maps_{label}.png",
+    )
+    # Plot 7 — ICA topomap (mean).
+    plot_subjfreq_ica_topomap_mean(
+        ica_ch_mean,
+        info,
+        label=label,
+        save_path=out_dir / f"ica_topomap_mean_{label}.png",
+    )
+    # Plot 8 — ICA topomap (variance).
+    plot_subjfreq_ica_topomap_variance(
+        ica_ch_var,
+        info,
+        label=label,
+        save_path=out_dir / f"ica_topomap_variance_{label}.png",
+    )
+    # Plot 9 — ICA time courses (channel-averaged).
+    plot_subjfreq_ica_timecourses(
+        ica_time_profiles,
+        sfreq,
+        label=label,
+        save_path=out_dir / f"ica_timecourses_{label}.png",
+    )
+    # Plot 10 — Inter-individual IC correlations (frequency scores).
+    plot_subjfreq_ica_interindividual_correlation(
+        ica_scores_3d,
+        label=label,
+        save_path=out_dir / f"ica_interindividual_correlation_{label}.png",
+    )
+    return r
+
+
+# ---------------------------------------------------------------------------
 # Per-band helpers — each _run_<approach>_band writes into
 #   save_dir / "bands" / <approach> / <band>_<plot>.png
 # following the canonical layout.
@@ -1213,8 +1347,101 @@ def _run_inverted_superbrain_band(
     return r
 
 
+def _run_subject_frequency_band(
+    data_4d: np.ndarray,
+    sfreq: float,
+    freqs: np.ndarray,
+    info,
+    *,
+    band: str,
+    label: str,
+    n_pca: int,
+    n_ica: int,
+    random_state: int,
+    out_dir: Path,
+) -> SubjectFrequencyResult:
+    """Subject-Frequency decomposition for a single band — band-prefixed plots."""
+    band_label = f"{label} [{band}]"
+    _logger.info(f"[{band_label}] === Subject-Frequency (band) ===")
+
+    r = decompose_subject_frequency(
+        data_4d, n_pca=n_pca, n_ica=n_ica, random_state=random_state
+    )
+    S, C, F, T = r.n_subjects, r.n_channels, r.n_freqs, r.n_times
+
+    pca_components_ct = r.pca_components.reshape(n_pca, C, T)
+    scores_3d = r.pca_scores.reshape(S, F, n_pca)
+    channel_marginal = pca_components_ct.mean(axis=2)
+
+    ica_mixing_ct = r.ica_mixing.reshape(C, T, r.ica_sources.shape[1])
+    ica_scores_3d = r.ica_sources.reshape(S, F, r.ica_sources.shape[1])
+    ica_time_profiles = ica_mixing_ct.mean(axis=0).T
+    ica_ch_mean = ica_mixing_ct.mean(axis=1)
+    ica_ch_var = ica_mixing_ct.var(axis=1)
+
+    plot_subjfreq_pca_scree(
+        r.pca_explained_variance_ratio,
+        label=band_label,
+        save_path=out_dir / f"{band}_pca_scree_{label}.png",
+    )
+    plot_subjfreq_pca_channel_time_maps(
+        pca_components_ct,
+        sfreq,
+        label=band_label,
+        save_path=out_dir / f"{band}_pca_channel_time_maps_{label}.png",
+    )
+    plot_subjfreq_pca_subject_freq_profiles(
+        scores_3d,
+        freqs,
+        label=band_label,
+        save_path=out_dir / f"{band}_pca_subject_freq_profiles_{label}.png",
+    )
+    plot_subjfreq_pca_topomaps(
+        channel_marginal,
+        info,
+        label=band_label,
+        save_path=out_dir / f"{band}_pca_topomaps_{label}.png",
+    )
+    plot_subjfreq_cross_component_correlation(
+        r.pca_scores,
+        r.ica_sources,
+        label=band_label,
+        save_path=out_dir / f"{band}_cross_component_correlation_{label}.png",
+    )
+    plot_subjfreq_ica_channel_time_maps(
+        ica_mixing_ct,
+        sfreq,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_channel_time_maps_{label}.png",
+    )
+    plot_subjfreq_ica_topomap_mean(
+        ica_ch_mean,
+        info,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_topomap_mean_{label}.png",
+    )
+    plot_subjfreq_ica_topomap_variance(
+        ica_ch_var,
+        info,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_topomap_variance_{label}.png",
+    )
+    plot_subjfreq_ica_timecourses(
+        ica_time_profiles,
+        sfreq,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_timecourses_{label}.png",
+    )
+    plot_subjfreq_ica_interindividual_correlation(
+        ica_scores_3d,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_interindividual_correlation_{label}.png",
+    )
+    return r
+
+
 # ---------------------------------------------------------------------------
-# Orchestrator: run all four approaches for a single band
+# Orchestrator: run all five approaches for a single band
 # ---------------------------------------------------------------------------
 
 
@@ -1231,12 +1458,13 @@ def _run_all_approaches_for_band(
     random_state: int,
     approach_save_dirs: dict[str, Path],
 ) -> dict[str, np.ndarray]:
-    """Run all four decompositions for a single frequency band.
+    """Run all five decompositions for a single frequency band.
 
     Returns ``{approach: explained_variance_ratio}`` for cross-band summaries.
 
     :param approach_save_dirs: Mapping from approach key (``"superbrain"``,
-        ``"intersubject"``, ``"temporal"``, ``"inverted_superbrain"``) to the
+        ``"intersubject"``, ``"temporal"``, ``"inverted_superbrain"``,
+        ``"subject_frequency"``) to the
         per-approach dataset root directory.  Each approach writes its band
         plots under ``<approach_save_dirs[approach]>/bands/<approach>/``.
     """
@@ -1307,6 +1535,22 @@ def _run_all_approaches_for_band(
         r_inv.pca_explained_variance_ratio
     )
 
+    r_sf = _run_subject_frequency_band(
+        data_4d,
+        sfreq,
+        freqs,
+        info,
+        band=band,
+        label=label,
+        n_pca=n_pca,
+        n_ica=n_ica,
+        random_state=random_state,
+        out_dir=approaches_dir["subject_frequency"],
+    )
+    evr[_APPROACH_DISPLAY_NAMES["subject_frequency"]] = (
+        r_sf.pca_explained_variance_ratio
+    )
+
     return evr
 
 
@@ -1330,7 +1574,7 @@ def _run_band_analysis(
 
     1. Band-pass filter the raw EEG data.
     2. Compute 4-D wavelet-power on the filtered data.
-    3. Run all four decomposition approaches.
+    3. Run all five decomposition approaches.
 
     Then produce per-approach cross-band scree plots (written into each
     approach's own directory) and the cross-approach variance summary
@@ -1519,6 +1763,17 @@ if __name__ == "__main__":
                 n_ica=args.n_ica,
                 random_state=args.random_state,
                 save_dir=approach_save_dirs["inverted_superbrain"],
+            )
+            _run_subject_frequency(
+                data_4d,
+                sfreq,
+                freqs,
+                info,
+                label=dataset_key,
+                n_pca=args.n_pca,
+                n_ica=args.n_ica,
+                random_state=args.random_state,
+                save_dir=approach_save_dirs["subject_frequency"],
             )
 
         # ── Per-band decomposition ───────────────────────────────────────

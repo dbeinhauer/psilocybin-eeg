@@ -1,7 +1,7 @@
 """
 PCA / ICA decomposition of 4-D wavelet-power tensors.
 
-Four reshape strategies project the ``(n_subjects, n_channels, n_freqs,
+Five reshape strategies project the ``(n_subjects, n_channels, n_freqs,
 n_times)`` wavelet-power array into a 2-D matrix suitable for sklearn
 ``PCA`` → ``FastICA``.  Each strategy highlights a different aspect of the
 data (spatial vs. spectral vs. temporal structure).
@@ -13,6 +13,7 @@ data (spatial vs. spectral vs. temporal structure).
 | 2 | Inter-Subject          | ``S × T``         | ``C × F``        |
 | 3 | Temporal               | ``S × C``         | ``F × T``        |
 | 4 | Inverted Super-Brain   | ``S × C × F``     | time ``(T,)``    |
+| 5 | Subject-Frequency      | ``S × F``         | ``C × T``        |
 +---+------------------------+-------------------+------------------+
 
 All functions are **pure** (no I/O, no plotting) and never mutate input
@@ -157,6 +158,34 @@ class InvertedSuperBrainResult:
     n_times: int
 
 
+@dataclass(frozen=True)
+class SubjectFrequencyResult:
+    """Results of Subject-Frequency PCA/ICA decomposition.
+
+    Observation axis: ``S × F``; feature axis: ``C × T``.
+
+    :param pca_scores: ``(S*F, n_pca)`` — PCA-transformed activations.
+    :param pca_components: ``(n_pca, C*T)`` — PCA loading vectors.
+    :param pca_explained_variance_ratio: ``(n_pca,)`` — fraction of variance.
+    :param ica_sources: ``(S*F, n_ica)`` — independent component activations.
+    :param ica_mixing: ``(C*T, n_ica)`` — ICA mixing matrix.
+    :param n_subjects: ``S``.
+    :param n_channels: ``C``.
+    :param n_freqs: ``F``.
+    :param n_times: ``T``.
+    """
+
+    pca_scores: np.ndarray
+    pca_components: np.ndarray
+    pca_explained_variance_ratio: np.ndarray
+    ica_sources: np.ndarray
+    ica_mixing: np.ndarray
+    n_subjects: int
+    n_channels: int
+    n_freqs: int
+    n_times: int
+
+
 # ---------------------------------------------------------------------------
 # Reshape functions
 # ---------------------------------------------------------------------------
@@ -207,6 +236,18 @@ def reshape_inverted_superbrain(data: np.ndarray) -> np.ndarray:
     _validate_4d(data)
     S, C, F, T = data.shape
     return np.ascontiguousarray(data.reshape(S * C * F, T))
+
+
+def reshape_subject_frequency(data: np.ndarray) -> np.ndarray:
+    """Reshape for Subject-Frequency: observations = S × F, features = C × T.
+
+    :param data: ``(S, C, F, T)`` wavelet-power tensor.
+    :return: ``(S*F, C*T)`` 2-D matrix.
+    """
+    _validate_4d(data)
+    S, C, F, T = data.shape
+    # Transpose to (S, F, C, T) then flatten appropriately.
+    return np.ascontiguousarray(data.transpose(0, 2, 1, 3).reshape(S * F, C * T))
 
 
 # ---------------------------------------------------------------------------
@@ -363,6 +404,39 @@ def decompose_inverted_superbrain(
         matrix, n_pca, n_ica, random_state
     )
     return InvertedSuperBrainResult(
+        pca_scores=pca_scores,
+        pca_components=pca_comp,
+        pca_explained_variance_ratio=evr,
+        ica_sources=ica_src,
+        ica_mixing=ica_mix,
+        n_subjects=S,
+        n_channels=C,
+        n_freqs=F,
+        n_times=T,
+    )
+
+
+def decompose_subject_frequency(
+    data: np.ndarray,
+    n_pca: int = 20,
+    n_ica: int = 10,
+    random_state: int = 42,
+) -> SubjectFrequencyResult:
+    """PCA/ICA decomposition using the Subject-Frequency reshape.
+
+    :param data: ``(S, C, F, T)`` wavelet-power tensor.
+    :param n_pca: Number of PCA components to retain.
+    :param n_ica: Number of ICA components to extract.
+    :param random_state: Seed for reproducibility.
+    :return: :class:`SubjectFrequencyResult`.
+    """
+    _validate_4d(data)
+    S, C, F, T = data.shape
+    matrix = reshape_subject_frequency(data)
+    pca_scores, pca_comp, evr, ica_src, ica_mix = _run_pca_ica(
+        matrix, n_pca, n_ica, random_state
+    )
+    return SubjectFrequencyResult(
         pca_scores=pca_scores,
         pca_components=pca_comp,
         pca_explained_variance_ratio=evr,

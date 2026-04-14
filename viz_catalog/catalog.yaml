@@ -1305,15 +1305,153 @@ analyses:
         sketch_type: "timeseries_multiband"
 
   # =========================================================================
+  # Stage 04 — Wavelet-ICA: Subject-Frequency
+  # =========================================================================
+  - id: "04-subject-frequency-wavelet-ica"
+    title: "Stage 04-E — Wavelet-ICA: Subject-Frequency"
+    description: |
+      **Subject-Frequency** decomposition of the 4D wavelet-power tensor.
+      Observations = S × F; features = C × T.
+
+      PCA + FastICA extract channel-time motifs that are consistent across
+      subjects and frequencies, capturing spatio-temporal patterns that
+      characterise how different frequency bands share spatial dynamics.
+
+      Both broadband and per-band variants are produced.
+    notebooks:
+      - path: "notebooks/04-wavelet-ica-analysis/wavelet_ica_subject_frequency.ipynb"
+        label: "Subject-Frequency"
+    plots:
+      # ── Broadband ──────────────────────────────────────────────────────
+      - id: "subjfreq_pca_channel_time_maps"
+        title: "Subject-Frequency — PCA channel × time maps"
+        notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_subject_frequency.ipynb"
+        section: "PCA — Channel × time maps"
+        filename_pattern: "pca_channel_time_maps_*.png"
+        data_shape:
+          input: "(n_pca, C, T) — PCA components reshaped"
+          output: "Grid of channel × time heatmaps (one per PC)"
+        operation_order:
+          - "Reshape wavelet tensor → (S × F, C × T)"
+          - "Fit PCA"
+          - "Reshape components → (n_pca, C, T) and plot"
+        interpretation: "Each PC = a channel × time pattern shared across subjects and frequencies."
+        sketch_type: "matrix_heatmap"
+
+      - id: "subjfreq_pca_subject_freq_profiles"
+        title: "Subject-Frequency — per-subject frequency profiles"
+        notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_subject_frequency.ipynb"
+        section: "PCA — Per-subject frequency profiles"
+        filename_pattern: "pca_subject_freq_profiles_*.png"
+        data_shape:
+          input: "(S, F, n_pca) — per-subject PCA scores"
+          output: "Stacked line plots: frequency curves per subject"
+        operation_order:
+          - "Reshape PCA scores → (S, F, n_pca)"
+          - "Plot frequency profiles per subject"
+        interpretation: "How each subject's spectral profile loads onto each PC."
+        sketch_type: "timeseries_multisubject"
+
+      - id: "subjfreq_ica_channel_time_maps"
+        title: "Subject-Frequency — ICA channel × time maps"
+        notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_subject_frequency.ipynb"
+        section: "ICA — Channel × time maps"
+        filename_pattern: "ica_channel_time_maps_*.png"
+        data_shape:
+          input: "(C, T, n_ica) — ICA mixing reshaped"
+          output: "Grid of channel × time heatmaps (one per IC)"
+        operation_order:
+          - "Reshape wavelet tensor → (S × F, C × T)"
+          - "Fit PCA then FastICA"
+          - "Reshape mixing → (C, T, n_ica) and plot"
+        interpretation: "Each IC = a channel × time motif shared across subjects and frequencies."
+        sketch_type: "matrix_heatmap"
+
+      - id: "subjfreq_ica_topomap_mean"
+        title: "Subject-Frequency — ICA topomap (mean)"
+        notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_subject_frequency.ipynb"
+        section: "ICA — Topomap mean"
+        filename_pattern: "ica_topomap_mean_*.png"
+        data_shape:
+          input: "(C, n_ica) — time-averaged ICA mixing"
+          output: "Row of MNE topomaps — one per IC"
+        operation_order:
+          - "Reshape ICA mixing → (C, T, n_ica)"
+          - "Mean over time → (C, n_ica)"
+          - "Render MNE topomap per IC"
+        interpretation: "Where each independent component is spatially concentrated."
+        sketch_type: "topomap"
+
+      - id: "subjfreq_ica_timecourses"
+        title: "Subject-Frequency — ICA time courses"
+        notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_subject_frequency.ipynb"
+        section: "ICA — Time courses"
+        filename_pattern: "ica_timecourses_*.png"
+        data_shape:
+          input: "(n_ica, T) — channel-averaged IC time profiles"
+          output: "Stacked time-series subplots"
+        operation_order:
+          - "Reshape ICA mixing → (C, T, n_ica)"
+          - "Mean over C → (T, n_ica) → transpose to (n_ica, T)"
+          - "Plot each IC time course"
+        interpretation: "Channel-averaged temporal dynamics of each independent component."
+        sketch_type: "timeseries_multichannel"
+
+      # ── Per-band ───────────────────────────────────────────────────────
+      - id: "band_subjfreq_channel_time"
+        title: "Per-band Subject-Frequency PCA channel × time maps"
+        notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_subject_frequency.ipynb"
+        section: "PCA — Channel × time (per-band)"
+        filename_pattern: "*_pca_channel_time_maps_*.png"
+        data_shape:
+          input: "(n_pca, C, T) — PCA components reshaped"
+          output: "Heatmap grid: channel × time per PC"
+        operation_order:
+          - "Reshape PCA components to (n_pca, C, T)"
+          - "Plot channel × time heatmap per PC"
+        interpretation: "Spatio-temporal PCA patterns when analysis is restricted to a single frequency band."
+        sketch_type: "timeseries_heatmap"
+
+      - id: "band_subjfreq_ica_topomap"
+        title: "Per-band Subject-Frequency ICA topomap (mean)"
+        notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_subject_frequency.ipynb"
+        section: "ICA — Topomap mean (per-band)"
+        filename_pattern: "*_ica_topomap_mean_*.png"
+        data_shape:
+          input: "(n_channels, n_ica) — time-mean ICA mixing within band"
+          output: "Grid of MNE topomaps"
+        operation_order:
+          - "Average ICA mixing across time → (C, n_ica)"
+          - "Plot MNE topomap per IC"
+        interpretation: "Scalp distribution of each IC from the Subject-Frequency decomposition restricted to a single band."
+        sketch_type: "topomap"
+
+      - id: "subjfreq_cross_band_scree"
+        title: "Subject-Frequency — cross-band scree comparison"
+        notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_subject_frequency.ipynb"
+        section: "Cross-band comparison"
+        filename_pattern: "*_scree_comparison_*.png"
+        data_shape:
+          input: "(5_bands × n_pca,) — explained-variance ratios per band"
+          output: "Overlay scree + cumulative curves per band"
+        operation_order:
+          - "Band-pass filter raw EEG into 5 standard bands"
+          - "Compute wavelet 4D tensor per band; run Subject-Frequency PCA"
+          - "Overlay scree curves with band colours"
+        interpretation: "Shows whether certain bands yield more compact channel-time representations than others in the Subject-Frequency decomposition."
+        sketch_type: "timeseries_multiband"
+
+  # =========================================================================
   # Stage 04 — Wavelet-ICA cross-band summary (all approaches)
   # =========================================================================
   - id: "04-wavelet-ica-cross-band-summary"
-    title: "Stage 04-E — Wavelet-ICA Cross-Band Summary"
+    title: "Stage 04-F — Wavelet-ICA Cross-Band Summary"
     description: |
       Cross-approach comparison of total PCA variance captured per frequency
-      band.  Aggregates explained-variance ratios from all four ICA approaches
-      (Super-Brain, Inter-Subject, Temporal, Inverted Super-Brain) across the
-      five canonical EEG bands (delta, theta, alpha, beta, gamma).
+      band.  Aggregates explained-variance ratios from all five ICA approaches
+      (Super-Brain, Inter-Subject, Temporal, Inverted Super-Brain,
+      Subject-Frequency) across the five canonical EEG bands
+      (delta, theta, alpha, beta, gamma).
     notebooks:
       - path: "notebooks/04-wavelet-ica-analysis/wavelet_ica_superbrain.ipynb"
         label: "Cross-band reference (Super-Brain notebook)"
@@ -1324,7 +1462,7 @@ analyses:
         section: "Cross-band comparison"
         filename_pattern: "variance_summary_*.png"
         data_shape:
-          input: "(4_approaches × 5_bands,) — total PCA variance captured"
+          input: "(5_approaches × 5_bands,) — total PCA variance captured"
           output: "Grouped bar chart: approaches × bands"
         operation_order:
           - "Aggregate top-K PCA variance per approach per band"
