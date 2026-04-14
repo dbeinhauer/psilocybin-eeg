@@ -19,17 +19,29 @@ For each requested ``(condition, music_type)`` the script:
    :func:`scripts.analysis_common._broadband_wavelet_4d`.
 3. Runs each of the four PCA/ICA decomposition strategies from
    :mod:`src.analysis.wavelet_ica` and saves every plot from
-   :mod:`src.visualization.wavelet_ica_plots` into the canonical layout::
+   :mod:`src.visualization.wavelet_ica_plots` into the canonical layout.
+   Each decomposition type lives under its own stage directory so the
+   Results Browser can filter by approach independently::
 
-       plots/04-wavelet-ica-analysis/<Condition>_<MusicType>/
-           broadband/superbrain/*.png
-           broadband/intersubject/*.png
-           broadband/temporal/*.png
-           broadband/inverted_superbrain/*.png
-           bands/superbrain/<band>_*.png
-           bands/intersubject/<band>_*.png
-           bands/temporal/<band>_*.png
-           bands/inverted_superbrain/<band>_*.png
+       plots/
+           04-superbrain-wavelet-ica-analysis/<Condition>_<MusicType>/
+               broadband/superbrain/*.png
+               bands/superbrain/<band>_*.png
+               bands/cross_band_scree/*.png
+           04-intersubject-wavelet-ica-analysis/<Condition>_<MusicType>/
+               broadband/intersubject/*.png
+               bands/intersubject/<band>_*.png
+               bands/cross_band_scree/*.png
+           04-temporal-wavelet-ica-analysis/<Condition>_<MusicType>/
+               broadband/temporal/*.png
+               bands/temporal/<band>_*.png
+               bands/cross_band_scree/*.png
+           04-inverted-superbrain-wavelet-ica-analysis/<Condition>_<MusicType>/
+               broadband/inverted_superbrain/*.png
+               bands/inverted_superbrain/<band>_*.png
+               bands/cross_band_scree/*.png
+           04-wavelet-ica-cross-band-summary/<Condition>_<MusicType>/
+               bands/variance_summary/variance_summary_*.png
 
 Usage examples::
 
@@ -135,6 +147,33 @@ from src.visualization.wavelet_ica_plots import (  # noqa: E402
 
 _logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Per-approach output stage directory names
+# ---------------------------------------------------------------------------
+
+#: Maps approach key → top-level stage directory name under the plots root.
+#: Each approach gets its own Results-Browser-compatible stage directory so
+#: users can filter by approach independently.
+_APPROACH_STAGE_DIRS: dict[str, str] = {
+    "superbrain": "04-superbrain-wavelet-ica-analysis",
+    "intersubject": "04-intersubject-wavelet-ica-analysis",
+    "temporal": "04-temporal-wavelet-ica-analysis",
+    "inverted_superbrain": "04-inverted-superbrain-wavelet-ica-analysis",
+}
+
+#: Maps approach key → human-readable display name used in plot titles and
+#: EVR accumulator keys.  Keeps ``_APPROACH_STAGE_DIRS`` as the single source
+#: of truth for approach enumeration so both dicts stay in sync.
+_APPROACH_DISPLAY_NAMES: dict[str, str] = {
+    "superbrain": "Super-Brain",
+    "intersubject": "Inter-Subject",
+    "temporal": "Temporal",
+    "inverted_superbrain": "Inverted Super-Brain",
+}
+
+#: Stage directory for cross-approach band comparison plots.
+_CROSS_BAND_SUMMARY_STAGE = "04-wavelet-ica-cross-band-summary"
+
 
 # ---------------------------------------------------------------------------
 # Argument parsing
@@ -237,8 +276,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help=(
-            "Root directory for output plots. "
-            "Defaults to plots/04-wavelet-ica-analysis/."
+            "Base directory for output plots. "
+            "Each approach is written under its own subdirectory: "
+            "04-{approach}-wavelet-ica-analysis/. "
+            "Defaults to the project plots/ root."
         ),
     )
     parser.add_argument(
@@ -1188,17 +1229,20 @@ def _run_all_approaches_for_band(
     n_pca: int,
     n_ica: int,
     random_state: int,
-    save_dir: Path,
+    approach_save_dirs: dict[str, Path],
 ) -> dict[str, np.ndarray]:
     """Run all four decompositions for a single frequency band.
 
     Returns ``{approach: explained_variance_ratio}`` for cross-band summaries.
+
+    :param approach_save_dirs: Mapping from approach key (``"superbrain"``,
+        ``"intersubject"``, ``"temporal"``, ``"inverted_superbrain"``) to the
+        per-approach dataset root directory.  Each approach writes its band
+        plots under ``<approach_save_dirs[approach]>/bands/<approach>/``.
     """
     approaches_dir = {
-        "superbrain": save_dir / "bands" / "superbrain",
-        "intersubject": save_dir / "bands" / "intersubject",
-        "temporal": save_dir / "bands" / "temporal",
-        "inverted_superbrain": save_dir / "bands" / "inverted_superbrain",
+        approach: approach_save_dirs[approach] / "bands" / approach
+        for approach in _APPROACH_STAGE_DIRS
     }
     for d in approaches_dir.values():
         d.mkdir(parents=True, exist_ok=True)
@@ -1217,7 +1261,7 @@ def _run_all_approaches_for_band(
         random_state=random_state,
         out_dir=approaches_dir["superbrain"],
     )
-    evr["Super-Brain"] = r_sb.pca_explained_variance_ratio
+    evr[_APPROACH_DISPLAY_NAMES["superbrain"]] = r_sb.pca_explained_variance_ratio
 
     r_is = _run_intersubject_band(
         data_4d,
@@ -1231,7 +1275,7 @@ def _run_all_approaches_for_band(
         random_state=random_state,
         out_dir=approaches_dir["intersubject"],
     )
-    evr["Inter-Subject"] = r_is.pca_explained_variance_ratio
+    evr[_APPROACH_DISPLAY_NAMES["intersubject"]] = r_is.pca_explained_variance_ratio
 
     r_tm = _run_temporal_band(
         data_4d,
@@ -1245,7 +1289,7 @@ def _run_all_approaches_for_band(
         random_state=random_state,
         out_dir=approaches_dir["temporal"],
     )
-    evr["Temporal"] = r_tm.pca_explained_variance_ratio
+    evr[_APPROACH_DISPLAY_NAMES["temporal"]] = r_tm.pca_explained_variance_ratio
 
     r_inv = _run_inverted_superbrain_band(
         data_4d,
@@ -1259,7 +1303,9 @@ def _run_all_approaches_for_band(
         random_state=random_state,
         out_dir=approaches_dir["inverted_superbrain"],
     )
-    evr["Inverted Super-Brain"] = r_inv.pca_explained_variance_ratio
+    evr[_APPROACH_DISPLAY_NAMES["inverted_superbrain"]] = (
+        r_inv.pca_explained_variance_ratio
+    )
 
     return evr
 
@@ -1275,7 +1321,8 @@ def _run_band_analysis(
     n_pca: int,
     n_ica: int,
     random_state: int,
-    save_dir: Path,
+    approach_save_dirs: dict[str, Path],
+    cross_band_summary_dir: Path,
 ) -> None:
     """Run the full per-band wavelet-ICA analysis for one dataset.
 
@@ -1284,17 +1331,22 @@ def _run_band_analysis(
     1. Band-pass filter the raw EEG data.
     2. Compute 4-D wavelet-power on the filtered data.
     3. Run all four decomposition approaches.
-    4. Produce cross-band comparison plots.
+
+    Then produce per-approach cross-band scree plots (written into each
+    approach's own directory) and the cross-approach variance summary
+    (written into ``cross_band_summary_dir``).
+
+    :param approach_save_dirs: Mapping from approach key to that approach's
+        dataset root directory (``plots/<stage>/<dataset_key>``).
+    :param cross_band_summary_dir: Directory for cross-approach variance
+        summary plots (``plots/04-wavelet-ica-cross-band-summary/<dataset_key>``).
     """
     _logger.info(f"[{label}] ===== Per-band wavelet-ICA analysis =====")
 
     # Accumulate per-approach, per-band explained-variance ratios for
-    # cross-band summary plots.
+    # cross-band summary plots.  Keyed by display name so plot titles match.
     approach_band_evr: dict[str, dict[str, np.ndarray]] = {
-        "Super-Brain": {},
-        "Inter-Subject": {},
-        "Temporal": {},
-        "Inverted Super-Brain": {},
+        name: {} for name in _APPROACH_DISPLAY_NAMES.values()
     }
 
     for band, (l_freq, h_freq) in FREQUENCY_BANDS.items():
@@ -1320,29 +1372,33 @@ def _run_band_analysis(
             n_pca=n_pca,
             n_ica=n_ica,
             random_state=random_state,
-            save_dir=save_dir,
+            approach_save_dirs=approach_save_dirs,
         )
         for approach, ratios in evr.items():
             approach_band_evr[approach][band] = ratios
 
-    # ── Cross-band comparison plots ──────────────────────────────────────
-    _logger.info(f"[{label}] Cross-band comparison plots …")
-    cross_band_dir = save_dir / "bands" / "cross_band_summary"
-    cross_band_dir.mkdir(parents=True, exist_ok=True)
-
-    for approach, band_evr in approach_band_evr.items():
-        slug = approach.lower().replace("-", "").replace(" ", "_")
+    # ── Per-approach cross-band scree comparison ─────────────────────────
+    _logger.info(f"[{label}] Per-approach cross-band scree plots …")
+    for approach_key, display_name in _APPROACH_DISPLAY_NAMES.items():
+        slug = display_name.lower().replace("-", "").replace(" ", "_")
+        band_evr = approach_band_evr[display_name]
+        scree_dir = approach_save_dirs[approach_key] / "bands" / "cross_band_scree"
+        scree_dir.mkdir(parents=True, exist_ok=True)
         plot_cross_band_scree_comparison(
             band_evr,
-            approach=approach,
+            approach=display_name,
             label=label,
-            save_path=cross_band_dir / f"{slug}_scree_comparison_{label}.png",
+            save_path=scree_dir / f"{slug}_scree_comparison_{label}.png",
         )
 
+    # ── Cross-approach variance summary ─────────────────────────────────
+    _logger.info(f"[{label}] Cross-approach variance summary …")
+    summary_dir = cross_band_summary_dir / "bands" / "variance_summary"
+    summary_dir.mkdir(parents=True, exist_ok=True)
     plot_cross_band_variance_summary(
         approach_band_evr,
         label=label,
-        save_path=cross_band_dir / f"variance_summary_{label}.png",
+        save_path=summary_dir / f"variance_summary_{label}.png",
     )
 
 
@@ -1366,11 +1422,7 @@ if __name__ == "__main__":
         ExclusionCategories.BAD_MUSIC,
         ExclusionCategories.ARTIFACTS,
     ]
-    save_root = (
-        args.save_dir
-        if args.save_dir is not None
-        else ProjectPaths.PLOTS_PATH / "04-wavelet-ica-analysis"
-    )
+    save_root = args.save_dir if args.save_dir is not None else ProjectPaths.PLOTS_PATH
     wavelet_dir = Path(args.wavelet_data_dir)
     freqs = np.linspace(
         args.wavelet_freq_min, args.wavelet_freq_max, args.wavelet_n_freqs
@@ -1408,7 +1460,13 @@ if __name__ == "__main__":
             f"Dataset [{dataset_key}]: shape={ad.data.shape}  sfreq={ad.sfreq} Hz"
         )
 
-        save_dir = save_root / dataset_key
+        # Per-approach save directories (each approach lives under its own stage).
+        approach_save_dirs = {
+            approach: save_root / stage_dir / dataset_key
+            for approach, stage_dir in _APPROACH_STAGE_DIRS.items()
+        }
+        # Directory for the cross-approach variance summary.
+        cross_band_summary_dir = save_root / _CROSS_BAND_SUMMARY_STAGE / dataset_key
 
         # ── Broadband decomposition ──────────────────────────────────────
         if not args.skip_broadband:
@@ -1427,7 +1485,7 @@ if __name__ == "__main__":
                 n_pca=args.n_pca,
                 n_ica=args.n_ica,
                 random_state=args.random_state,
-                save_dir=save_dir,
+                save_dir=approach_save_dirs["superbrain"],
             )
             _run_intersubject(
                 data_4d,
@@ -1438,7 +1496,7 @@ if __name__ == "__main__":
                 n_pca=args.n_pca,
                 n_ica=args.n_ica,
                 random_state=args.random_state,
-                save_dir=save_dir,
+                save_dir=approach_save_dirs["intersubject"],
             )
             _run_temporal(
                 data_4d,
@@ -1449,7 +1507,7 @@ if __name__ == "__main__":
                 n_pca=args.n_pca,
                 n_ica=args.n_ica,
                 random_state=args.random_state,
-                save_dir=save_dir,
+                save_dir=approach_save_dirs["temporal"],
             )
             _run_inverted_superbrain(
                 data_4d,
@@ -1460,7 +1518,7 @@ if __name__ == "__main__":
                 n_pca=args.n_pca,
                 n_ica=args.n_ica,
                 random_state=args.random_state,
-                save_dir=save_dir,
+                save_dir=approach_save_dirs["inverted_superbrain"],
             )
 
         # ── Per-band decomposition ───────────────────────────────────────
@@ -1475,7 +1533,8 @@ if __name__ == "__main__":
                 n_pca=args.n_pca,
                 n_ica=args.n_ica,
                 random_state=args.random_state,
-                save_dir=save_dir,
+                approach_save_dirs=approach_save_dirs,
+                cross_band_summary_dir=cross_band_summary_dir,
             )
 
     _logger.info("Wavelet-ICA analysis complete.")

@@ -11,9 +11,16 @@
 # Runs all four decomposition strategies (Super-Brain, Inter-Subject,
 # Temporal, Inverted Super-Brain) on both broadband and five frequency
 # bands (delta, theta, alpha, beta, gamma) for the Placebo condition on
-# both music types.  Matches the notebooks under
-# notebooks/04-wavelet-ica-analysis/ and reuses the cached wavelet tensors
-# produced by Stage-03 (run_wavelet_power.pbs).
+# both music types.  Each approach is saved under its own stage directory:
+#
+#   plots/04-superbrain-wavelet-ica-analysis/
+#   plots/04-intersubject-wavelet-ica-analysis/
+#   plots/04-temporal-wavelet-ica-analysis/
+#   plots/04-inverted-superbrain-wavelet-ica-analysis/
+#   plots/04-wavelet-ica-cross-band-summary/
+#
+# Matches the notebooks under notebooks/04-wavelet-ica-analysis/ and
+# reuses cached wavelet tensors from Stage-03 (run_wavelet_power.pbs).
 # ---------------------------------------------------------------------------
 
 set -e
