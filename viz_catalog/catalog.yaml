@@ -521,8 +521,10 @@ analyses:
       Wavelet power (amplitude²) is computed for broadband (DELTA–GAMMA) and
       per-canonical-band data, yielding 4D tensors of shape
       (n_subjects, n_channels, n_frequencies, n_times).
-      Ten analyses explore spectral dynamics, inter-subject synchrony in the
-      frequency domain, and spatial topographic patterns.
+      Analyses cover spectral dynamics, intersubject mean-variance synchrony,
+      LOO-ISC in the wavelet domain, topographic mapping, time-frequency ISC
+      profiles, multi-scale sliding-window ISC, cross-frequency coupling, and
+      power–phase joint comparisons.
     notebooks:
       - path: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
         label: "Wavelet Power Exploration"
@@ -531,7 +533,7 @@ analyses:
         title: "Grand-average spectral profile"
         notebook: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
         section: "1 — Grand-average spectral profile"
-        filename_pattern: "spectral_profile_*.png"
+        filename_pattern: "spectral_profile.png"
         data_shape:
           input: "(n_subjects, n_channels, n_freqs, n_times)"
           output: "(n_freqs,) — mean power per frequency bin"
@@ -546,7 +548,7 @@ analyses:
         title: "Time-frequency map (spectrogram)"
         notebook: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
         section: "2 — Time-frequency map"
-        filename_pattern: "tf_map_*.png"
+        filename_pattern: "time_frequency_map.png"
         data_shape:
           input: "(n_subjects, n_channels, n_freqs, n_times)"
           output: "(n_freqs, n_times) — channel- and subject-averaged power"
@@ -561,7 +563,7 @@ analyses:
         title: "Per-band power time course"
         notebook: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
         section: "3 — Per-band power time course"
-        filename_pattern: "band_power_tc_*.png"
+        filename_pattern: "band_power_timecourse.png"
         data_shape:
           input: "(n_subjects, n_channels, n_freqs, n_times) per band"
           output: "(n_times,) — z-scored group mean ± SD per band"
@@ -573,36 +575,68 @@ analyses:
         interpretation: "Frequency-resolved counterpart to the broadband time courses in 01-*. Theta increases during rhythmic passages; alpha suppression indicates engagement."
         sketch_type: "timeseries_multiband"
 
-      - id: "intersubject_variance"
-        title: "Intersubject variance in the wavelet domain"
+      - id: "mean_variance_broadband"
+        title: "Broadband mean-variance analysis (wavelet domain)"
         notebook: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
-        section: "4 — Intersubject variance"
-        filename_pattern: "intersubject_variance_*.png"
+        section: "4 — Intersubject Mean-Variance Analysis (Wavelet Domain)"
+        filename_pattern: "broadband/mean_variance/timeseries_*.png"
         data_shape:
-          input: "(n_subjects, n_channels, n_times) — band-averaged, z-scored"
-          output: "(n_times,) — variance across subjects, channel-averaged"
+          input: "(n_subjects, n_channels, n_freqs, n_times)"
+          output: "(n_times,) — group mean ± SD and inter-subject variance time course"
         operation_order:
-          - "Average and z-score per band"
-          - "Compute variance across subjects at each (channel, time)"
-          - "Average across channels → variance time course"
-          - "Plot per-band variance traces"
-        interpretation: "Low variance = high inter-subject synchrony. Frequency-resolved synchrony proxy comparable to 01-* mean-variance analysis."
+          - "Average wavelet power across all frequencies → (n_subjects, n_channels, n_times)"
+          - "compute_intersubject_stats → mean, SD, inter-subject variance"
+          - "plot_timeseries → group mean ± SD time course (timeseries_*.png)"
+          - "plot_variance_distribution → histogram of variance values (variance_distribution_*.png)"
+          - "compute_windowed_stats + plot_windowed_analysis → windowed bar + overlay (windowed_bar_*.png, windowed_overlay_*.png)"
+        interpretation: "Wavelet-domain counterpart of the broadband mean-variance analysis in 01-*. Low inter-subject variance across time = high stimulus-driven synchrony."
+        sketch_type: "timeseries_variance"
+
+      - id: "mean_variance_bands"
+        title: "Per-band mean-variance analysis (wavelet domain)"
+        notebook: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
+        section: "4.1 — Per-Band Mean-Variance"
+        filename_pattern: "bands/mean_variance/{band}_timeseries_*.png"
+        data_shape:
+          input: "(n_subjects, n_channels, n_freqs, n_times) per canonical band"
+          output: "(n_times,) — group mean ± SD and inter-subject variance per band"
+        operation_order:
+          - "For each band: collapse frequency dimension → (n_subjects, n_channels, n_times)"
+          - "compute_intersubject_stats → mean, SD, inter-subject variance"
+          - "plot_timeseries, plot_variance_distribution, plot_windowed_analysis per band"
+          - "Files: {band}_timeseries_*.png, {band}_variance_distribution_*.png, {band}_windowed_bar_*.png, {band}_windowed_overlay_*.png"
+        interpretation: "Frequency-resolved synchrony proxy: bands with lower inter-subject variance and higher group mean track the stimulus more consistently."
         sketch_type: "timeseries_variance"
 
       - id: "wavelet_loo_isc"
         title: "Wavelet-domain LOO-ISC per band"
         notebook: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
         section: "5 — Wavelet-domain LOO-ISC"
-        filename_pattern: "wavelet_loo_isc_*.png"
+        filename_pattern: "wavelet_loo_isc_bar.png"
         data_shape:
           input: "(n_subjects, n_channels, n_times) — band-averaged wavelet power"
-          output: "(n_bands, n_channels) — mean LOO-ISC per band per channel"
+          output: "(n_bands,) — mean and median LOO-ISC per band, channel-averaged"
         operation_order:
           - "Average within each canonical band → (n_subjects, n_channels, n_times)"
-          - "compute_loo_isc per band"
-          - "Bar chart + distribution across channels per band"
+          - "compute_loo_isc per band → (n_channels,)"
+          - "Bar chart of channel-mean and channel-median LOO-ISC per band"
         interpretation: "Bands tracking stimulus features (delta/theta for rhythm, alpha for attention) expected to show higher ISC. Directly comparable to 02-* per-band ISC."
         sketch_type: "bar_grouped_bands"
+
+      - id: "wavelet_loo_isc_distribution"
+        title: "LOO-ISC distribution per band"
+        notebook: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
+        section: "5.1 — LOO-ISC distribution per band"
+        filename_pattern: "wavelet_loo_isc_distributions.png"
+        data_shape:
+          input: "(n_channels,) — mean LOO-ISC per channel per band"
+          output: "Histogram of per-channel LOO-ISC values per band (clipped at 99th percentile)"
+        operation_order:
+          - "Take per-channel mean LOO-ISC for each band"
+          - "Clip at 99th percentile to suppress outlier channels"
+          - "Plot histogram per band in a 1×n_bands panel"
+        interpretation: "Wide, right-shifted distributions indicate many channels contributing to synchrony. Narrow peaked distributions near zero suggest synchrony is limited to a few channels."
+        sketch_type: "histogram_multiband"
 
       - id: "topomap_power_isc"
         title: "Topographic mapping of power LOO-ISC"
@@ -620,34 +654,52 @@ analyses:
         sketch_type: "topomap"
 
       - id: "tf_isc"
-        title: "Time-frequency ISC spectrogram"
+        title: "ISC-vs-frequency profile"
         notebook: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
         section: "7 — Time-frequency ISC"
-        filename_pattern: "tf_isc_*.png"
+        filename_pattern: "tf_isc_freq_profile_*.png"
         data_shape:
           input: "(n_subjects, n_channels × n_freqs, n_times)"
           output: "(n_freqs,) — channel-averaged LOO-ISC per frequency bin"
         operation_order:
           - "Reshape broadband data → (n_subjects, n_channels × n_freqs, n_times)"
-          - "compute_loo_isc per frequency bin"
-          - "Average across channels → ISC-vs-frequency profile"
+          - "compute_loo_isc per (channel × freq) feature"
+          - "Reshape to (n_channels, n_freqs) and average across channels → (n_freqs,)"
+          - "Plot LOO-ISC as a line against frequency (Hz)"
         interpretation: "Continuous frequency-resolved synchrony without discrete band boundaries. Peaks indicate frequencies that best capture stimulus-driven synchrony."
-        sketch_type: "timeseries_heatmap"
+        sketch_type: "psd"
+
+      - id: "sliding_window_isc_broadband"
+        title: "Multi-scale sliding-window ISC — broadband"
+        notebook: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
+        section: "8 — Multi-Scale Sliding-Window Wavelet ISC"
+        filename_pattern: "broadband/sliding_window/sw_isc_bar_*.png"
+        data_shape:
+          input: "(n_subjects, n_channels, n_times) — frequency-averaged wavelet power"
+          output: "Per-window mean ISC at three temporal scales (fine/medium/large)"
+        operation_order:
+          - "Average wavelet power across all frequencies → (n_subjects, n_channels, n_times)"
+          - "compute_sliding_window_isc at three window sizes (fine/medium/large)"
+          - "compute_sliding_window_isc_spearman at medium scale"
+          - "plot_multiscale_sliding_window_isc → sw_isc_bar_*.png, sw_isc_overlay_*.png, sw_isc_pearson_vs_spearman_*.png"
+        interpretation: "Multi-scale view of time-resolved broadband synchrony. Broad windows reveal sustained synchrony; narrow windows capture transient episodes. Pearson-vs-Spearman comparison flags outlier-driven effects."
+        sketch_type: "timeseries_multiscale"
 
       - id: "sliding_window_isc_bands"
-        title: "Sliding-window wavelet ISC per band"
+        title: "Multi-scale sliding-window ISC — per band"
         notebook: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
-        section: "8 — Sliding-window wavelet ISC"
-        filename_pattern: "sliding_window_isc_*.png"
+        section: "8.1 — Per-Band Multi-Scale Sliding-Window ISC"
+        filename_pattern: "bands/sliding_window/*.png"
         data_shape:
-          input: "(n_subjects, n_channels, n_times) per band"
-          output: "(n_bands × n_windows, n_channels) — time-resolved ISC"
+          input: "(n_subjects, n_channels, n_times) per canonical band"
+          output: "Per-band per-window mean ISC at three temporal scales"
         operation_order:
-          - "Collapse frequency dimension per band"
-          - "compute_sliding_window_isc per band"
-          - "Plot time-resolved ISC traces per band"
-        interpretation: "Time-resolved frequency-specific synchrony. Episodic bursts in a band signal event-driven entrainment to specific musical features."
-        sketch_type: "grid_timeseries_heatmap"
+          - "For each band: collapse frequency dimension → (n_subjects, n_channels, n_times)"
+          - "compute_sliding_window_isc at fine/medium/large scales"
+          - "compute_sliding_window_isc_spearman at medium scale"
+          - "plot_band_multiscale_sliding_window_isc → per-band bar + overlay + comparison plots"
+        interpretation: "Time-resolved frequency-specific synchrony. Episodic bursts in a band signal event-driven entrainment to specific musical features (e.g. delta/theta for rhythm, alpha for attention)."
+        sketch_type: "timeseries_multiscale"
 
       - id: "cross_frequency_coupling"
         title: "Cross-frequency coupling (band correlation matrix)"
@@ -668,7 +720,7 @@ analyses:
         title: "Power–phase joint ISC comparison"
         notebook: "notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb"
         section: "10 — Power-phase joint analysis"
-        filename_pattern: "power_phase_isc_*.png"
+        filename_pattern: "power_phase_joint_*.png"
         data_shape:
           input: "(n_bands,) power ISC and (n_bands,) phase ISC"
           output: "(n_bands × 2,) — grouped bar chart"

@@ -81,23 +81,65 @@ _catalog_sort_key_map: dict[tuple[str, str], tuple[int, int]] = (
 )
 _CATALOG_LEN = len(_catalog.get("analyses", []))
 
+_SPECTRUM_TYPES_EARLY: frozenset[str] = frozenset({"broadband", "bands"})
+
+
+def build_catalog_plot_order_maps(
+    catalog: dict,
+) -> tuple[dict[tuple[str, str], int], None]:
+    """Derive per-stage analysis-type notebook ordering from catalog plot entries.
+
+    Scans each plot's ``filename_pattern``.  Patterns that begin with a known
+    spectrum-type directory (``broadband/`` or ``bands/``) expose the
+    ``analysis_type`` sub-directory (e.g. ``mean_variance``, ``sliding_window``).
+
+    Returns:
+        order_map: ``{(stage_id, analysis_type) -> first_plot_index}``
+            Gives the notebook-section order for sorting.  Sections not found
+            here fall through to the existing sort-key logic and end up last.
+    """
+    order_map: dict[tuple[str, str], int] = {}
+    for analysis in catalog.get("analyses", []):
+        aid = analysis.get("id", "")
+        for i, plot in enumerate(analysis.get("plots", [])):
+            pattern = plot.get("filename_pattern", "").replace("\\", "/")
+            parts = pattern.split("/")
+            # Pattern must start with broadband/ or bands/ and have an analysis_type
+            # sub-directory: broadband/<analysis_type>/<filename> or similar.
+            if len(parts) >= 3 and parts[0] in _SPECTRUM_TYPES_EARLY:
+                at = parts[1]
+                if (aid, at) not in order_map:
+                    order_map[(aid, at)] = i
+    return order_map, None
+
+
+_catalog_plot_order_map: dict[tuple[str, str], int]
+_catalog_plot_order_map, _ = build_catalog_plot_order_maps(_catalog)
+
 
 def _section_sort_key(stage: str, analysis_type: str) -> tuple[int, int]:
-    """Return (analysis_idx, type_idx) for catalog-order sorting.
+    """Return a sortable key for catalog-order section ordering.
 
-    Falls back to numeric-prefix matching when the full stage name does not
-    appear in the catalog (e.g. minor directory-name variations).  Sections
-    not found in the catalog are placed after all known entries.
+    Priority:
+    1. Plot-order map (notebook section order, derived from filename_patterns).
+    2. analysis_type_labels map (explicit per-analysis ordering).
+    3. Numeric-prefix fallback.
+    4. Unknown sections last.
     """
+    # Priority 1: notebook section order from catalog plot filename patterns
+    if (stage, analysis_type) in _catalog_plot_order_map:
+        return (0, _catalog_plot_order_map[(stage, analysis_type)])
+    # Priority 2: explicit analysis_type_labels ordering
     if (stage, analysis_type) in _catalog_sort_key_map:
-        return _catalog_sort_key_map[(stage, analysis_type)]
-    # Numeric-prefix fallback: "02-isc-broadband" → prefix "02"
+        i, j = _catalog_sort_key_map[(stage, analysis_type)]
+        return (1 + i, j)
+    # Priority 3: numeric-prefix fallback: "02-isc-broadband" → prefix "02"
     stage_num = stage.split("-")[0] if "-" in stage else stage
-    for (s, at), key in _catalog_sort_key_map.items():
+    for (s, at), (i, j) in _catalog_sort_key_map.items():
         s_num = s.split("-")[0] if "-" in s else s
         if s_num == stage_num and at == analysis_type:
-            return key
-    return (_CATALOG_LEN, 0)
+            return (1 + i, j)
+    return (1 + _CATALOG_LEN, 0)
 
 
 def slug_to_display(slug: str) -> str:

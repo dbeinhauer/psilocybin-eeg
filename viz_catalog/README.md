@@ -259,6 +259,49 @@ analyses:
         sketch_type: "timeseries_heatmap"
 ```
 
+### Registered sketch types
+
+The following sketch types are currently registered in `SKETCH_FUNCTIONS` in
+`viz_catalog/pages/1_📋_Catalog.py`:
+
+| Key | Description |
+|-----|-------------|
+| `timeseries_multichannel` | Stacked multi-channel time-series |
+| `psd` | Power spectral density (before vs after filtering) |
+| `topomap` | Schematic 2-D electrode topomap |
+| `timeseries_offset` | TAG channel overlay with per-participant offsets |
+| `matrix_heatmap` | Square matrix colour-map (e.g. lag or ISC matrix) |
+| `timeseries_variance` | Time-series with variance shading |
+| `histogram` | Single-panel histogram |
+| `timeseries_multisubject` | Overlaid per-subject time-series |
+| `timeseries_multiband` | Per-frequency-band time-series panels |
+| `histogram_overlay` | Overlaid histograms for two groups |
+| `timeseries_heatmap` | Time × frequency (or channel) heatmap |
+| `bar_grouped` | Grouped bar chart |
+| `histogram_facet` | Faceted histogram grid |
+| `bar_grouped_bands` | Grouped bar chart with one bar per frequency band |
+| `grid_timeseries_heatmap` | Grid of small time-series heatmaps |
+| `raster_overlap` | Raster / overlap diagram |
+| `polar_histogram` | Polar (rose) histogram for phase data |
+| `zscore_transform` | Z-score normalisation schematic |
+| `timeseries_two_panel` | Two-panel time-series (mean + variance) |
+| `windowed_mean_var_bars` | Windowed mean-variance bar chart |
+| `windowed_overlay_panels` | Windowed statistics overlay panels |
+| `histogram_violin` | Histogram + violin hybrid |
+| `matrix_heatmap_no_diag` | Square matrix heatmap with masked diagonal |
+| `timeseries_comparison_overlay` | Two-condition time-series overlay |
+| `multiscale_sw_isc` | Multi-scale sliding-window ISC plot |
+
+### Analysis groups in `catalog.yaml`
+
+| ID | Title |
+|----|-------|
+| `00-preprocessing` | Stage 00 — Preprocessing |
+| `01-mean-variance` | Stage 01 — Mean-Variance Synchrony |
+| `02-isc-broadband` | Stage 02 — ISC (Broadband + Per-Band) |
+| `03-wavelet-power` | Stage 03 — Wavelet Power Analysis |
+| `03-wavelet-phase` | Stage 03 — Wavelet Phase Analysis |
+
 ### Add a new sketch type
 
 1. Open `viz_catalog/pages/1_📋_Catalog.py`.
