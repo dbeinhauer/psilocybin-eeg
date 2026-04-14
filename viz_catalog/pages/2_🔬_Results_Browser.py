@@ -272,6 +272,17 @@ _STAGE03_BOTH_SLUGS: frozenset[str] = frozenset(
     }
 )
 
+# Stage-04 analysis_type directory slugs mapped to their virtual-stage catalog IDs.
+# Each Wavelet-ICA approach produces plots in its own analysis_type sub-directory.
+_STAGE04_SLUG_TO_VSTAGE: dict[str, str] = {
+    "superbrain": "04-superbrain-wavelet-ica",
+    "intersubject": "04-intersubject-wavelet-ica",
+    "temporal": "04-temporal-wavelet-ica",
+    "inverted_superbrain": "04-inverted-superbrain-wavelet-ica",
+    "subject_frequency": "04-subject-frequency-wavelet-ica",
+    "cross_band_summary": "04-wavelet-ica-cross-band-summary",
+}
+
 _BAND_CANONICAL: dict[str, str] = {
     "delta": "delta",
     "theta": "theta",
@@ -375,6 +386,9 @@ def scan_images(directory: str) -> list[dict]:
                 virtual_stages = ["03-wavelet-phase"]
             else:
                 virtual_stages = ["03-wavelet-power"]
+        elif stage_num == "04":
+            vstage = _STAGE04_SLUG_TO_VSTAGE.get(analysis_type)
+            virtual_stages = [vstage] if vstage else [stage]
         else:
             virtual_stages = [stage]
 

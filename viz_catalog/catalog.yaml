@@ -854,6 +854,8 @@ analyses:
   # =========================================================================
   - id: "04-superbrain-wavelet-ica"
     title: "Stage 04-A — Wavelet-ICA: Super-Brain"
+    analysis_type_labels:
+      superbrain: "Super-Brain (temporal PCA + ICA)"
     description: |
       **Super-Brain** decomposition of the 4D wavelet-power tensor.
       Observations = time; features = S × C × F.
@@ -993,6 +995,8 @@ analyses:
   # =========================================================================
   - id: "04-intersubject-wavelet-ica"
     title: "Stage 04-B — Wavelet-ICA: Inter-Subject"
+    analysis_type_labels:
+      intersubject: "Inter-Subject (spatial-spectral PCA + ICA)"
     description: |
       **Inter-Subject** decomposition of the 4D wavelet-power tensor.
       Observations = S × T; features = C × F.
@@ -1115,6 +1119,8 @@ analyses:
   # =========================================================================
   - id: "04-temporal-wavelet-ica"
     title: "Stage 04-C — Wavelet-ICA: Temporal"
+    analysis_type_labels:
+      temporal: "Temporal (freq-time PCA + ICA)"
     description: |
       **Temporal** decomposition of the 4D wavelet-power tensor.
       Observations = S × C; features = F × T.
@@ -1239,6 +1245,8 @@ analyses:
   # =========================================================================
   - id: "04-inverted-superbrain-wavelet-ica"
     title: "Stage 04-D — Wavelet-ICA: Inverted Super-Brain"
+    analysis_type_labels:
+      inverted_superbrain: "Inverted Super-Brain (observation-per-triplet PCA + ICA)"
     description: |
       **Inverted Super-Brain** decomposition of the 4D wavelet-power tensor.
       Observations = S × C × F; features = time.
@@ -1361,6 +1369,8 @@ analyses:
   # =========================================================================
   - id: "04-subject-frequency-wavelet-ica"
     title: "Stage 04-E — Wavelet-ICA: Subject-Frequency"
+    analysis_type_labels:
+      subject_frequency: "Subject-Frequency (spatial-temporal PCA + ICA)"
     description: |
       **Subject-Frequency** decomposition of the 4D wavelet-power tensor.
       Observations = S × F; features = C × T.
@@ -1498,6 +1508,8 @@ analyses:
   # =========================================================================
   - id: "04-wavelet-ica-cross-band-summary"
     title: "Stage 04-F — Wavelet-ICA Cross-Band Summary"
+    analysis_type_labels:
+      cross_band_summary: "Cross-Band Variance Summary"
     description: |
       Cross-approach comparison of total PCA variance captured per frequency
       band.  Aggregates explained-variance ratios from all five ICA approaches
