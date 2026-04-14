@@ -21,7 +21,7 @@ processing that emerge during music listening.
 
 ---
 
-## Four Decomposition Approaches
+## Five Decomposition Approaches
 
 ### Approach 1 — Super-Brain (temporal decomposition)
 
@@ -184,11 +184,49 @@ after subsampling), which makes ICA estimation statistically robust.
 | 9 | Inter-individual IC correlations | Consistency of channel loadings across subjects |
 | 10 | Cross-component correlation | PCA vs ICA score dependence |
 
+### Approach 5 — Subject-Frequency (spatial-temporal decomposition)
+
+**Notebook:** `wavelet_ica_subject_frequency.ipynb`
+
+Concatenate person and frequency into the *observation* axis, with channel
+and time as *features*:
+
+```
+(n_subjects, n_channels, n_freqs, n_times)
+  → reshape →  (n_subjects × n_freqs,  n_channels × n_times)
+                ──── observations ────  ──── features ────────
+```
+
+Each observation is a specific subject–frequency combination, described by
+its full channel × time power surface.  PCA/ICA discover **spatial-temporal
+components** — recurring channel × time patterns shared across subjects
+and frequencies.
+
+| Loading dimension | Interpretation |
+|-------------------|----------------|
+| Channel × time map | The spatial-temporal "fingerprint" of the component |
+| Per-subject frequency profile | How strongly each subject activates the pattern across frequencies |
+
+**Analyses in the notebook:**
+
+| # | Analysis | Purpose |
+|---|----------|---------|
+| 1 | PCA scree plot | Intrinsic dimensionality of the channel × time space |
+| 2 | PCA channel × time maps | Spatial-temporal component patterns |
+| 3 | Per-subject frequency profiles | Subject-specific frequency activation per component |
+| 4 | PCA topographic maps | Time-averaged channel marginal → scalp maps |
+| 5 | Cross-component correlation | PCA vs ICA dependence structure |
+| 6 | ICA channel × time maps | Independent spatial-temporal patterns |
+| 7 | ICA topomap — mean loading | Mean channel loading across time |
+| 8 | ICA topomap — variance | Variance of channel loading across time |
+| 9 | ICA time courses | Channel-averaged temporal profiles |
+| 10 | Inter-individual IC correlations | Consistency of frequency profiles across subjects |
+
 ---
 
 ## Data Requirements
 
-All four notebooks load wavelet-power data via `scripts.analysis_common`
+All five notebooks load wavelet-power data via `scripts.analysis_common`
 utilities (the same pipeline used in `notebooks/03-wavelet-analysis/`).
 The wavelet cache directory defaults to
 `notebooks/04-wavelet-ica-analysis/wavelet_cache/`.
