@@ -971,108 +971,125 @@ def _run_wavelet_workflow_for_label(
             ch_idx_bb = None
 
         # ── Broadband mean-variance (matching 01-raw-mean-variance-analysis) ──
-        _logger.info(f"[{label}] Broadband mean-variance analysis …")
-        bb_mv_dir_ts = bb_dir / "timeseries"
-        bb_mv_dir_ts.mkdir(parents=True, exist_ok=True)
-        bb_mv_dir_var = bb_dir / "variance"
-        bb_mv_dir_var.mkdir(parents=True, exist_ok=True)
-        bb_mv_dir_win = bb_dir / "windowed"
-        bb_mv_dir_win.mkdir(parents=True, exist_ok=True)
+        # Only meaningful for power; phase angles are circular and shouldn't be
+        # passed through the linear intersubject-variance pipeline.
+        if representation == "power":
+            _logger.info(f"[{label}] Broadband mean-variance analysis …")
+            bb_mv_dir_ts = bb_dir / "timeseries"
+            bb_mv_dir_ts.mkdir(parents=True, exist_ok=True)
+            bb_mv_dir_var = bb_dir / "variance"
+            bb_mv_dir_var.mkdir(parents=True, exist_ok=True)
+            bb_mv_dir_win = bb_dir / "windowed"
+            bb_mv_dir_win.mkdir(parents=True, exist_ok=True)
 
-        bb_stats = compute_intersubject_stats(wd_3d.data)
-        plot_timeseries(
-            bb_stats,
-            sfreq_bb,
-            label,
-            save_path=bb_mv_dir_ts / f"timeseries_{label}.png",
-        )
-        plot_variance_distribution(
-            bb_stats["inter_var"],
-            label,
-            save_path=bb_mv_dir_var / f"variance_distribution_{label}.png",
-        )
-        df_wins_bb = compute_windowed_stats(
-            bb_stats,
-            n_times=n_times_bb,
-            sfreq=sfreq_bb,
-            window_sec=window_sec,
-            step_sec=step_sec,
-        )
-        plot_windowed_analysis(
-            bb_stats,
-            df_wins_bb,
-            sfreq_bb,
-            label,
-            window_sec,
-            10.0,
-            step_sec=step_sec,
-            save_path_bar=bb_mv_dir_win / f"windowed_bar_{label}.png",
-            save_path_overlay=bb_mv_dir_win / f"windowed_overlay_{label}.png",
-        )
+            # Z-score per subject × channel along time to normalise amplitude
+            # scale differences before computing intersubject variance (mirrors
+            # the z-scoring in plot_intersubject_variance).
+            bb_mean = wd_3d.data.mean(axis=2, keepdims=True)
+            bb_std = wd_3d.data.std(axis=2, keepdims=True)
+            bb_data_z = (wd_3d.data - bb_mean) / (bb_std + 1e-10)
 
-        # ── Broadband LOO-ISC distribution ────────────────────────
-        _logger.info(f"[{label}] Broadband LOO-ISC distribution …")
-        loo_3d, mean_loo_3d = compute_loo_isc(wd_3d.data)
-        bb_loo_dir = bb_dir / "loo_isc"
-        bb_loo_dir.mkdir(parents=True, exist_ok=True)
-        plot_loo_isc_distribution(
-            {label: mean_loo_3d},
-            ylabel=f"Number of {wd_3d.feature_axis_label.lower()}s",
-            save_path=bb_loo_dir / f"loo_isc_distribution_{label}.png",
-        )
+            bb_stats = compute_intersubject_stats(bb_data_z)
+            plot_timeseries(
+                bb_stats,
+                sfreq_bb,
+                label,
+                save_path=bb_mv_dir_ts / f"timeseries_{label}.png",
+            )
+            plot_variance_distribution(
+                bb_stats["inter_var"],
+                label,
+                save_path=bb_mv_dir_var / f"variance_distribution_{label}.png",
+            )
+            df_wins_bb = compute_windowed_stats(
+                bb_stats,
+                n_times=n_times_bb,
+                sfreq=sfreq_bb,
+                window_sec=window_sec,
+                step_sec=step_sec,
+            )
+            plot_windowed_analysis(
+                bb_stats,
+                df_wins_bb,
+                sfreq_bb,
+                label,
+                window_sec,
+                10.0,
+                step_sec=step_sec,
+                save_path_bar=bb_mv_dir_win / f"windowed_bar_{label}.png",
+                save_path_overlay=bb_mv_dir_win / f"windowed_overlay_{label}.png",
+            )
 
-        # ── Broadband multi-scale sliding-window ISC ──────────────
-        _logger.info(f"[{label}] Broadband multi-scale sliding-window ISC …")
-        step_fine = window_fine_sec / 2
-        step_med = window_sec / 2
-        step_large = window_large_sec / 2
+        # ── Broadband LOO-ISC and sliding-window ISC ──────────────
+        # Pearson/Spearman ISC requires linear data; phase angles are circular
+        # and are handled via the phase-specific workflow below (cos(circmean)).
+        if representation == "power":
+            _logger.info(f"[{label}] Broadband LOO-ISC distribution …")
+            loo_3d, mean_loo_3d = compute_loo_isc(wd_3d.data)
+            bb_loo_dir = bb_dir / "loo_isc"
+            bb_loo_dir.mkdir(parents=True, exist_ok=True)
+            plot_loo_isc_distribution(
+                {label: mean_loo_3d},
+                ylabel=f"Number of {wd_3d.feature_axis_label.lower()}s",
+                save_path=bb_loo_dir / f"loo_isc_distribution_{label}.png",
+            )
 
-        _logger.info(f"  Fine   ({window_fine_sec:.0f} s / {step_fine:.1f} s step) …")
-        sw_isc_fine, sw_times_fine = compute_sliding_window_isc(
-            data_sub_bb, window_fine_sec, step_fine, sfreq_bb
-        )
-        _logger.info(f"  Medium ({window_sec:.0f} s / {step_med:.1f} s step) …")
-        sw_isc_med, sw_times_med = compute_sliding_window_isc(
-            data_sub_bb, window_sec, step_med, sfreq_bb
-        )
-        _logger.info(f"  Large  ({window_large_sec:.0f} s / {step_large:.1f} s step) …")
-        sw_isc_large, sw_times_large = compute_sliding_window_isc(
-            data_sub_bb, window_large_sec, step_large, sfreq_bb
-        )
-        _logger.info(
-            f"  Spearman medium ({window_sec:.0f} s / {step_med:.1f} s step) …"
-        )
-        sw_isc_spear, _ = compute_sliding_window_isc_spearman(
-            data_sub_bb, window_sec, step_med, sfreq_bb
-        )
+            _logger.info(f"[{label}] Broadband multi-scale sliding-window ISC …")
+            step_fine = window_fine_sec / 2
+            step_med = window_sec / 2
+            step_large = window_large_sec / 2
 
-        bb_sw_for_overlap = (sw_isc_med, sw_times_med)
+            _logger.info(
+                f"  Fine   ({window_fine_sec:.0f} s / {step_fine:.1f} s step) …"
+            )
+            sw_isc_fine, sw_times_fine = compute_sliding_window_isc(
+                data_sub_bb, window_fine_sec, step_fine, sfreq_bb
+            )
+            _logger.info(f"  Medium ({window_sec:.0f} s / {step_med:.1f} s step) …")
+            sw_isc_med, sw_times_med = compute_sliding_window_isc(
+                data_sub_bb, window_sec, step_med, sfreq_bb
+            )
+            _logger.info(
+                f"  Large  ({window_large_sec:.0f} s / {step_large:.1f} s step) …"
+            )
+            sw_isc_large, sw_times_large = compute_sliding_window_isc(
+                data_sub_bb, window_large_sec, step_large, sfreq_bb
+            )
+            _logger.info(
+                f"  Spearman medium ({window_sec:.0f} s / {step_med:.1f} s step) …"
+            )
+            sw_isc_spear, _ = compute_sliding_window_isc_spearman(
+                data_sub_bb, window_sec, step_med, sfreq_bb
+            )
 
-        sw_dir_bb = bb_dir / "sliding_window"
-        sw_dir_bb.mkdir(parents=True, exist_ok=True)
-        plot_multiscale_sliding_window_isc(
-            label,
-            sw_isc_fine,
-            sw_times_fine,
-            sw_isc_med,
-            sw_times_med,
-            sw_isc_large,
-            sw_times_large,
-            sw_isc_spear,
-            sfreq_bb,
-            n_times_bb,
-            window_fine_sec=window_fine_sec,
-            window_med_sec=window_sec,
-            window_large_sec=window_large_sec,
-            isc_threshold=isc_threshold,
-            n_ch_subsample=n_ch_subsample if ch_idx_bb is not None else None,
-            save_path_bar=sw_dir_bb / f"sw_isc_bar_{label}.png",
-            save_path_overlay=sw_dir_bb / f"sw_isc_overlay_{label}.png",
-            save_path_comparison=sw_dir_bb / f"sw_isc_pearson_vs_spearman_{label}.png",
-        )
-        print_significant_intervals(
-            {label: (sw_isc_med, sw_times_med)}, isc_threshold=isc_threshold
-        )
+            bb_sw_for_overlap = (sw_isc_med, sw_times_med)
+
+            sw_dir_bb = bb_dir / "sliding_window"
+            sw_dir_bb.mkdir(parents=True, exist_ok=True)
+            plot_multiscale_sliding_window_isc(
+                label,
+                sw_isc_fine,
+                sw_times_fine,
+                sw_isc_med,
+                sw_times_med,
+                sw_isc_large,
+                sw_times_large,
+                sw_isc_spear,
+                sfreq_bb,
+                n_times_bb,
+                window_fine_sec=window_fine_sec,
+                window_med_sec=window_sec,
+                window_large_sec=window_large_sec,
+                isc_threshold=isc_threshold,
+                n_ch_subsample=n_ch_subsample if ch_idx_bb is not None else None,
+                save_path_bar=sw_dir_bb / f"sw_isc_bar_{label}.png",
+                save_path_overlay=sw_dir_bb / f"sw_isc_overlay_{label}.png",
+                save_path_comparison=sw_dir_bb
+                / f"sw_isc_pearson_vs_spearman_{label}.png",
+            )
+            print_significant_intervals(
+                {label: (sw_isc_med, sw_times_med)}, isc_threshold=isc_threshold
+            )
 
         # ── Notebook-parity broadband plots ──
         if representation == "power":
@@ -1296,42 +1313,58 @@ def _run_wavelet_workflow_for_label(
             feature_axis_label = wd.feature_axis_label
 
         # ── Per-band mean-variance (matching 01-raw-mean-variance-analysis) ──
-        _logger.info(f"  [{label}] {band} mean-variance analysis …")
-        band_stats = compute_intersubject_stats(wd.data)
+        # Only meaningful for power; phase angles are circular and require
+        # different normalisation.
         n_times_band = wd.data.shape[2]
-        plot_timeseries(
-            band_stats,
-            wd.sfreq,
-            f"{label} / {band}",
-            save_path=band_mv_dir_ts / f"{band}_timeseries_{label}.png",
-        )
-        plot_variance_distribution(
-            band_stats["inter_var"],
-            f"{label} / {band}",
-            save_path=band_mv_dir_var / f"{band}_variance_distribution_{label}.png",
-        )
-        df_wins_band = compute_windowed_stats(
-            band_stats,
-            n_times=n_times_band,
-            sfreq=wd.sfreq,
-            window_sec=window_sec,
-            step_sec=step_sec,
-        )
-        plot_windowed_analysis(
-            band_stats,
-            df_wins_band,
-            wd.sfreq,
-            f"{label} / {band}",
-            window_sec,
-            10.0,
-            step_sec=step_sec,
-            save_path_bar=band_mv_dir_win / f"{band}_windowed_bar_{label}.png",
-            save_path_overlay=band_mv_dir_win / f"{band}_windowed_overlay_{label}.png",
-        )
+        if representation == "power":
+            _logger.info(f"  [{label}] {band} mean-variance analysis …")
+            # Z-score per subject × channel along time (matches
+            # plot_intersubject_variance in wavelet_plots.py).
+            band_mean = wd.data.mean(axis=2, keepdims=True)
+            band_std = wd.data.std(axis=2, keepdims=True)
+            band_data_z = (wd.data - band_mean) / (band_std + 1e-10)
+            band_stats = compute_intersubject_stats(band_data_z)
+            plot_timeseries(
+                band_stats,
+                wd.sfreq,
+                f"{label} / {band}",
+                save_path=band_mv_dir_ts / f"{band}_timeseries_{label}.png",
+            )
+            plot_variance_distribution(
+                band_stats["inter_var"],
+                f"{label} / {band}",
+                save_path=band_mv_dir_var / f"{band}_variance_distribution_{label}.png",
+            )
+            df_wins_band = compute_windowed_stats(
+                band_stats,
+                n_times=n_times_band,
+                sfreq=wd.sfreq,
+                window_sec=window_sec,
+                step_sec=step_sec,
+            )
+            plot_windowed_analysis(
+                band_stats,
+                df_wins_band,
+                wd.sfreq,
+                f"{label} / {band}",
+                window_sec,
+                10.0,
+                step_sec=step_sec,
+                save_path_bar=band_mv_dir_win / f"{band}_windowed_bar_{label}.png",
+                save_path_overlay=band_mv_dir_win
+                / f"{band}_windowed_overlay_{label}.png",
+            )
 
         # ── Per-band LOO-ISC distribution ──────────────────────────
+        # For phase data use cos(circmean(phase)) to convert circular angles to
+        # a linear-correlation-friendly representation (matching the pattern in
+        # compute_phase_band_loo_iscs).
         _logger.info(f"  [{label}] {band} LOO-ISC …")
-        loo, mean_loo = compute_loo_isc(wd.data)
+        if representation == "power":
+            loo_data = wd.data
+        else:
+            loo_data = np.cos(wd.data)
+        loo, mean_loo = compute_loo_isc(loo_data)
         plot_loo_isc_distribution(
             {f"{label} / {band}": mean_loo},
             ylabel=f"Number of {wd.feature_axis_label.lower()}s",
@@ -1340,34 +1373,36 @@ def _run_wavelet_workflow_for_label(
         band_loo_iscs[band] = (loo, mean_loo)
 
         # ── Per-band multi-scale sliding-window ISC ────────────────
-        n_ch_band = wd.data.shape[1]
-        if n_ch_subsample > 0 and n_ch_subsample < n_ch_band:
-            rng_band = np.random.default_rng(42)
-            ch_idx_band = np.sort(
-                rng_band.choice(n_ch_band, n_ch_subsample, replace=False)
-            )
-            band_data_sub = wd.data[:, ch_idx_band, :]
-        else:
-            band_data_sub = wd.data
-            ch_idx_band = None
+        # Pearson/Spearman ISC requires linear data; skip for phase.
+        if representation == "power":
+            n_ch_band = wd.data.shape[1]
+            if n_ch_subsample > 0 and n_ch_subsample < n_ch_band:
+                rng_band = np.random.default_rng(42)
+                ch_idx_band = np.sort(
+                    rng_band.choice(n_ch_band, n_ch_subsample, replace=False)
+                )
+                band_data_sub = wd.data[:, ch_idx_band, :]
+            else:
+                band_data_sub = wd.data
+                ch_idx_band = None
 
-        _logger.info(f"  [{label}] {band} multi-scale sliding-window ISC …")
-        tc_fine, t_fine = compute_sliding_window_isc(
-            band_data_sub, window_fine_sec, window_fine_sec / 2, wd.sfreq
-        )
-        tc_med, t_med = compute_sliding_window_isc(
-            band_data_sub, window_sec, window_sec / 2, wd.sfreq
-        )
-        tc_large, t_large = compute_sliding_window_isc(
-            band_data_sub, window_large_sec, window_large_sec / 2, wd.sfreq
-        )
-        tc_sp, _ = compute_sliding_window_isc_spearman(
-            band_data_sub, window_sec, window_sec / 2, wd.sfreq
-        )
-        band_sw_fine[band] = (tc_fine, t_fine)
-        band_sw_med[band] = (tc_med, t_med)
-        band_sw_large[band] = (tc_large, t_large)
-        band_sw_spearman_med[band] = (tc_sp, t_med)
+            _logger.info(f"  [{label}] {band} multi-scale sliding-window ISC …")
+            tc_fine, t_fine = compute_sliding_window_isc(
+                band_data_sub, window_fine_sec, window_fine_sec / 2, wd.sfreq
+            )
+            tc_med, t_med = compute_sliding_window_isc(
+                band_data_sub, window_sec, window_sec / 2, wd.sfreq
+            )
+            tc_large, t_large = compute_sliding_window_isc(
+                band_data_sub, window_large_sec, window_large_sec / 2, wd.sfreq
+            )
+            tc_sp, _ = compute_sliding_window_isc_spearman(
+                band_data_sub, window_sec, window_sec / 2, wd.sfreq
+            )
+            band_sw_fine[band] = (tc_fine, t_fine)
+            band_sw_med[band] = (tc_med, t_med)
+            band_sw_large[band] = (tc_large, t_large)
+            band_sw_spearman_med[band] = (tc_sp, t_med)
 
         del band_ds, wd
 
@@ -1391,44 +1426,45 @@ def _run_wavelet_workflow_for_label(
         save_path=bands_dir / "loo_isc" / f"band_isc_mean_bar_{label}.png",
     )
 
-    # Multi-scale sliding-window ISC per band (replaces old single-window plot)
-    sliding_window_dir = bands_dir / "sliding_window"
-    sliding_window_dir.mkdir(parents=True, exist_ok=True)
-    plot_band_multiscale_sliding_window_isc(
-        label,
-        band_sw_fine,
-        band_sw_med,
-        band_sw_large,
-        band_sw_spearman_med,
-        sfreq=ad.sfreq,
-        n_times=ad.data.shape[2],
-        window_fine_sec=window_fine_sec,
-        window_med_sec=window_sec,
-        window_large_sec=window_large_sec,
-        band_thresholds=selected_band_thresholds,
-        bands=selected_bands,
-        n_ch_subsample=(
-            n_ch_subsample
-            if n_ch_subsample > 0 and n_ch_subsample < ad.data.shape[1]
-            else None
-        ),
-        save_path_dir=sliding_window_dir,
-    )
-    print_band_significant_intervals(
-        {label: band_sw_med},
-        bands=selected_bands,
-        band_thresholds=selected_band_thresholds,
-        default_threshold=isc_threshold,
-    )
-    if bb_sw_for_overlap is not None:
-        plot_band_overlap(
+    # Multi-scale sliding-window ISC per band (power only)
+    if band_sw_med:
+        sliding_window_dir = bands_dir / "sliding_window"
+        sliding_window_dir.mkdir(parents=True, exist_ok=True)
+        plot_band_multiscale_sliding_window_isc(
+            label,
+            band_sw_fine,
+            band_sw_med,
+            band_sw_large,
+            band_sw_spearman_med,
+            sfreq=ad.sfreq,
+            n_times=ad.data.shape[2],
+            window_fine_sec=window_fine_sec,
+            window_med_sec=window_sec,
+            window_large_sec=window_large_sec,
+            band_thresholds=selected_band_thresholds,
+            bands=selected_bands,
+            n_ch_subsample=(
+                n_ch_subsample
+                if n_ch_subsample > 0 and n_ch_subsample < ad.data.shape[1]
+                else None
+            ),
+            save_path_dir=sliding_window_dir,
+        )
+        print_band_significant_intervals(
             {label: band_sw_med},
             bands=selected_bands,
             band_thresholds=selected_band_thresholds,
-            broadband_sw={label: bb_sw_for_overlap},
-            broadband_threshold=isc_threshold,
-            save_path=(bands_dir / "band_overlap" / f"band_overlap_{label}.png"),
+            default_threshold=isc_threshold,
         )
+        if bb_sw_for_overlap is not None:
+            plot_band_overlap(
+                {label: band_sw_med},
+                bands=selected_bands,
+                band_thresholds=selected_band_thresholds,
+                broadband_sw={label: bb_sw_for_overlap},
+                broadband_threshold=isc_threshold,
+                save_path=(bands_dir / "band_overlap" / f"band_overlap_{label}.png"),
+            )
 
 
 def run_wavelet_workflow(
