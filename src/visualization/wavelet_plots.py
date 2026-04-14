@@ -118,6 +118,7 @@ def plot_tf_map(
     sfreq: float,
     *,
     label: str,
+    percentile_clip: float = 99.0,
     save_path: Optional[Path] = None,
 ) -> Figure:
     """Channel- and subject-averaged time–frequency map of wavelet power.
@@ -126,6 +127,9 @@ def plot_tf_map(
         power.
     :param freqs: Morlet frequencies (Hz).
     :param sfreq: Sampling frequency for the time axis.
+    :param percentile_clip: Upper percentile used as ``vmax`` for the colour
+        scale.  Values above this percentile are clipped, preventing outliers
+        from compressing the dynamic range.  Defaults to ``99.0``.
     """
     if bb_data.ndim != 4:
         raise ValueError(
@@ -136,6 +140,9 @@ def plot_tf_map(
     n_times = bb_data.shape[3]
     time = np.arange(n_times) / float(sfreq)
 
+    vmin = float(np.percentile(tfr_map, 100.0 - percentile_clip))
+    vmax = float(np.percentile(tfr_map, percentile_clip))
+
     fig, ax = plt.subplots(figsize=(14, 5))
     im = ax.imshow(
         tfr_map,
@@ -143,6 +150,8 @@ def plot_tf_map(
         origin="lower",
         extent=[time[0], time[-1], freqs[0], freqs[-1]],
         cmap="inferno",
+        vmin=vmin,
+        vmax=vmax,
     )
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Frequency (Hz)")
