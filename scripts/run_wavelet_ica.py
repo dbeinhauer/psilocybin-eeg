@@ -22,10 +22,10 @@ For each requested ``(condition, music_type)`` the script:
    :mod:`src.visualization.wavelet_ica_plots` into the canonical layout::
 
        plots/04-wavelet-ica-analysis/<Condition>_<MusicType>/
-           superbrain/pca_ica/*.png
-           intersubject/pca_ica/*.png
-           temporal/pca_ica/*.png
-           inverted_superbrain/pca_ica/*.png
+           broadband/superbrain/*.png
+           broadband/intersubject/*.png
+           broadband/temporal/*.png
+           broadband/inverted_superbrain/*.png
 
 Usage examples::
 
@@ -284,7 +284,7 @@ def _run_superbrain(
 ) -> SuperBrainResult:
     """Super-Brain decomposition + 12 plots."""
     _logger.info(f"[{label}] === Super-Brain decomposition ===")
-    out_dir = save_dir / "superbrain" / "pca_ica"
+    out_dir = save_dir / "broadband" / "superbrain"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     r = decompose_superbrain(
@@ -414,7 +414,7 @@ def _run_intersubject(
 ) -> InterSubjectResult:
     """Inter-Subject decomposition + 12 plots."""
     _logger.info(f"[{label}] === Inter-Subject decomposition ===")
-    out_dir = save_dir / "intersubject" / "pca_ica"
+    out_dir = save_dir / "broadband" / "intersubject"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     r = decompose_intersubject(
@@ -549,7 +549,7 @@ def _run_temporal(
 ) -> TemporalResult:
     """Temporal decomposition + 10 plots."""
     _logger.info(f"[{label}] === Temporal decomposition ===")
-    out_dir = save_dir / "temporal" / "pca_ica"
+    out_dir = save_dir / "broadband" / "temporal"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     r = decompose_temporal(data_4d, n_pca=n_pca, n_ica=n_ica, random_state=random_state)
@@ -670,7 +670,7 @@ def _run_inverted_superbrain(
 ) -> InvertedSuperBrainResult:
     """Inverted Super-Brain decomposition + 10 plots."""
     _logger.info(f"[{label}] === Inverted Super-Brain decomposition ===")
-    out_dir = save_dir / "inverted_superbrain" / "pca_ica"
+    out_dir = save_dir / "broadband" / "inverted_superbrain"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     r = decompose_inverted_superbrain(

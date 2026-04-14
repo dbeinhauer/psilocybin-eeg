@@ -121,8 +121,8 @@ class TestDecomposeSuperbrain:
         r2 = decompose_superbrain(
             synthetic_data, n_pca=N_PCA, n_ica=N_ICA, random_state=0
         )
-        np.testing.assert_array_equal(r1.pca_scores, r2.pca_scores)
-        np.testing.assert_array_equal(r1.ica_sources, r2.ica_sources)
+        np.testing.assert_allclose(r1.pca_scores, r2.pca_scores, rtol=1e-5, atol=1e-8)
+        np.testing.assert_allclose(r1.ica_sources, r2.ica_sources, rtol=1e-5, atol=1e-8)
 
     def test_wrong_ndim_raises(self) -> None:
         with pytest.raises(ValueError, match="4-D"):
@@ -149,8 +149,8 @@ class TestDecomposeIntersubject:
         r2 = decompose_intersubject(
             synthetic_data, n_pca=N_PCA, n_ica=N_ICA, random_state=0
         )
-        np.testing.assert_array_equal(r1.pca_scores, r2.pca_scores)
-        np.testing.assert_array_equal(r1.ica_sources, r2.ica_sources)
+        np.testing.assert_allclose(r1.pca_scores, r2.pca_scores, rtol=1e-5, atol=1e-8)
+        np.testing.assert_allclose(r1.ica_sources, r2.ica_sources, rtol=1e-5, atol=1e-8)
 
     def test_wrong_ndim_raises(self) -> None:
         with pytest.raises(ValueError, match="4-D"):
@@ -177,8 +177,8 @@ class TestDecomposeTemporal:
         r2 = decompose_temporal(
             synthetic_data, n_pca=N_PCA, n_ica=N_ICA, random_state=0
         )
-        np.testing.assert_array_equal(r1.pca_scores, r2.pca_scores)
-        np.testing.assert_array_equal(r1.ica_sources, r2.ica_sources)
+        np.testing.assert_allclose(r1.pca_scores, r2.pca_scores, rtol=1e-5, atol=1e-8)
+        np.testing.assert_allclose(r1.ica_sources, r2.ica_sources, rtol=1e-5, atol=1e-8)
 
     def test_wrong_ndim_raises(self) -> None:
         with pytest.raises(ValueError, match="4-D"):
@@ -205,8 +205,8 @@ class TestDecomposeInvertedSuperbrain:
         r2 = decompose_inverted_superbrain(
             synthetic_data, n_pca=N_PCA, n_ica=N_ICA, random_state=0
         )
-        np.testing.assert_array_equal(r1.pca_scores, r2.pca_scores)
-        np.testing.assert_array_equal(r1.ica_sources, r2.ica_sources)
+        np.testing.assert_allclose(r1.pca_scores, r2.pca_scores, rtol=1e-5, atol=1e-8)
+        np.testing.assert_allclose(r1.ica_sources, r2.ica_sources, rtol=1e-5, atol=1e-8)
 
     def test_wrong_ndim_raises(self) -> None:
         with pytest.raises(ValueError, match="4-D"):

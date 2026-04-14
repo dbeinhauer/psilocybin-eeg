@@ -979,12 +979,8 @@ def plot_temporal_ica_per_subject_topomaps(
     n_show_comp = min(n_show_comp, n_ica)
 
     fig, axes = plt.subplots(
-        n_show_comp, n_subj, figsize=(3 * n_subj, 3.5 * n_show_comp)
+        n_show_comp, n_subj, figsize=(3 * n_subj, 3.5 * n_show_comp), squeeze=False
     )
-    if n_show_comp == 1:
-        axes = axes[np.newaxis, :]
-    if n_subj == 1:
-        axes = axes[:, np.newaxis]
 
     for k in range(n_show_comp):
         for s in range(n_subj):

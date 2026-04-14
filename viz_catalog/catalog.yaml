@@ -827,7 +827,7 @@ analyses:
         title: "Super-Brain — PCA scree + cumulative variance"
         notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_superbrain.ipynb"
         section: "PCA — Scree plot"
-        filename_pattern: "superbrain/pca_ica/pca_scree_*.png"
+        filename_pattern: "pca_scree_*.png"
         data_shape:
           input: "(n_pca,) — explained variance ratio"
           output: "Two-panel bar + cumulative line plot"
@@ -842,7 +842,7 @@ analyses:
         title: "Super-Brain — PCA component time courses"
         notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_superbrain.ipynb"
         section: "PCA — Component time courses"
-        filename_pattern: "superbrain/pca_ica/pca_timecourses_*.png"
+        filename_pattern: "pca_timecourses_*.png"
         data_shape:
           input: "(T, n_pca) — PCA scores"
           output: "Vertical stack of time-series panels (top-K components)"
@@ -856,7 +856,7 @@ analyses:
         title: "Super-Brain — PCA channel topomap"
         notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_superbrain.ipynb"
         section: "PCA — Channel loadings"
-        filename_pattern: "superbrain/pca_ica/pca_channel_topomap_*.png"
+        filename_pattern: "pca_channel_topomap_*.png"
         data_shape:
           input: "(n_pca, S, C, F) — reshaped loadings"
           output: "Row of 2D scalp maps — one topomap per component"
@@ -871,7 +871,7 @@ analyses:
         title: "Super-Brain — PCA component LOO-ISC"
         notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_superbrain.ipynb"
         section: "PCA — Component ISC"
-        filename_pattern: "superbrain/pca_ica/pca_component_isc_*.png"
+        filename_pattern: "pca_component_isc_*.png"
         data_shape:
           input: "(n_pca,) — mean LOO-ISC per PC"
           output: "Bar chart (one bar per component)"
@@ -886,7 +886,7 @@ analyses:
         title: "Super-Brain — ICA topomap (mean across subjects)"
         notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_superbrain.ipynb"
         section: "ICA — Topomaps (mean)"
-        filename_pattern: "superbrain/pca_ica/ica_topomap_mean_*.png"
+        filename_pattern: "ica_topomap_mean_*.png"
         data_shape:
           input: "(C, n_ica) — subject-mean ICA channel loadings"
           output: "Row of scalp maps — one topomap per IC"
@@ -902,7 +902,7 @@ analyses:
         title: "Inter-Subject — PCA channel × frequency maps"
         notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_intersubject.ipynb"
         section: "PCA — Spatial-spectral component maps"
-        filename_pattern: "intersubject/pca_ica/pca_channel_freq_maps_*.png"
+        filename_pattern: "pca_channel_freq_maps_*.png"
         data_shape:
           input: "(n_pca, C, F) — PCA loadings reshaped"
           output: "Grid of channel × frequency heatmaps (one per component)"
@@ -917,7 +917,7 @@ analyses:
         title: "Inter-Subject — PCA topomaps (freq-averaged)"
         notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_intersubject.ipynb"
         section: "PCA — Topomaps"
-        filename_pattern: "intersubject/pca_ica/pca_topomaps_*.png"
+        filename_pattern: "pca_topomaps_*.png"
         data_shape:
           input: "(n_pca, C) — channel marginal of component loadings"
           output: "Row of 2D scalp maps"
@@ -931,7 +931,7 @@ analyses:
         title: "Inter-Subject — per-component S × S correlation"
         notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_intersubject.ipynb"
         section: "Inter-subject similarity"
-        filename_pattern: "intersubject/pca_ica/intersubject_similarity_*.png"
+        filename_pattern: "intersubject_similarity_*.png"
         data_shape:
           input: "(S, T, n_pca) — per-subject PCA scores"
           output: "Row of S × S correlation matrices (one per PC)"
@@ -946,7 +946,7 @@ analyses:
         title: "Inter-Subject — band-resolved component loadings"
         notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_intersubject.ipynb"
         section: "Band-resolved loadings"
-        filename_pattern: "intersubject/pca_ica/band_resolved_loadings_*.png"
+        filename_pattern: "band_resolved_loadings_*.png"
         data_shape:
           input: "{band: (n_pca,)} — mean |loading| per band per PC"
           output: "Grouped bar chart (PCs × bands)"
@@ -962,7 +962,7 @@ analyses:
         title: "Temporal — ICA frequency × time maps"
         notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_temporal.ipynb"
         section: "ICA — Frequency × time maps"
-        filename_pattern: "temporal/pca_ica/ica_freq_time_maps_*.png"
+        filename_pattern: "ica_freq_time_maps_*.png"
         data_shape:
           input: "(n_ica, F, T) — ICA mixing matrix reshaped"
           output: "Grid of freq × time heatmaps (one per IC)"
@@ -977,7 +977,7 @@ analyses:
         title: "Temporal — ICA spectral profiles"
         notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_temporal.ipynb"
         section: "ICA — Spectral profiles"
-        filename_pattern: "temporal/pca_ica/ica_spectral_profiles_*.png"
+        filename_pattern: "ica_spectral_profiles_*.png"
         data_shape:
           input: "(n_ica, F) — time-averaged IC frequency profiles"
           output: "Vertical stack of frequency curves with band shading"
@@ -992,7 +992,7 @@ analyses:
         title: "Temporal — ICA band-resolved energy"
         notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_temporal.ipynb"
         section: "ICA — Band energy"
-        filename_pattern: "temporal/pca_ica/ica_band_energy_*.png"
+        filename_pattern: "ica_band_energy_*.png"
         data_shape:
           input: "{band: (n_ica,)} — mean squared weight per band"
           output: "Grouped bar chart (ICs × bands)"
@@ -1007,7 +1007,7 @@ analyses:
         title: "Temporal — ICA temporal-profile correlation matrix"
         notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_temporal.ipynb"
         section: "ICA — Component correlation"
-        filename_pattern: "temporal/pca_ica/ica_component_correlation_*.png"
+        filename_pattern: "ica_component_correlation_*.png"
         data_shape:
           input: "(n_ica, T) — freq-averaged IC time profiles"
           output: "n_ica × n_ica correlation heatmap"
@@ -1023,7 +1023,7 @@ analyses:
         title: "Inverted Super-Brain — ICA temporal patterns"
         notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_inverted_superbrain.ipynb"
         section: "ICA — Temporal patterns"
-        filename_pattern: "inverted_superbrain/pca_ica/ica_temporal_patterns_*.png"
+        filename_pattern: "ica_temporal_patterns_*.png"
         data_shape:
           input: "(n_ica, T) — ICA mixing transpose"
           output: "Vertical stack of temporal component time-series"
@@ -1038,7 +1038,7 @@ analyses:
         title: "Inverted Super-Brain — ICA channel topomap (|score|)"
         notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_inverted_superbrain.ipynb"
         section: "ICA — Channel topomap"
-        filename_pattern: "inverted_superbrain/pca_ica/ica_channel_topomap_*.png"
+        filename_pattern: "ica_channel_topomap_*.png"
         data_shape:
           input: "(C, n_ica) — mean |score| over S and F"
           output: "Row of 2D scalp maps — one topomap per IC"
@@ -1053,7 +1053,7 @@ analyses:
         title: "Inverted Super-Brain — ICA frequency loadings"
         notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_inverted_superbrain.ipynb"
         section: "ICA — Frequency loadings"
-        filename_pattern: "inverted_superbrain/pca_ica/ica_freq_loadings_*.png"
+        filename_pattern: "ica_freq_loadings_*.png"
         data_shape:
           input: "(F, n_ica) — mean |score| over S and C"
           output: "Vertical stack of frequency curves"
@@ -1068,7 +1068,7 @@ analyses:
         title: "Inverted Super-Brain — ICA spectrograms"
         notebook: "notebooks/04-wavelet-ica-analysis/wavelet_ica_inverted_superbrain.ipynb"
         section: "ICA — Spectrograms"
-        filename_pattern: "inverted_superbrain/pca_ica/ica_spectrograms_*.png"
+        filename_pattern: "ica_spectrograms_*.png"
         data_shape:
           input: "(n_ica, T) — ICA temporal patterns"
           output: "Vertical stack of STFT spectrograms"
