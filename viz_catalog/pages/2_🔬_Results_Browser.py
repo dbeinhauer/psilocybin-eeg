@@ -150,6 +150,55 @@ def slug_to_display(slug: str) -> str:
     return _analysis_type_labels.get(slug, slug.replace("_", " ").title())
 
 
+def build_catalog_plot_group_map(
+    catalog: dict,
+) -> dict[tuple[str, str], tuple[str, int]]:
+    """Return {(vstage_id, fnmatch_pattern): (group_label, group_order)}.
+
+    Used to add visual sub-headers within a (condition, music_type, band)
+    subsection whenever a single analysis type contains multiple plot groups
+    (e.g. stage-04 approaches where one analysis_type directory holds many
+    distinct visualisation types: PCA Scree, Topographic Maps, ICA Topomaps…).
+    """
+    result: dict[tuple[str, str], tuple[str, int]] = {}
+    for analysis in catalog.get("analyses", []):
+        aid = analysis.get("id", "")
+        group_order: dict[str, int] = {}
+        for plot in analysis.get("plots", []):
+            group = plot.get("group")
+            if not group:
+                continue
+            if group not in group_order:
+                group_order[group] = len(group_order)
+            for raw_pattern in plot.get("filename_pattern", "").split(","):
+                pattern = raw_pattern.strip()
+                if not pattern:
+                    continue
+                # Keep only the basename part so we match against rec["filename"].
+                basename_pattern = Path(pattern).name
+                key = (aid, basename_pattern)
+                if key not in result:
+                    result[key] = (group, group_order[group])
+    return result
+
+
+_catalog_plot_group_map: dict[tuple[str, str], tuple[str, int]] = (
+    build_catalog_plot_group_map(_catalog)
+)
+
+
+def get_plot_group(vstage: str, filename: str) -> tuple[str | None, int]:
+    """Return the catalog group label and sort-order for a given file.
+
+    Matches *filename* (bare name, no directory) against every fnmatch pattern
+    registered for *vstage*.  Returns ``(None, 9999)`` when no match is found.
+    """
+    for (vs, pattern), (group, order) in _catalog_plot_group_map.items():
+        if vs == vstage and fnmatch.fnmatch(filename, pattern):
+            return group, order
+    return None, 9999
+
+
 _THUMBNAIL_MAX_PX = 600  # longest edge of the displayed thumbnail
 _THUMBNAIL_QUALITY = 72  # JPEG quality for thumbnails
 
@@ -744,40 +793,55 @@ for vstage, analysis_type in section_order:
         if parts:
             st.markdown("##### " + " | ".join(parts))
 
-        if view_mode == "Grid":
-            cols = st.columns(n_cols)
-            for i, rec in enumerate(sub_records):
-                col = cols[i % n_cols]
-                with col:
-                    render_clickable_image(rec["path"])
-                    st.caption(rec["relative"])
-                    render_info(rec, stage_override=vstage)
-        else:
-            # List view — full-width with metadata
-            for rec in sub_records:
-                with st.container(border=True):
-                    col_img, col_meta = st.columns([2, 3])
-                    with col_img:
+        # Further group by catalog plot group (e.g. "PCA Scree", "ICA Topomaps").
+        # Only renders group headers when more than one distinct group is present.
+        plot_group_buckets: dict[tuple[str | None, int], list[dict]] = {}
+        for rec in sub_records:
+            pg_label, pg_order = get_plot_group(vstage, rec["filename"])
+            plot_group_buckets.setdefault((pg_label, pg_order), []).append(rec)
+
+        show_group_headers = len(plot_group_buckets) > 1
+
+        for (pg_label, _pg_order), pg_records in sorted(
+            plot_group_buckets.items(), key=lambda kv: kv[0][1]
+        ):
+            if show_group_headers and pg_label:
+                st.markdown(f"###### {pg_label}")
+
+            if view_mode == "Grid":
+                cols = st.columns(n_cols)
+                for i, rec in enumerate(pg_records):
+                    col = cols[i % n_cols]
+                    with col:
                         render_clickable_image(rec["path"])
+                        st.caption(rec["relative"])
                         render_info(rec, stage_override=vstage)
-                    with col_meta:
-                        st.markdown(f"**{rec['filename']}**")
-                        st.markdown(f"- **Path**: `{rec['relative']}`")
-                        if vstage:
-                            st.markdown(f"- **Stage**: `{vstage}`")
-                        if rec["condition"]:
-                            st.markdown(f"- **Condition**: `{rec['condition']}`")
-                        if rec["music_type"]:
-                            st.markdown(f"- **Music type**: `{rec['music_type']}`")
-                        if rec["spectrum_type"]:
-                            st.markdown(
-                                f"- **Spectrum type**: `{rec['spectrum_type']}`"
-                            )
-                        if rec["analysis_type"]:
-                            st.markdown(
-                                f"- **Analysis type**: {slug_to_display(rec['analysis_type'])}"
-                            )
-                        if rec.get("band"):
-                            st.markdown(f"- **Frequency band**: `{rec['band']}`")
-                        file_size = os.path.getsize(rec["path"])
-                        st.markdown(f"- **Size**: {file_size / 1024:.1f} KB")
+            else:
+                # List view — full-width with metadata
+                for rec in pg_records:
+                    with st.container(border=True):
+                        col_img, col_meta = st.columns([2, 3])
+                        with col_img:
+                            render_clickable_image(rec["path"])
+                            render_info(rec, stage_override=vstage)
+                        with col_meta:
+                            st.markdown(f"**{rec['filename']}**")
+                            st.markdown(f"- **Path**: `{rec['relative']}`")
+                            if vstage:
+                                st.markdown(f"- **Stage**: `{vstage}`")
+                            if rec["condition"]:
+                                st.markdown(f"- **Condition**: `{rec['condition']}`")
+                            if rec["music_type"]:
+                                st.markdown(f"- **Music type**: `{rec['music_type']}`")
+                            if rec["spectrum_type"]:
+                                st.markdown(
+                                    f"- **Spectrum type**: `{rec['spectrum_type']}`"
+                                )
+                            if rec["analysis_type"]:
+                                st.markdown(
+                                    f"- **Analysis type**: {slug_to_display(rec['analysis_type'])}"
+                                )
+                            if rec.get("band"):
+                                st.markdown(f"- **Frequency band**: `{rec['band']}`")
+                            file_size = os.path.getsize(rec["path"])
+                            st.markdown(f"- **Size**: {file_size / 1024:.1f} KB")
