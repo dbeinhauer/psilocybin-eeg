@@ -21,7 +21,11 @@ from src.visualization.isc_plots import (
     plot_band_pairwise_isc_pearson_vs_spearman,
     plot_band_multiscale_sliding_window_isc,
 )
-from src.visualization.wavelet_plots import compute_itpc, compute_phase_band_loo_iscs
+from src.visualization.wavelet_plots import (
+    compute_itpc,
+    compute_phase_band_loo_iscs,
+    plot_tf_map,
+)
 from src.analysis.isc import FREQUENCY_BANDS
 from src.definitions.constants import ProjectPaths
 from pathlib import Path
@@ -442,3 +446,61 @@ class TestComputePhaseBandLooIscs:
         result = compute_phase_band_loo_iscs(fake_phase_4d, freqs, bands=custom_bands)
         assert "my_band" in result
         assert result["my_band"].shape == (_N_CHANNELS_W,)
+
+
+# ---------------------------------------------------------------------------
+# Tests for plot_tf_map percentile clipping
+# ---------------------------------------------------------------------------
+
+
+class TestPlotTfMap:
+    """plot_tf_map: verify percentile-based colour scale clipping."""
+
+    def _make_bb_data(self, rng, inject_outlier: bool = False) -> tuple:
+        """Return (bb_data, freqs, sfreq) with an optional extreme outlier."""
+        bb = rng.random((_N_SUBJECTS_W, _N_CHANNELS_W, _N_FREQS_W, _N_TIMES_W)).astype(
+            np.float32
+        )
+        if inject_outlier:
+            # Inject a value 1000× above the typical range
+            bb[0, 0, 0, 0] = 1000.0
+        freqs = np.linspace(1.0, 70.0, _N_FREQS_W)
+        sfreq = 250.0
+        return bb, freqs, sfreq
+
+    def test_returns_figure(self):
+        rng = np.random.default_rng(42)
+        bb, freqs, sfreq = self._make_bb_data(rng)
+        fig = plot_tf_map(bb, freqs, sfreq, label="test")
+        import matplotlib.figure
+
+        assert isinstance(fig, matplotlib.figure.Figure)
+        plt.close("all")
+
+    def test_raises_on_wrong_ndim(self):
+        with pytest.raises(ValueError, match="4D"):
+            plot_tf_map(np.zeros((3, 4, 5)), np.linspace(1, 70, 5), 250.0, label="x")
+
+    def test_vmax_respects_percentile_clip(self):
+        """The colorbar maximum must equal the requested percentile of the mean map."""
+        rng = np.random.default_rng(7)
+        bb, freqs, sfreq = self._make_bb_data(rng, inject_outlier=True)
+
+        fig = plot_tf_map(bb, freqs, sfreq, label="outlier", percentile_clip=99.0)
+        im = fig.axes[0].get_images()[0]
+        tfr_map = bb.mean(axis=(0, 1))
+        expected_vmax = float(np.percentile(tfr_map, 99.0))
+        assert abs(im.norm.vmax - expected_vmax) < 1e-5
+        plt.close("all")
+
+    def test_outlier_does_not_dominate_colorscale(self):
+        """With a large outlier, vmax at p99 must be far below the outlier."""
+        rng = np.random.default_rng(11)
+        bb, freqs, sfreq = self._make_bb_data(rng, inject_outlier=True)
+
+        fig = plot_tf_map(bb, freqs, sfreq, label="outlier_check", percentile_clip=99.0)
+        im = fig.axes[0].get_images()[0]
+        assert im.norm.vmax < 10.0, (
+            "vmax should be well below the injected outlier of 1000"
+        )
+        plt.close("all")
