@@ -23,6 +23,7 @@ from src.analysis.wavelet_ica import (
     decompose_temporal,
     decompose_inverted_superbrain,
     decompose_subject_frequency,
+    zscore_by_time,
 )
 
 # ---------------------------------------------------------------------------
@@ -42,6 +43,45 @@ def synthetic_data() -> np.ndarray:
     return rng.normal(size=(N_SUBJECTS, N_CHANNELS, N_FREQS, N_TIMES)).astype(
         np.float32
     )
+
+
+# ---------------------------------------------------------------------------
+# Z-score tests
+# ---------------------------------------------------------------------------
+
+
+class TestZscoreByTime:
+    """zscore_by_time normalises each (S, C, F) slice along T."""
+
+    def test_output_shape(self, synthetic_data: np.ndarray) -> None:
+        result = zscore_by_time(synthetic_data)
+        assert result.shape == synthetic_data.shape
+
+    def test_zero_mean(self, synthetic_data: np.ndarray) -> None:
+        result = zscore_by_time(synthetic_data)
+        means = result.mean(axis=-1)
+        np.testing.assert_allclose(means, 0, atol=1e-6)
+
+    def test_unit_variance(self, synthetic_data: np.ndarray) -> None:
+        result = zscore_by_time(synthetic_data)
+        stds = result.std(axis=-1)
+        np.testing.assert_allclose(stds, 1, atol=1e-6)
+
+    def test_input_not_mutated(self, synthetic_data: np.ndarray) -> None:
+        original = synthetic_data.copy()
+        zscore_by_time(synthetic_data)
+        np.testing.assert_array_equal(synthetic_data, original)
+
+    def test_constant_timeseries_no_nan(self) -> None:
+        """Constant time series should produce zeros, not NaN."""
+        data = np.ones((2, 3, 4, 50))
+        result = zscore_by_time(data)
+        assert not np.any(np.isnan(result))
+        np.testing.assert_allclose(result, 0)
+
+    def test_wrong_ndim_raises(self) -> None:
+        with pytest.raises(ValueError, match="4-D"):
+            zscore_by_time(np.zeros((3, 4, 5)))
 
 
 # ---------------------------------------------------------------------------

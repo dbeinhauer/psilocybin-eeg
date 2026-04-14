@@ -6,6 +6,12 @@ n_times)`` wavelet-power array into a 2-D matrix suitable for sklearn
 ``PCA`` → ``FastICA``.  Each strategy highlights a different aspect of the
 data (spatial vs. spectral vs. temporal structure).
 
+Before reshaping, the tensor is **z-scored along the time axis** so that
+every ``(subject, channel, frequency)`` slice has zero mean and unit
+variance.  This removes overall amplitude differences across
+subjects/channels/frequencies and ensures PCA/ICA operates on
+standardised activations.
+
 +---+------------------------+-------------------+------------------+
 | # | Name                   | Observation axis  | Feature axis     |
 +---+------------------------+-------------------+------------------+
@@ -39,6 +45,26 @@ def _validate_4d(data: np.ndarray) -> None:
             f"Expected a 4-D array (n_subjects, n_channels, n_freqs, n_times), "
             f"got shape {data.shape} (ndim={data.ndim})."
         )
+
+
+def zscore_by_time(data: np.ndarray) -> np.ndarray:
+    """Z-score a 4-D wavelet-power tensor along the time axis.
+
+    For each ``(subject, channel, frequency)`` slice the time series is
+    normalised to zero mean and unit variance.  This removes overall
+    amplitude differences across subjects/channels/frequencies so that
+    PCA/ICA operate on standardised activations.
+
+    :param data: ``(S, C, F, T)`` wavelet-power tensor (**not** mutated).
+    :return: A **new** array of the same shape with each ``[:, :, :, :]``
+        slice having mean ≈ 0 and std ≈ 1 along the last axis.
+    """
+    _validate_4d(data)
+    mean = data.mean(axis=-1, keepdims=True)
+    std = data.std(axis=-1, keepdims=True)
+    # Guard against zero-variance slices (constant time series).
+    std = np.where(std == 0, 1.0, std)
+    return (data - mean) / std
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +326,7 @@ def decompose_superbrain(
     """
     _validate_4d(data)
     S, C, F, T = data.shape
-    matrix = reshape_superbrain(data)
+    matrix = reshape_superbrain(zscore_by_time(data))
     pca_scores, pca_comp, evr, ica_src, ica_mix = _run_pca_ica(
         matrix, n_pca, n_ica, random_state
     )
@@ -333,7 +359,7 @@ def decompose_intersubject(
     """
     _validate_4d(data)
     S, C, F, T = data.shape
-    matrix = reshape_intersubject(data)
+    matrix = reshape_intersubject(zscore_by_time(data))
     pca_scores, pca_comp, evr, ica_src, ica_mix = _run_pca_ica(
         matrix, n_pca, n_ica, random_state
     )
@@ -366,7 +392,7 @@ def decompose_temporal(
     """
     _validate_4d(data)
     S, C, F, T = data.shape
-    matrix = reshape_temporal(data)
+    matrix = reshape_temporal(zscore_by_time(data))
     pca_scores, pca_comp, evr, ica_src, ica_mix = _run_pca_ica(
         matrix, n_pca, n_ica, random_state
     )
@@ -399,7 +425,7 @@ def decompose_inverted_superbrain(
     """
     _validate_4d(data)
     S, C, F, T = data.shape
-    matrix = reshape_inverted_superbrain(data)
+    matrix = reshape_inverted_superbrain(zscore_by_time(data))
     pca_scores, pca_comp, evr, ica_src, ica_mix = _run_pca_ica(
         matrix, n_pca, n_ica, random_state
     )
@@ -432,7 +458,7 @@ def decompose_subject_frequency(
     """
     _validate_4d(data)
     S, C, F, T = data.shape
-    matrix = reshape_subject_frequency(data)
+    matrix = reshape_subject_frequency(zscore_by_time(data))
     pca_scores, pca_comp, evr, ica_src, ica_mix = _run_pca_ica(
         matrix, n_pca, n_ica, random_state
     )
