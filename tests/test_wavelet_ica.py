@@ -254,3 +254,58 @@ class TestInputNotMutated:
         original = synthetic_data.copy()
         decompose_fn(synthetic_data, n_pca=N_PCA, n_ica=N_ICA)
         np.testing.assert_array_equal(synthetic_data, original)
+
+
+# ---------------------------------------------------------------------------
+# Cross-band visualisation tests
+# ---------------------------------------------------------------------------
+
+
+class TestCrossBandScreeComparison:
+    """Smoke test: plot_cross_band_scree_comparison returns a Figure."""
+
+    def test_returns_figure(self) -> None:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        from matplotlib.figure import Figure
+
+        from src.visualization.wavelet_ica_plots import (
+            plot_cross_band_scree_comparison,
+        )
+
+        band_var = {
+            "delta": np.array([0.3, 0.2, 0.1]),
+            "theta": np.array([0.25, 0.15, 0.12]),
+        }
+        fig = plot_cross_band_scree_comparison(
+            band_var, approach="Super-Brain", label="test"
+        )
+        assert isinstance(fig, Figure)
+
+
+class TestCrossBandVarianceSummary:
+    """Smoke test: plot_cross_band_variance_summary returns a Figure."""
+
+    def test_returns_figure(self) -> None:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        from matplotlib.figure import Figure
+
+        from src.visualization.wavelet_ica_plots import (
+            plot_cross_band_variance_summary,
+        )
+
+        band_var = {
+            "Super-Brain": {
+                "delta": np.array([0.3, 0.2]),
+                "theta": np.array([0.25, 0.15]),
+            },
+            "Temporal": {
+                "delta": np.array([0.4, 0.1]),
+                "theta": np.array([0.2, 0.1]),
+            },
+        }
+        fig = plot_cross_band_variance_summary(band_var, label="test")
+        assert isinstance(fig, Figure)
