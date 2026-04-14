@@ -26,14 +26,21 @@ For each requested ``(condition, music_type)`` the script:
            broadband/intersubject/*.png
            broadband/temporal/*.png
            broadband/inverted_superbrain/*.png
+           bands/superbrain/<band>_*.png
+           bands/intersubject/<band>_*.png
+           bands/temporal/<band>_*.png
+           bands/inverted_superbrain/<band>_*.png
 
 Usage examples::
 
-    # Default: Placebo condition, both music types
+    # Default: Placebo condition, both music types, broadband + bands
     python scripts/run_wavelet_ica.py
 
-    # Psytrance only, reuse cached wavelets
-    python scripts/run_wavelet_ica.py --music_type PSYTRANCE --reuse_wavelets
+    # Broadband only
+    python scripts/run_wavelet_ica.py --skip_bands
+
+    # Bands only, Psytrance, reuse cached wavelets
+    python scripts/run_wavelet_ica.py --skip_broadband --music_type PSYTRANCE --reuse_wavelets
 
     # Custom PCA / ICA dimensionality
     python scripts/run_wavelet_ica.py --n_pca 30 --n_ica 15
@@ -78,6 +85,8 @@ from src.definitions.fields import (  # noqa: E402
     MusicTypeVariants,
 )
 from src.visualization.wavelet_ica_plots import (  # noqa: E402
+    plot_cross_band_scree_comparison,
+    plot_cross_band_variance_summary,
     plot_intersubject_band_resolved_loadings,
     plot_intersubject_cross_component_correlation,
     plot_intersubject_group_mean_activations,
@@ -231,6 +240,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "Root directory for output plots. "
             "Defaults to plots/04-wavelet-ica-analysis/."
         ),
+    )
+    parser.add_argument(
+        "--skip_broadband",
+        action="store_true",
+        help="Skip the broadband (full-spectrum) decomposition.",
+    )
+    parser.add_argument(
+        "--skip_bands",
+        action="store_true",
+        help="Skip the per-frequency-band decomposition.",
     )
     parser.add_argument(
         "--verbose",
@@ -768,6 +787,566 @@ def _run_inverted_superbrain(
 
 
 # ---------------------------------------------------------------------------
+# Per-band helpers — each _run_<approach>_band writes into
+#   save_dir / "bands" / <approach> / <band>_<plot>.png
+# following the canonical layout.
+# ---------------------------------------------------------------------------
+
+
+def _run_superbrain_band(
+    data_4d: np.ndarray,
+    sfreq: float,
+    freqs: np.ndarray,
+    info,
+    *,
+    band: str,
+    label: str,
+    n_pca: int,
+    n_ica: int,
+    random_state: int,
+    out_dir: Path,
+) -> SuperBrainResult:
+    """Super-Brain decomposition for a single band — same plots, band-prefixed."""
+    band_label = f"{label} [{band}]"
+    _logger.info(f"[{band_label}] === Super-Brain (band) ===")
+
+    r = decompose_superbrain(
+        data_4d, n_pca=n_pca, n_ica=n_ica, random_state=random_state
+    )
+    S, C, F = r.n_subjects, r.n_channels, r.n_freqs
+    n_ica_val = r.ica_sources.shape[1]
+
+    loadings_4d = r.pca_components.reshape(n_pca, S, C, F)
+    ica_mix_4d = r.ica_mixing.reshape(S, C, F, n_ica_val)
+    ica_channel_loadings = ica_mix_4d.mean(axis=2)
+    ica_ch_mean = ica_channel_loadings.mean(axis=0)
+    ica_ch_var = ica_channel_loadings.var(axis=0)
+
+    pca_scores_per_subj = np.einsum("kscf,scft->skt", loadings_4d, data_4d)
+    _, mean_loo_isc = compute_loo_isc(pca_scores_per_subj)
+
+    plot_superbrain_pca_scree(
+        r.pca_explained_variance_ratio,
+        label=band_label,
+        save_path=out_dir / f"{band}_pca_scree_{label}.png",
+    )
+    plot_superbrain_pca_timecourses(
+        r.pca_scores,
+        sfreq,
+        label=band_label,
+        save_path=out_dir / f"{band}_pca_timecourses_{label}.png",
+    )
+    plot_superbrain_pca_subject_loadings(
+        loadings_4d,
+        label=band_label,
+        save_path=out_dir / f"{band}_pca_subject_loadings_{label}.png",
+    )
+    plot_superbrain_pca_channel_topomap(
+        loadings_4d,
+        info,
+        label=band_label,
+        save_path=out_dir / f"{band}_pca_channel_topomap_{label}.png",
+    )
+    plot_superbrain_pca_freq_loadings(
+        loadings_4d,
+        freqs,
+        bands=FREQUENCY_BANDS,
+        label=band_label,
+        save_path=out_dir / f"{band}_pca_freq_loadings_{label}.png",
+    )
+    plot_superbrain_pca_spectrograms(
+        r.pca_scores,
+        sfreq,
+        freqs_max=float(freqs[-1]),
+        label=band_label,
+        save_path=out_dir / f"{band}_pca_spectrograms_{label}.png",
+    )
+    plot_superbrain_pca_component_isc(
+        mean_loo_isc,
+        label=band_label,
+        save_path=out_dir / f"{band}_pca_component_isc_{label}.png",
+    )
+    plot_superbrain_cross_component_correlation(
+        r.pca_scores,
+        r.ica_sources,
+        label=band_label,
+        save_path=out_dir / f"{band}_cross_component_correlation_{label}.png",
+    )
+    plot_superbrain_ica_timecourses(
+        r.ica_sources,
+        sfreq,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_timecourses_{label}.png",
+    )
+    plot_superbrain_ica_topomap_mean(
+        ica_ch_mean,
+        info,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_topomap_mean_{label}.png",
+    )
+    plot_superbrain_ica_topomap_variance(
+        ica_ch_var,
+        info,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_topomap_variance_{label}.png",
+    )
+    plot_superbrain_ica_interindividual_correlation(
+        ica_channel_loadings,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_interindividual_correlation_{label}.png",
+    )
+    return r
+
+
+def _run_intersubject_band(
+    data_4d: np.ndarray,
+    sfreq: float,
+    freqs: np.ndarray,
+    info,
+    *,
+    band: str,
+    label: str,
+    n_pca: int,
+    n_ica: int,
+    random_state: int,
+    out_dir: Path,
+) -> InterSubjectResult:
+    """Inter-Subject decomposition for a single band — band-prefixed plots."""
+    band_label = f"{label} [{band}]"
+    _logger.info(f"[{band_label}] === Inter-Subject (band) ===")
+
+    r = decompose_intersubject(
+        data_4d, n_pca=n_pca, n_ica=n_ica, random_state=random_state
+    )
+    S, C, F, T = r.n_subjects, r.n_channels, r.n_freqs, r.n_times
+
+    pca_components_cf = r.pca_components.reshape(n_pca, C, F)
+    scores_3d = r.pca_scores.reshape(S, T, n_pca)
+    channel_marginal = pca_components_cf.mean(axis=2)
+
+    ica_mixing_cf = r.ica_mixing.reshape(C, F, r.ica_sources.shape[1])
+    ica_scores_3d = r.ica_sources.reshape(S, T, r.ica_sources.shape[1])
+    ica_ch_mean = ica_mixing_cf.mean(axis=1)
+    ica_ch_var = ica_mixing_cf.var(axis=1)
+
+    plot_intersubject_pca_scree(
+        r.pca_explained_variance_ratio,
+        label=band_label,
+        save_path=out_dir / f"{band}_pca_scree_{label}.png",
+    )
+    plot_intersubject_pca_channel_freq_maps(
+        pca_components_cf,
+        freqs,
+        label=band_label,
+        save_path=out_dir / f"{band}_pca_channel_freq_maps_{label}.png",
+    )
+    plot_intersubject_pca_subject_activations(
+        scores_3d,
+        sfreq,
+        label=band_label,
+        save_path=out_dir / f"{band}_pca_subject_activations_{label}.png",
+    )
+    plot_intersubject_pca_topomaps(
+        channel_marginal,
+        info,
+        label=band_label,
+        save_path=out_dir / f"{band}_pca_topomaps_{label}.png",
+    )
+    plot_intersubject_similarity(
+        scores_3d,
+        label=band_label,
+        save_path=out_dir / f"{band}_intersubject_similarity_{label}.png",
+    )
+    plot_intersubject_group_mean_activations(
+        scores_3d,
+        sfreq,
+        label=band_label,
+        save_path=out_dir / f"{band}_group_mean_activations_{label}.png",
+    )
+    plot_intersubject_cross_component_correlation(
+        r.pca_scores,
+        r.ica_sources,
+        label=band_label,
+        save_path=out_dir / f"{band}_cross_component_correlation_{label}.png",
+    )
+    plot_intersubject_ica_channel_freq_maps(
+        ica_mixing_cf,
+        freqs,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_channel_freq_maps_{label}.png",
+    )
+    plot_intersubject_ica_topomap_mean(
+        ica_ch_mean,
+        info,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_topomap_mean_{label}.png",
+    )
+    plot_intersubject_ica_topomap_variance(
+        ica_ch_var,
+        info,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_topomap_variance_{label}.png",
+    )
+    plot_intersubject_ica_interindividual_correlation(
+        ica_scores_3d,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_interindividual_correlation_{label}.png",
+    )
+    return r
+
+
+def _run_temporal_band(
+    data_4d: np.ndarray,
+    sfreq: float,
+    freqs: np.ndarray,
+    info,
+    *,
+    band: str,
+    label: str,
+    n_pca: int,
+    n_ica: int,
+    random_state: int,
+    out_dir: Path,
+) -> TemporalResult:
+    """Temporal decomposition for a single band — band-prefixed plots."""
+    band_label = f"{label} [{band}]"
+    _logger.info(f"[{band_label}] === Temporal (band) ===")
+
+    r = decompose_temporal(data_4d, n_pca=n_pca, n_ica=n_ica, random_state=random_state)
+    S, C, F, T = r.n_subjects, r.n_channels, r.n_freqs, r.n_times
+
+    ica_mixing_ft = r.ica_mixing.reshape(F, T, r.ica_sources.shape[1])
+    ica_components_ft = ica_mixing_ft.transpose(2, 0, 1)
+    ica_scores_3d = r.ica_sources.reshape(S, C, r.ica_sources.shape[1])
+    ica_channel_mean = ica_scores_3d.mean(axis=0)
+    ica_channel_var = ica_scores_3d.var(axis=0)
+    ica_time_profiles = ica_components_ft.mean(axis=1)
+    ica_freq_profiles = ica_components_ft.mean(axis=2)
+
+    plot_temporal_pca_scree(
+        r.pca_explained_variance_ratio,
+        label=band_label,
+        save_path=out_dir / f"{band}_pca_scree_{label}.png",
+    )
+    plot_temporal_ica_freq_time_maps(
+        ica_components_ft,
+        freqs,
+        sfreq,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_freq_time_maps_{label}.png",
+    )
+    plot_temporal_ica_topomap_mean(
+        ica_channel_mean,
+        info,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_topomap_mean_{label}.png",
+    )
+    plot_temporal_ica_topomap_variance(
+        ica_channel_var,
+        info,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_topomap_variance_{label}.png",
+    )
+    plot_temporal_ica_per_subject_topomaps(
+        ica_scores_3d,
+        info,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_per_subject_topomaps_{label}.png",
+    )
+    plot_temporal_ica_timecourses(
+        ica_time_profiles,
+        sfreq,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_timecourses_{label}.png",
+    )
+    plot_temporal_ica_spectral_profiles(
+        ica_freq_profiles,
+        freqs,
+        bands=FREQUENCY_BANDS,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_spectral_profiles_{label}.png",
+    )
+    plot_temporal_ica_intersubject_correlation(
+        ica_scores_3d,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_intersubject_correlation_{label}.png",
+    )
+    plot_temporal_ica_component_correlation(
+        ica_time_profiles,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_component_correlation_{label}.png",
+    )
+    return r
+
+
+def _run_inverted_superbrain_band(
+    data_4d: np.ndarray,
+    sfreq: float,
+    freqs: np.ndarray,
+    info,
+    *,
+    band: str,
+    label: str,
+    n_pca: int,
+    n_ica: int,
+    random_state: int,
+    out_dir: Path,
+) -> InvertedSuperBrainResult:
+    """Inverted Super-Brain decomposition for a single band — band-prefixed."""
+    band_label = f"{label} [{band}]"
+    _logger.info(f"[{band_label}] === Inverted Super-Brain (band) ===")
+
+    r = decompose_inverted_superbrain(
+        data_4d, n_pca=n_pca, n_ica=n_ica, random_state=random_state
+    )
+    S, C, F = r.n_subjects, r.n_channels, r.n_freqs
+    n_ica_val = r.ica_sources.shape[1]
+
+    ica_components = r.ica_mixing.T
+    ica_scores_4d = r.ica_sources.reshape(S, C, F, n_ica_val)
+    subject_loadings = np.abs(ica_scores_4d).mean(axis=(1, 2))
+    channel_loadings = np.abs(ica_scores_4d).mean(axis=(0, 2))
+    ica_ch_mean = ica_scores_4d.mean(axis=(0, 2))
+    ica_ch_var = ica_scores_4d.mean(axis=2).var(axis=0)
+    freq_loadings = np.abs(ica_scores_4d).mean(axis=(0, 1))
+    ica_channel_loadings = np.abs(ica_scores_4d).mean(axis=2)
+
+    plot_inverted_pca_scree(
+        r.pca_explained_variance_ratio,
+        label=band_label,
+        save_path=out_dir / f"{band}_pca_scree_{label}.png",
+    )
+    plot_inverted_ica_temporal_patterns(
+        ica_components,
+        sfreq,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_temporal_patterns_{label}.png",
+    )
+    plot_inverted_ica_subject_loadings(
+        subject_loadings,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_subject_loadings_{label}.png",
+    )
+    plot_inverted_ica_channel_topomap(
+        channel_loadings,
+        info,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_channel_topomap_{label}.png",
+    )
+    plot_inverted_ica_topomap_mean(
+        ica_ch_mean,
+        info,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_topomap_mean_{label}.png",
+    )
+    plot_inverted_ica_topomap_variance(
+        ica_ch_var,
+        info,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_topomap_variance_{label}.png",
+    )
+    plot_inverted_ica_freq_loadings(
+        freq_loadings,
+        freqs,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_freq_loadings_{label}.png",
+    )
+    plot_inverted_ica_spectrograms(
+        ica_components,
+        sfreq,
+        freqs_max=float(freqs[-1]),
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_spectrograms_{label}.png",
+    )
+    plot_inverted_ica_interindividual_correlation(
+        ica_channel_loadings,
+        label=band_label,
+        save_path=out_dir / f"{band}_ica_interindividual_correlation_{label}.png",
+    )
+    plot_inverted_cross_component_correlation(
+        r.pca_scores,
+        r.ica_sources,
+        label=band_label,
+        save_path=out_dir / f"{band}_cross_component_correlation_{label}.png",
+    )
+    return r
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator: run all four approaches for a single band
+# ---------------------------------------------------------------------------
+
+
+def _run_all_approaches_for_band(
+    data_4d: np.ndarray,
+    sfreq: float,
+    freqs: np.ndarray,
+    info,
+    *,
+    band: str,
+    label: str,
+    n_pca: int,
+    n_ica: int,
+    random_state: int,
+    save_dir: Path,
+) -> dict[str, np.ndarray]:
+    """Run all four decompositions for a single frequency band.
+
+    Returns ``{approach: explained_variance_ratio}`` for cross-band summaries.
+    """
+    approaches_dir = {
+        "superbrain": save_dir / "bands" / "superbrain",
+        "intersubject": save_dir / "bands" / "intersubject",
+        "temporal": save_dir / "bands" / "temporal",
+        "inverted_superbrain": save_dir / "bands" / "inverted_superbrain",
+    }
+    for d in approaches_dir.values():
+        d.mkdir(parents=True, exist_ok=True)
+
+    evr: dict[str, np.ndarray] = {}
+
+    r_sb = _run_superbrain_band(
+        data_4d,
+        sfreq,
+        freqs,
+        info,
+        band=band,
+        label=label,
+        n_pca=n_pca,
+        n_ica=n_ica,
+        random_state=random_state,
+        out_dir=approaches_dir["superbrain"],
+    )
+    evr["Super-Brain"] = r_sb.pca_explained_variance_ratio
+
+    r_is = _run_intersubject_band(
+        data_4d,
+        sfreq,
+        freqs,
+        info,
+        band=band,
+        label=label,
+        n_pca=n_pca,
+        n_ica=n_ica,
+        random_state=random_state,
+        out_dir=approaches_dir["intersubject"],
+    )
+    evr["Inter-Subject"] = r_is.pca_explained_variance_ratio
+
+    r_tm = _run_temporal_band(
+        data_4d,
+        sfreq,
+        freqs,
+        info,
+        band=band,
+        label=label,
+        n_pca=n_pca,
+        n_ica=n_ica,
+        random_state=random_state,
+        out_dir=approaches_dir["temporal"],
+    )
+    evr["Temporal"] = r_tm.pca_explained_variance_ratio
+
+    r_inv = _run_inverted_superbrain_band(
+        data_4d,
+        sfreq,
+        freqs,
+        info,
+        band=band,
+        label=label,
+        n_pca=n_pca,
+        n_ica=n_ica,
+        random_state=random_state,
+        out_dir=approaches_dir["inverted_superbrain"],
+    )
+    evr["Inverted Super-Brain"] = r_inv.pca_explained_variance_ratio
+
+    return evr
+
+
+def _run_band_analysis(
+    ad: AnalysisData,
+    label: str,
+    freqs: np.ndarray,
+    info,
+    *,
+    wavelet_dir: Path | None,
+    reuse_wavelets: bool,
+    n_pca: int,
+    n_ica: int,
+    random_state: int,
+    save_dir: Path,
+) -> None:
+    """Run the full per-band wavelet-ICA analysis for one dataset.
+
+    For each band in ``FREQUENCY_BANDS``:
+
+    1. Band-pass filter the raw EEG data.
+    2. Compute 4-D wavelet-power on the filtered data.
+    3. Run all four decomposition approaches.
+    4. Produce cross-band comparison plots.
+    """
+    _logger.info(f"[{label}] ===== Per-band wavelet-ICA analysis =====")
+
+    # Accumulate per-approach, per-band explained-variance ratios for
+    # cross-band summary plots.
+    approach_band_evr: dict[str, dict[str, np.ndarray]] = {
+        "Super-Brain": {},
+        "Inter-Subject": {},
+        "Temporal": {},
+        "Inverted Super-Brain": {},
+    }
+
+    for band, (l_freq, h_freq) in FREQUENCY_BANDS.items():
+        _logger.info(f"[{label}] ── Band: {band} ({l_freq}–{h_freq} Hz) ──")
+        filtered = ad.filter_to_band(l_freq, h_freq)
+
+        band_wavelet_dir = (
+            (wavelet_dir / "bands" / band) if wavelet_dir is not None else None
+        )
+        wd_4d = _compute_4d_wavelet(
+            filtered, f"{label}_{band}", freqs, band_wavelet_dir, reuse_wavelets
+        )
+        data_4d = wd_4d.data
+        sfreq = wd_4d.sfreq
+
+        evr = _run_all_approaches_for_band(
+            data_4d,
+            sfreq,
+            freqs,
+            info,
+            band=band,
+            label=label,
+            n_pca=n_pca,
+            n_ica=n_ica,
+            random_state=random_state,
+            save_dir=save_dir,
+        )
+        for approach, ratios in evr.items():
+            approach_band_evr[approach][band] = ratios
+
+    # ── Cross-band comparison plots ──────────────────────────────────────
+    _logger.info(f"[{label}] Cross-band comparison plots …")
+    cross_band_dir = save_dir / "bands" / "cross_band_summary"
+    cross_band_dir.mkdir(parents=True, exist_ok=True)
+
+    for approach, band_evr in approach_band_evr.items():
+        slug = approach.lower().replace("-", "").replace(" ", "_")
+        plot_cross_band_scree_comparison(
+            band_evr,
+            approach=approach,
+            label=label,
+            save_path=cross_band_dir / f"{slug}_scree_comparison_{label}.png",
+        )
+
+    plot_cross_band_variance_summary(
+        approach_band_evr,
+        label=label,
+        save_path=cross_band_dir / f"variance_summary_{label}.png",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -800,7 +1379,8 @@ if __name__ == "__main__":
     _logger.info(
         f"Starting wavelet-ICA analysis: condition={condition.value}, "
         f"music_types={[mt.value for mt in music_types]}, "
-        f"n_pca={args.n_pca}, n_ica={args.n_ica}"
+        f"n_pca={args.n_pca}, n_ica={args.n_ica}, "
+        f"broadband={not args.skip_broadband}, bands={not args.skip_bands}"
     )
 
     analyzers = load_analyzers(
@@ -828,57 +1408,74 @@ if __name__ == "__main__":
             f"Dataset [{dataset_key}]: shape={ad.data.shape}  sfreq={ad.sfreq} Hz"
         )
 
-        wd_4d = _compute_4d_wavelet(
-            ad, dataset_key, freqs, wavelet_dir, args.reuse_wavelets
-        )
-        data_4d = wd_4d.data
-        sfreq = wd_4d.sfreq
-
         save_dir = save_root / dataset_key
 
-        _run_superbrain(
-            data_4d,
-            sfreq,
-            freqs,
-            info,
-            label=dataset_key,
-            n_pca=args.n_pca,
-            n_ica=args.n_ica,
-            random_state=args.random_state,
-            save_dir=save_dir,
-        )
-        _run_intersubject(
-            data_4d,
-            sfreq,
-            freqs,
-            info,
-            label=dataset_key,
-            n_pca=args.n_pca,
-            n_ica=args.n_ica,
-            random_state=args.random_state,
-            save_dir=save_dir,
-        )
-        _run_temporal(
-            data_4d,
-            sfreq,
-            freqs,
-            info,
-            label=dataset_key,
-            n_pca=args.n_pca,
-            n_ica=args.n_ica,
-            random_state=args.random_state,
-            save_dir=save_dir,
-        )
-        _run_inverted_superbrain(
-            data_4d,
-            sfreq,
-            freqs,
-            info,
-            label=dataset_key,
-            n_pca=args.n_pca,
-            n_ica=args.n_ica,
-            random_state=args.random_state,
-            save_dir=save_dir,
-        )
+        # ── Broadband decomposition ──────────────────────────────────────
+        if not args.skip_broadband:
+            wd_4d = _compute_4d_wavelet(
+                ad, dataset_key, freqs, wavelet_dir, args.reuse_wavelets
+            )
+            data_4d = wd_4d.data
+            sfreq = wd_4d.sfreq
+
+            _run_superbrain(
+                data_4d,
+                sfreq,
+                freqs,
+                info,
+                label=dataset_key,
+                n_pca=args.n_pca,
+                n_ica=args.n_ica,
+                random_state=args.random_state,
+                save_dir=save_dir,
+            )
+            _run_intersubject(
+                data_4d,
+                sfreq,
+                freqs,
+                info,
+                label=dataset_key,
+                n_pca=args.n_pca,
+                n_ica=args.n_ica,
+                random_state=args.random_state,
+                save_dir=save_dir,
+            )
+            _run_temporal(
+                data_4d,
+                sfreq,
+                freqs,
+                info,
+                label=dataset_key,
+                n_pca=args.n_pca,
+                n_ica=args.n_ica,
+                random_state=args.random_state,
+                save_dir=save_dir,
+            )
+            _run_inverted_superbrain(
+                data_4d,
+                sfreq,
+                freqs,
+                info,
+                label=dataset_key,
+                n_pca=args.n_pca,
+                n_ica=args.n_ica,
+                random_state=args.random_state,
+                save_dir=save_dir,
+            )
+
+        # ── Per-band decomposition ───────────────────────────────────────
+        if not args.skip_bands:
+            _run_band_analysis(
+                ad,
+                dataset_key,
+                freqs,
+                info,
+                wavelet_dir=wavelet_dir,
+                reuse_wavelets=args.reuse_wavelets,
+                n_pca=args.n_pca,
+                n_ica=args.n_ica,
+                random_state=args.random_state,
+                save_dir=save_dir,
+            )
 
     _logger.info("Wavelet-ICA analysis complete.")

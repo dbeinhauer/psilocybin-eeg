@@ -1400,3 +1400,83 @@ def plot_inverted_cross_component_correlation(
     return plot_superbrain_cross_component_correlation(
         pca_scores, ica_scores, label=label, save_path=save_path
     )
+
+
+# ===================================================================
+# Cross-band comparison plots
+# ===================================================================
+
+
+def plot_cross_band_scree_comparison(
+    band_variance: dict[str, np.ndarray],
+    *,
+    approach: str,
+    label: str,
+    save_path: Optional[Path] = None,
+) -> Figure:
+    """Overlay PCA scree curves across frequency bands for one approach.
+
+    :param band_variance: ``{band: (n_pca,)}`` explained-variance ratios.
+    :param approach: Human-readable approach name (e.g. ``"Super-Brain"``).
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    for band, evr in band_variance.items():
+        n = len(evr)
+        color = _BAND_COLORS.get(band, "grey")
+        axes[0].plot(range(1, n + 1), evr, "o-", label=band, color=color, ms=4)
+        axes[1].plot(
+            range(1, n + 1), np.cumsum(evr), "o-", label=band, color=color, ms=4
+        )
+    axes[0].set_xlabel("Component")
+    axes[0].set_ylabel("Variance explained")
+    axes[0].set_title(f"{approach} — Per-Band Scree — {label}")
+    axes[0].legend(fontsize=8)
+    axes[1].axhline(0.9, ls="--", color="gray", label="90 %")
+    axes[1].set_xlabel("Number of components")
+    axes[1].set_ylabel("Cumulative variance")
+    axes[1].set_title(f"{approach} — Per-Band Cumulative Variance — {label}")
+    axes[1].legend(fontsize=8)
+    fig.tight_layout()
+    _save_fig(fig, save_path)
+    plt.close(fig)
+    return fig
+
+
+def plot_cross_band_variance_summary(
+    band_variance: dict[str, dict[str, np.ndarray]],
+    *,
+    label: str,
+    save_path: Optional[Path] = None,
+) -> Figure:
+    """Bar chart of total PCA variance captured (top-K) across bands × approaches.
+
+    :param band_variance: ``{approach: {band: (n_pca,)}}`` explained-variance ratios.
+    """
+    approaches = list(band_variance.keys())
+    all_bands: list[str] = []
+    for inner in band_variance.values():
+        for b in inner:
+            if b not in all_bands:
+                all_bands.append(b)
+
+    n_approaches = len(approaches)
+    x = np.arange(len(all_bands))
+    width = 0.8 / max(n_approaches, 1)
+
+    fig, ax = plt.subplots(figsize=(max(10, len(all_bands) * 2), 5))
+    approach_colors = plt.cm.Set2(np.linspace(0, 1, n_approaches))  # noqa: N806
+    for j, approach in enumerate(approaches):
+        vals = []
+        for band in all_bands:
+            evr = band_variance[approach].get(band)
+            vals.append(float(evr.sum()) if evr is not None else 0.0)
+        ax.bar(x + j * width, vals, width, label=approach, color=approach_colors[j])
+    ax.set_xticks(x + width * n_approaches / 2)
+    ax.set_xticklabels(all_bands)
+    ax.set_ylabel("Total PCA variance explained")
+    ax.set_title(f"Cross-Band Variance Summary — {label}")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    _save_fig(fig, save_path)
+    plt.close(fig)
+    return fig
