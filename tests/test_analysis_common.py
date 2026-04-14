@@ -194,6 +194,36 @@ class TestAddCommonArguments:
         args = parser.parse_args([])
         assert args.isc_threshold == pytest.approx(0.035)
 
+    # ── new multi-scale ISC parameters ───────────────────────────
+
+    def test_window_fine_sec_default(self, parser):
+        args = parser.parse_args([])
+        assert args.window_fine_sec == pytest.approx(1.0)
+
+    def test_window_fine_sec_custom(self, parser):
+        args = parser.parse_args(["--window_fine_sec", "2.0"])
+        assert args.window_fine_sec == pytest.approx(2.0)
+
+    def test_window_large_sec_default(self, parser):
+        args = parser.parse_args([])
+        assert args.window_large_sec == pytest.approx(15.0)
+
+    def test_window_large_sec_custom(self, parser):
+        args = parser.parse_args(["--window_large_sec", "30.0"])
+        assert args.window_large_sec == pytest.approx(30.0)
+
+    def test_n_ch_subsample_default(self, parser):
+        args = parser.parse_args([])
+        assert args.n_ch_subsample == 64
+
+    def test_n_ch_subsample_custom(self, parser):
+        args = parser.parse_args(["--n_ch_subsample", "128"])
+        assert args.n_ch_subsample == 128
+
+    def test_n_ch_subsample_zero_disables_subsampling(self, parser):
+        args = parser.parse_args(["--n_ch_subsample", "0"])
+        assert args.n_ch_subsample == 0
+
 
 class TestRunWaveletWorkflowValidation:
     """Test input validation in run_wavelet_workflow."""
