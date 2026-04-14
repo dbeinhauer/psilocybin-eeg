@@ -77,7 +77,10 @@ if __name__ == "__main__":
     run_wavelet = run_wavelet_power or run_wavelet_phase
 
     WINDOW_SEC = args.window_sec
+    WINDOW_FINE_SEC = args.window_fine_sec
+    WINDOW_LARGE_SEC = args.window_large_sec
     STEP_SEC = args.step_sec
+    N_CH_SUBSAMPLE = args.n_ch_subsample
 
     wavelet_freqs = np.linspace(
         args.wavelet_freq_min, args.wavelet_freq_max, args.wavelet_n_freqs
@@ -123,6 +126,9 @@ if __name__ == "__main__":
             isc_threshold=args.isc_threshold,
             window_sec=WINDOW_SEC,
             step_sec=STEP_SEC,
+            window_fine_sec=WINDOW_FINE_SEC,
+            window_large_sec=WINDOW_LARGE_SEC,
+            n_ch_subsample=N_CH_SUBSAMPLE,
             cross_representation_wavelet_dir=wavelet_cache_root,
         )
 
@@ -145,6 +151,9 @@ if __name__ == "__main__":
             isc_threshold=args.isc_threshold,
             window_sec=WINDOW_SEC,
             step_sec=STEP_SEC,
+            window_fine_sec=WINDOW_FINE_SEC,
+            window_large_sec=WINDOW_LARGE_SEC,
+            n_ch_subsample=N_CH_SUBSAMPLE,
         )
 
     _logger.info("All requested analyses complete.")
