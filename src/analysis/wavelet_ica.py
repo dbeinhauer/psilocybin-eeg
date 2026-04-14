@@ -56,8 +56,9 @@ def zscore_by_time(data: np.ndarray) -> np.ndarray:
     PCA/ICA operate on standardised activations.
 
     :param data: ``(S, C, F, T)`` wavelet-power tensor (**not** mutated).
-    :return: A **new** array of the same shape with each ``[:, :, :, :]``
-        slice having mean ≈ 0 and std ≈ 1 along the last axis.
+    :return: A **new** array of the same shape with each
+        ``(subject, channel, frequency)`` slice having mean ≈ 0 and
+        std ≈ 1 along the time axis.
     """
     _validate_4d(data)
     mean = data.mean(axis=-1, keepdims=True)
