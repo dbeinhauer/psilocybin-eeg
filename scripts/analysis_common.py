@@ -464,10 +464,12 @@ def run_isc_workflow(
 # ──────────────────────────────────────────────────────────────────────
 
 #: Frequency resolution (Hz) used when building per-band Morlet frequencies.
-_WAVELET_BAND_FREQ_RESOLUTION_HZ: float = 1.0
+WAVELET_BAND_FREQ_RESOLUTION_HZ: float = 1.0
+#: Alias retained for backward compatibility with older call-sites.
+_WAVELET_BAND_FREQ_RESOLUTION_HZ: float = WAVELET_BAND_FREQ_RESOLUTION_HZ
 
 
-def _wavelet_transform(
+def wavelet_transform(
     datasets: dict[str, AnalysisData],
     freqs: np.ndarray,
     representation: str = "power",
@@ -698,6 +700,10 @@ def _wavelet_transform(
     return transformed
 
 
+#: Alias retained for backward compatibility with older call-sites.
+_wavelet_transform = wavelet_transform
+
+
 def _wavelet_isc_for_label(
     wd: AnalysisData,
     label: str,
@@ -764,7 +770,7 @@ def _broadband_wavelet_4d(
     callers can index the result as ``(n_subjects, n_channels, n_freqs, n_times)``
     for the notebook-parity broadband plots.
     """
-    transformed = _wavelet_transform(
+    transformed = wavelet_transform(
         {label: ad},
         freqs,
         representation,
@@ -841,7 +847,7 @@ def _try_load_phase_band_iscs(
             )
             continue
         try:
-            phase_band = _wavelet_transform(
+            phase_band = wavelet_transform(
                 {label: ad},
                 band_freqs,
                 representation="phase",
@@ -1125,7 +1131,7 @@ def _run_wavelet_workflow_for_label(
             f"{n_freqs_band} steps)"
         )
         band_freqs = np.linspace(l_freq, h_freq, n_freqs_band)
-        band_ds = _wavelet_transform(
+        band_ds = wavelet_transform(
             {label: ad},
             band_freqs,
             representation,
@@ -1276,7 +1282,7 @@ def run_wavelet_workflow(
             "reshape_frequency_dim=True is not supported in run_wavelet_workflow. "
             "The ISC analysis functions require 3-D (n_items, n_features, n_samples) "
             "arrays and will break with 4-D wavelet tensors. "
-            "Call _wavelet_transform directly if you need a 4-D output."
+            "Call wavelet_transform directly if you need a 4-D output."
         )
 
     # The keep_frequency_dim flag is preserved for CLI compatibility but is
