@@ -21,7 +21,7 @@ processing that emerge during music listening.
 
 ---
 
-## Five Decomposition Approaches
+## Six Decomposition Approaches
 
 ### Approach 1 — Super-Brain (temporal decomposition)
 
@@ -222,11 +222,36 @@ and frequencies.
 | 9 | ICA time courses | Channel-averaged temporal profiles |
 | 10 | Inter-individual IC correlations | Consistency of frequency profiles across subjects |
 
+### Approach 6 — Combined Features (focused ICA analysis)
+
+**Notebook:** `wavelet_ica_combined_features.ipynb`
+
+Uses the same reshape as the inverted super-brain (Approach 4) — all three
+main dimensions (subjects, channels, frequencies) are combined into one
+observation axis with time as features:
+
+```
+(n_subjects, n_channels, n_freqs, n_times)
+  → reshape →  (n_subjects × n_channels × n_freqs,  n_times)
+                ─────── observations ───────────────  features
+```
+
+This notebook focuses on a curated set of five analyses that together
+characterise each ICA component across subjects, space, frequency, and time:
+
+| # | Analysis | Purpose |
+|---|----------|---------|
+| (a) | Intersubject correlation matrix | Consistency of IC loadings across participants |
+| (b) | Temporal loadings (mean ± std) | When each IC is active, with inter-subject variability |
+| (c) | Time–frequency spectrograms | Spectral content of each IC temporal pattern |
+| (d) | Mean / variance topomaps | Spatial distribution and inter-individual variability |
+| (e) | Per-subject loading bars | Individual-level contribution to each IC |
+
 ---
 
 ## Data Requirements
 
-All five notebooks load wavelet-power data via `scripts.analysis_common`
+All six notebooks load wavelet-power data via `scripts.analysis_common`
 utilities (the same pipeline used in `notebooks/03-wavelet-analysis/`).
 The wavelet cache directory defaults to
 `notebooks/04-wavelet-ica-analysis/wavelet_cache/`.
