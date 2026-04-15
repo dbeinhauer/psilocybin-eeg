@@ -1,4 +1,4 @@
-# Stage 04 — ICA / PCA Decomposition of Wavelet Power
+# Stage 04 — ICA / PCA Decomposition of Wavelet Power (7 Approaches)
 
 This directory contains exploratory notebooks for applying **ICA** (Independent
 Component Analysis) and **PCA** (Principal Component Analysis) to 4-D wavelet
@@ -21,7 +21,7 @@ processing that emerge during music listening.
 
 ---
 
-## Six Decomposition Approaches
+## Seven Decomposition Approaches
 
 ### Approach 1 — Super-Brain (temporal decomposition)
 
@@ -247,11 +247,47 @@ characterise each ICA component across subjects, space, frequency, and time:
 | (d) | Mean / variance topomaps | Spatial distribution and inter-individual variability |
 | (e) | Per-subject loading bars | Individual-level contribution to each IC |
 
+### Approach 7 — Transposed Features (focused ICA with time as observations)
+
+**Notebook:** `wavelet_ica_transposed_features.ipynb`
+
+The **transpose** of Approach 6 — time is the observation axis and all three
+main dimensions are combined into one feature axis:
+
+```
+(n_subjects, n_channels, n_freqs, n_times)
+  → reshape →  (n_times,  n_subjects × n_channels × n_freqs)
+                ── obs ──  ────────── features ──────────────
+```
+
+PCA/ICA discovers **spatial-spectral-subject modes** — recurring S×C×F
+patterns that appear independently across time.  The ICA sources give the
+temporal activation of each mode, and the mixing matrix describes which
+subject–channel–frequency combinations participate.
+
+| Aspect | Approach 6 (Combined Features) | Approach 7 (Transposed Features) |
+|--------|--------------------------------|----------------------------------|
+| Observations | S × C × F | T |
+| Features | T | S × C × F |
+| Components represent | Temporal patterns | Spatial-spectral-subject modes |
+| Time info lives in | ICA components | ICA sources |
+
+This notebook uses the same five focused analyses as Approach 6, adapted
+for the transposed decomposition:
+
+| # | Analysis | Purpose |
+|---|----------|---------|
+| (a) | Intersubject correlation matrix | Consistency of IC mixing vectors across participants |
+| (b) | Temporal activations (mean ± std) | When each mode is active, with inter-subject variability |
+| (c) | Time–frequency spectrograms | Spectral content of each IC source time course |
+| (d) | Mean / variance topomaps | Spatial distribution and inter-individual variability |
+| (e) | Per-subject mixing-weight bars | Individual-level participation in each mode |
+
 ---
 
 ## Data Requirements
 
-All six notebooks load wavelet-power data via `scripts.analysis_common`
+All seven notebooks load wavelet-power data via `scripts.analysis_common`
 utilities (the same pipeline used in `notebooks/03-wavelet-analysis/`).
 The wavelet cache directory defaults to
 `notebooks/04-wavelet-ica-analysis/wavelet_cache/`.
