@@ -1,4 +1,4 @@
-# Stage 04 — ICA / PCA Decomposition of Wavelet Power (7 Approaches)
+# Stage 04 — ICA / PCA Decomposition of Wavelet Power (8 Approaches)
 
 This directory contains exploratory notebooks for applying **ICA** (Independent
 Component Analysis) and **PCA** (Principal Component Analysis) to 4-D wavelet
@@ -21,7 +21,7 @@ processing that emerge during music listening.
 
 ---
 
-## Seven Decomposition Approaches
+## Eight Decomposition Approaches
 
 ### Approach 1 — Super-Brain (temporal decomposition)
 
@@ -283,11 +283,47 @@ for the transposed decomposition:
 | (d) | Mean / variance topomaps | Spatial distribution and inter-individual variability |
 | (e) | Per-subject mixing-weight bars | Individual-level participation in each mode |
 
+### Approach 8 — Subject-Frequency Features (spatial-temporal mode decomposition)
+
+**Notebook:** `wavelet_ica_subject_freq_features.ipynb`
+
+Concatenate subjects and frequencies into the observation axis, with
+channels and time as features:
+
+```
+(n_subjects, n_channels, n_freqs, n_times)
+  → reshape →  (n_subjects × n_freqs,  n_channels × n_times)
+                ──── observations ────  ──── features ────────
+```
+
+Each observation is a specific subject–frequency combination, described by
+its full channel × time power surface.  PCA/ICA discover **spatial-temporal
+component patterns** — recurring channel × time fingerprints shared across
+subjects and frequencies.  The ICA scores can be reshaped to `(S, F, K)` to
+reveal which subjects and which frequency bands activate each mode.
+
+| Aspect | Approach 6 (Combined Features) | Approach 8 (Subject-Freq Features) |
+|--------|--------------------------------|------------------------------------|
+| Observations | S × C × F | S × F |
+| Features | T | C × T |
+| Components represent | Temporal patterns `(T,)` | Spatial-temporal modes `(C, T)` |
+| Channel info lives in | Scores (axis 1) | Components (axis 1) |
+
+This notebook uses the same five focused analyses as Approaches 6–7:
+
+| # | Analysis | Purpose |
+|---|----------|---------|
+| (a) | Intersubject correlation matrix | Consistency of IC frequency profiles across participants |
+| (b) | Temporal profiles (mean ± std) | When each mode is active, with inter-subject variability |
+| (c) | Time–frequency spectrograms | Spectral content of each mode's temporal profile |
+| (d) | Mean / variance topomaps | Spatial distribution and inter-individual variability |
+| (e) | Per-subject loading bars | Individual-level participation in each mode |
+
 ---
 
 ## Data Requirements
 
-All seven notebooks load wavelet-power data via `scripts.analysis_common`
+All eight notebooks load wavelet-power data via `scripts.analysis_common`
 utilities (the same pipeline used in `notebooks/03-wavelet-analysis/`).
 The wavelet cache directory defaults to
 `notebooks/04-wavelet-ica-analysis/wavelet_cache/`.
