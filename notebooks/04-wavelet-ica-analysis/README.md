@@ -1,4 +1,4 @@
-# Stage 04 — ICA / PCA Decomposition of Wavelet Power (8 Approaches)
+# Stage 04 — ICA / PCA Decomposition of Wavelet Power (9 Approaches)
 
 This directory contains exploratory notebooks for applying **ICA** (Independent
 Component Analysis) and **PCA** (Principal Component Analysis) to 4-D wavelet
@@ -319,11 +319,51 @@ This notebook uses the same five focused analyses as Approaches 6–7:
 | (d) | Mean / variance topomaps | Spatial distribution and inter-individual variability |
 | (e) | Per-subject loading bars | Individual-level participation in each mode |
 
+### Approach 9 — Inverted Subject-Frequency Features (subject-spectral mode decomposition)
+
+**Notebook:** `wavelet_ica_inverted_subject_freq_features.ipynb`
+
+The **exact inversion** of Approach 8 — channels and time are the observation
+axis, with subjects and frequencies as features:
+
+```
+(n_subjects, n_channels, n_freqs, n_times)
+  → reshape →  (n_channels × n_times,  n_subjects × n_freqs)
+                ──── observations ─────  ──── features ───────
+```
+
+Each observation is a specific channel–time combination, described by its
+subject × frequency loading profile.  PCA/ICA discover **subject–spectral
+modes** — recurring subject × frequency patterns that appear independently
+across channel–time observations.  The ICA sources reshape to `(K, C, T)`
+giving channel–time activations; the mixing matrix reshapes to `(S, F, K)`
+describing which subjects and frequency bands participate.
+
+| Aspect | Approach 8 (Subject-Freq) | Approach 9 (Inverted, here) |
+|--------|---------------------------|-----------------------------|
+| Observations | S × F | C × T |
+| Features | C × T | S × F |
+| Components represent | Spatial-temporal modes `(C, T)` | (not used directly) |
+| Sources represent | (not used directly) | Channel–time activations `(C, T)` |
+| Scores represent | Subject-frequency loadings `(S, F)` | (not used directly) |
+| Mixing represents | (not used directly) | Subject-frequency weights `(S, F)` |
+
+This notebook uses the same five focused analyses as Approaches 6–8, adapted
+for the inverted decomposition:
+
+| # | Analysis | Purpose |
+|---|----------|---------|
+| (a) | Intersubject correlation matrix | Consistency of IC frequency mixing vectors across participants |
+| (b) | Temporal profiles (mean ± std) | When each mode is active, with inter-subject variability |
+| (c) | Time–frequency spectrograms | Spectral content of each mode's source temporal profile |
+| (d) | Mean / variance topomaps | Spatial distribution and inter-individual variability |
+| (e) | Per-subject mixing-weight bars | Individual-level participation in each mode |
+
 ---
 
 ## Data Requirements
 
-All eight notebooks load wavelet-power data via `scripts.analysis_common`
+All nine notebooks load wavelet-power data via `scripts.analysis_common`
 utilities (the same pipeline used in `notebooks/03-wavelet-analysis/`).
 The wavelet cache directory defaults to
 `notebooks/04-wavelet-ica-analysis/wavelet_cache/`.
