@@ -217,7 +217,9 @@ def _plot_isc_matrix(
 ) -> None:
     """Intersubject correlation matrix for ALL ICA components (cell 15)."""
     n_subjects, n_channels, n_freqs, _ = scores_4d.shape
-    subject_cf_loadings = scores_4d.reshape(n_subjects, n_channels * n_freqs, n_ica)
+    subject_cf_loadings = np.abs(scores_4d).reshape(
+        n_subjects, n_channels * n_freqs, n_ica
+    )
 
     n_show = n_ica  # ALL components
     fig, axes = plt.subplots(
@@ -258,7 +260,7 @@ def _plot_temporal_loadings(
 ) -> None:
     """Per-subject temporal activations for ALL ICs (cell 17)."""
     n_subjects, n_channels, n_freqs, _ = scores_4d.shape
-    subject_temporal = np.einsum("scfk,scft->skt", scores_4d, bb_z) / (
+    subject_temporal = np.einsum("scfk,scft->skt", np.abs(scores_4d), bb_z) / (
         n_channels * n_freqs
     )
     mean_temporal = subject_temporal.mean(axis=0)
@@ -308,7 +310,7 @@ def _plot_time_frequency(
 ) -> None:
     """Freq × Time mean-loading heatmap for ALL ICs (cell 19)."""
     n_subjects, n_channels = scores_4d.shape[:2]
-    ft_loading = np.einsum("scfk,scft->kft", scores_4d, bb_z) / (
+    ft_loading = np.einsum("scfk,scft->kft", np.abs(scores_4d), bb_z) / (
         n_subjects * n_channels
     )
 
@@ -353,7 +355,7 @@ def _plot_topomaps(
     save_path_var: Path,
 ) -> None:
     """Mean and variance topomaps for ALL ICs (cell 21)."""
-    ica_channel_loadings = scores_4d.mean(axis=2)  # (S, C, K)
+    ica_channel_loadings = np.abs(scores_4d).mean(axis=2)  # (S, C, K)
     ica_ch_mean = ica_channel_loadings.mean(axis=0)  # (C, K)
     ica_ch_var = ica_channel_loadings.var(axis=0)  # (C, K)
 
@@ -364,7 +366,7 @@ def _plot_topomaps(
     n_show = n_ica
 
     # --- Mean topomaps ---
-    _vlim_mean = np.percentile(np.abs(ica_ch_mean[:, :n_show]), 99)
+    _vlim_mean = np.percentile(ica_ch_mean[:, :n_show], 99)
     fig_mean, axes_mean = plt.subplots(1, n_show, figsize=(3.5 * n_show, 4))
     if n_show == 1:
         axes_mean = [axes_mean]
@@ -375,16 +377,16 @@ def _plot_topomaps(
             topo_info,
             axes=ax,
             show=False,
-            cmap="RdBu_r",
-            vlim=(-_vlim_mean, _vlim_mean),
+            cmap="YlOrRd",
+            vlim=(0, _vlim_mean),
         )
         ax.set_title(f"IC {i + 1}", fontsize=10)
 
     fig_mean.suptitle(
-        f"Mean Component Loading (topomap) \u2014 {label}",
+        f"Mean |Component Loading| (topomap) \u2014 {label}",
         fontsize=12,
     )
-    plt.colorbar(im, ax=axes_mean[-1], label="mean loading")
+    plt.colorbar(im, ax=axes_mean[-1], label="mean |loading|")
     fig_mean.tight_layout()
     fig_mean.savefig(save_path_mean, dpi=150, bbox_inches="tight")
     plt.close(fig_mean)
@@ -520,7 +522,7 @@ def _plot_freq_time_loading(
 ) -> None:
     """Freq × Time mean-loading heatmap with per-subplot colorbars."""
     n_subjects, n_channels = scores_4d.shape[:2]
-    ft_loading = np.einsum("scfk,scft->kft", scores_4d, bb_z) / (
+    ft_loading = np.einsum("scfk,scft->kft", np.abs(scores_4d), bb_z) / (
         n_subjects * n_channels
     )
 
@@ -564,7 +566,9 @@ def _plot_subject_consistency_bar(
 ) -> None:
     """Subject-consistency (mean pairwise inter-subject correlation) per IC."""
     n_subjects, n_channels, n_freqs, _ = scores_4d.shape
-    subject_cf_load = scores_4d.reshape(n_subjects, n_channels * n_freqs, n_ica)
+    subject_cf_load = np.abs(scores_4d).reshape(
+        n_subjects, n_channels * n_freqs, n_ica
+    )
 
     isc_per_ic = np.zeros(n_ica)
     for k in range(n_ica):
@@ -650,7 +654,7 @@ def _plot_stft_spectrogram(
 ) -> None:
     """STFT spectrogram of the subject-averaged temporal loading per IC."""
     n_subjects, n_channels, n_freqs, n_times = scores_4d.shape
-    subject_temporal = np.einsum("scfk,scft->skt", scores_4d, bb_z) / (
+    subject_temporal = np.einsum("scfk,scft->skt", np.abs(scores_4d), bb_z) / (
         n_channels * n_freqs
     )
     mean_temporal = subject_temporal.mean(axis=0)  # (K, T)
