@@ -15,6 +15,9 @@ and writes every plot into the canonical per-condition layout under::
             ica_topomap_mean_<label>.png
             ica_topomap_variance_<label>.png
             ica_subject_loadings_<label>.png
+            ica_intersubject_overlay_<label>.png
+
+All loading-derived plots use absolute values to prevent ICA sign ambiguity.
 
 Usage::
 
@@ -224,7 +227,7 @@ def _plot_isc_matrix(
         axes = [axes]
 
     for i, ax in enumerate(axes):
-        corr_mat = np.corrcoef(components_2d[i])
+        corr_mat = np.corrcoef(np.abs(components_2d[i]))
         im = ax.imshow(corr_mat, vmin=-1, vmax=1, cmap="RdBu_r")
         ax.set_xticks(range(n_subjects))
         ax.set_yticks(range(n_subjects))
@@ -250,8 +253,8 @@ def _plot_temporal_profiles(
     save_path: Path,
 ) -> None:
     """Component temporal profiles (mean ± std across subjects) for ALL ICs (cell 17)."""
-    mean_temporal = components_2d.mean(axis=1)  # (K, T)
-    std_temporal = components_2d.std(axis=1)  # (K, T)
+    mean_temporal = np.abs(components_2d).mean(axis=1)  # (K, T)
+    std_temporal = np.abs(components_2d).std(axis=1)  # (K, T)
 
     n_show = n_ica
     fig, axes = plt.subplots(n_show, 1, figsize=(14, 2.5 * n_show), sharex=True)
@@ -298,10 +301,10 @@ def _plot_time_frequency(
 ) -> None:
     """Freq × Time mean-loading heatmap for ALL ICs (cell 19)."""
     n_subjects = bb_z.shape[0]
-    # Frequency weights from scores: mean over channels
-    freq_weights = scores_2d.mean(axis=1)  # (F, K)
-    # Subject weights from components: mean over time
-    sub_weights = components_2d.mean(axis=2)  # (K, S)
+    # Frequency weights from |scores|: mean over channels
+    freq_weights = np.abs(scores_2d).mean(axis=1)  # (F, K)
+    # Subject weights from |components|: mean over time
+    sub_weights = np.abs(components_2d).mean(axis=2)  # (K, S)
     # Weighted data: mean over channels, then weight by subject weights
     bb_z_chan_avg = bb_z.mean(axis=1)  # (S, F, T)
     # weighted_sub(k, f, t) = mean_s[ sub_weights(k,s) * bb_z_chan_avg(s,f,t) ]
@@ -351,8 +354,8 @@ def _plot_topomaps(
     save_path_var: Path,
 ) -> None:
     """Mean and variance topomaps for ALL ICs (cell 21)."""
-    score_channel_loadings = scores_2d.mean(axis=0)  # (C, K)
-    subject_mean_activation = components_2d.mean(axis=2).T  # (S, K)
+    score_channel_loadings = np.abs(scores_2d).mean(axis=0)  # (C, K)
+    subject_mean_activation = np.abs(components_2d).mean(axis=2).T  # (S, K)
     ica_channel_loadings = np.einsum(
         "sk,ck->sck",
         subject_mean_activation,
@@ -380,16 +383,16 @@ def _plot_topomaps(
             topo_info,
             axes=ax,
             show=False,
-            cmap="RdBu_r",
-            vlim=(-_vlim_mean, _vlim_mean),
+            cmap="YlOrRd",
+            vlim=(0, _vlim_mean),
         )
         ax.set_title(f"IC {i + 1}", fontsize=10)
 
     fig_mean.suptitle(
-        f"Mean Component Channel Loading (topomap) \u2014 {label}",
+        f"Mean |Component Loading| (topomap) \u2014 {label}",
         fontsize=12,
     )
-    plt.colorbar(im, ax=axes_mean[-1], label="mean loading")
+    plt.colorbar(im, ax=axes_mean[-1], label="mean |loading|")
     fig_mean.tight_layout()
     fig_mean.savefig(save_path_mean, dpi=150, bbox_inches="tight")
     plt.close(fig_mean)
@@ -449,6 +452,66 @@ def _plot_subject_loadings(
         f"Per-Subject Loading per Component \u2014 {label}",
         fontsize=13,
         y=1.02,
+    )
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_intersubject_overlay(
+    components_2d: np.ndarray,
+    time: np.ndarray,
+    n_ica: int,
+    *,
+    label: str,
+    save_path: Path,
+) -> None:
+    """Intersubject time course overlay for ALL ICs.
+
+    Plots all subjects' |temporal profiles| overlaid on the same axes
+    per IC, with the group mean highlighted in black.
+    """
+    abs_components = np.abs(components_2d)
+    n_subjects = components_2d.shape[1]
+    cmap_subj = plt.cm.tab20(np.linspace(0, 1, n_subjects))
+
+    n_show = n_ica
+    fig, axes = plt.subplots(n_show, 1, figsize=(14, 2.5 * n_show), sharex=True)
+    if n_show == 1:
+        axes = [axes]
+
+    for i, ax in enumerate(axes):
+        for s in range(n_subjects):
+            ax.plot(
+                time,
+                abs_components[i, s],
+                lw=0.5,
+                alpha=0.5,
+                color=cmap_subj[s],
+                label=f"S{s + 1}" if i == 0 else None,
+            )
+        # Overlay mean in bold
+        ax.plot(
+            time,
+            abs_components[i].mean(axis=0),
+            lw=1.5,
+            color="black",
+            label="mean" if i == 0 else None,
+        )
+        ax.set_ylabel(f"IC {i + 1}")
+        ax.set_title(f"Component {i + 1} \u2014 Intersubject Overlay", fontsize=10)
+        if i == 0:
+            ax.legend(
+                loc="upper right",
+                fontsize=6,
+                ncol=min(n_subjects + 1, 8),
+            )
+
+    axes[-1].set_xlabel("Time (s)")
+    fig.suptitle(
+        f"Intersubject Time Course Overlay per IC \u2014 {label}",
+        fontsize=13,
+        y=1.01,
     )
     fig.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
@@ -567,7 +630,16 @@ def _run_freq_channel_features(
         save_path=out_dir / f"ica_subject_loadings_{label}.png",
     )
 
-    _logger.info(f"[{label}] Freq-Channel Features: 7 plots saved to {out_dir}")
+    # Plot 8 — Intersubject time course overlay
+    _plot_intersubject_overlay(
+        components_2d,
+        time,
+        n_ica,
+        label=label,
+        save_path=out_dir / f"ica_intersubject_overlay_{label}.png",
+    )
+
+    _logger.info(f"[{label}] Freq-Channel Features: 8 plots saved to {out_dir}")
 
 
 # ---------------------------------------------------------------------------
