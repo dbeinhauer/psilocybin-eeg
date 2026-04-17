@@ -21,7 +21,7 @@ processing that emerge during music listening.
 
 ---
 
-## Eight Decomposition Approaches
+## Nine Decomposition Approaches
 
 ### Approach 1 — Super-Brain (temporal decomposition)
 

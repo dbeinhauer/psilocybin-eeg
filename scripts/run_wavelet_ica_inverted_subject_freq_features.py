@@ -8,7 +8,7 @@ This is the **exact inversion** of Approach 8 (subject-freq features).
 Produces **all** ICA components (not just the first 6 shown in the notebook)
 and writes every plot into the canonical per-condition layout under::
 
-    plots/04-inverted-subject-freq-features-wavelet-ica-analysis/<Cond>_<Music>/
+    plots/04-inverted-subject-freq-features-wavelet-ica-analysis/<Condition>_<MusicType>/
         broadband/inverted_subject_freq_features/
             pca_scree_<label>.png
             isc_component_matrix_<label>.png
