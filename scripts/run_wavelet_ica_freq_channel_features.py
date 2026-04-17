@@ -38,7 +38,6 @@ import matplotlib.pyplot as plt  # noqa: E402
 import mne  # noqa: E402
 import numpy as np  # noqa: E402
 from mne.viz import plot_topomap  # noqa: E402
-from scipy.signal import spectrogram as sp_spectrogram  # noqa: E402
 from sklearn.decomposition import PCA, FastICA  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -287,16 +286,28 @@ def _plot_temporal_profiles(
 
 
 def _plot_time_frequency(
+    scores_2d: np.ndarray,
     components_2d: np.ndarray,
-    sfreq: float,
-    freqs_max: float,
+    bb_z: np.ndarray,
+    time: np.ndarray,
+    freqs: np.ndarray,
     n_ica: int,
     *,
     label: str,
     save_path: Path,
 ) -> None:
-    """Time-frequency spectrograms for ALL ICs (cell 19)."""
-    mean_temporal = components_2d.mean(axis=1)  # (K, T)
+    """Freq × Time mean-loading heatmap for ALL ICs (cell 19)."""
+    n_subjects = bb_z.shape[0]
+    # Frequency weights from scores: mean over channels
+    freq_weights = scores_2d.mean(axis=1)  # (F, K)
+    # Subject weights from components: mean over time
+    sub_weights = components_2d.mean(axis=2)  # (K, S)
+    # Weighted data: mean over channels, then weight by subject weights
+    bb_z_chan_avg = bb_z.mean(axis=1)  # (S, F, T)
+    # weighted_sub(k, f, t) = mean_s[ sub_weights(k,s) * bb_z_chan_avg(s,f,t) ]
+    weighted_sub = np.einsum("ks,sft->kft", sub_weights, bb_z_chan_avg) / n_subjects
+    # Final: loading(k, f, t) = freq_weights(f, k) * weighted_sub(k, f, t)
+    ft_loading = np.einsum("fk,kft->kft", freq_weights, weighted_sub)
 
     n_show = n_ica
     fig, axes = plt.subplots(n_show, 1, figsize=(14, 3 * n_show), sharex=True)
@@ -304,30 +315,22 @@ def _plot_time_frequency(
         axes = [axes]
 
     for i, ax in enumerate(axes):
-        temporal_profile = mean_temporal[i]
-        f_spec, t_spec, Sxx = sp_spectrogram(
-            temporal_profile,
-            fs=sfreq,
-            nperseg=int(sfreq * 2),
-            noverlap=int(sfreq),
-        )
-        freq_mask = f_spec <= freqs_max
-        Sxx_db = 10 * np.log10(Sxx[freq_mask] + 1e-12)
-        vmin_s, vmax_s = np.percentile(Sxx_db, 1), np.percentile(Sxx_db, 99)
+        data_i = ft_loading[i]
+        vmin_s, vmax_s = np.percentile(data_i, 1), np.percentile(data_i, 99)
         ax.pcolormesh(
-            t_spec,
-            f_spec[freq_mask],
-            Sxx_db,
+            time,
+            freqs,
+            data_i,
             cmap="inferno",
             vmin=vmin_s,
             vmax=vmax_s,
         )
         ax.set_ylabel("Freq (Hz)")
-        ax.set_title(f"IC {i + 1} \u2014 Spectrogram", fontsize=10)
+        ax.set_title(f"IC {i + 1} \u2014 Freq \u00d7 Time Mean Loading", fontsize=10)
 
     axes[-1].set_xlabel("Time (s)")
     fig.suptitle(
-        f"Time\u2013Frequency of Component Temporal Profiles \u2014 {label}",
+        f"Frequency \u00d7 Time Mean Loading per IC \u2014 {label}",
         fontsize=13,
         y=1.01,
     )
@@ -532,11 +535,13 @@ def _run_freq_channel_features(
         save_path=out_dir / f"ica_temporal_profiles_{label}.png",
     )
 
-    # Plot 4 — Time-frequency spectrograms
+    # Plot 4 — Freq × Time mean-loading heatmap
     _plot_time_frequency(
+        scores_2d,
         components_2d,
-        sfreq,
-        float(freqs[-1]),
+        bb_z,
+        time,
+        freqs,
         n_ica,
         label=label,
         save_path=out_dir / f"ica_time_frequency_{label}.png",
