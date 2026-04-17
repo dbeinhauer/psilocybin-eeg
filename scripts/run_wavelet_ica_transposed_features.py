@@ -215,9 +215,7 @@ def _plot_isc_matrix(
     Uses per-subject channel×frequency mixing vectors: mixing_4d shape (S, C, F, K).
     """
     n_subjects, n_channels, n_freqs, _ = mixing_4d.shape
-    subject_cf_mixing = mixing_4d.reshape(
-        n_subjects, n_channels * n_freqs, n_ica
-    )
+    subject_cf_mixing = mixing_4d.reshape(n_subjects, n_channels * n_freqs, n_ica)
 
     n_show = n_ica  # ALL components
     fig, axes = plt.subplots(
@@ -286,8 +284,7 @@ def _plot_temporal_activations(
 
     axes[-1].set_xlabel("Time (s)")
     fig.suptitle(
-        f"ICA Mode Time Courses (mean \u00b1 std across subjects) "
-        f"\u2014 {label}",
+        f"ICA Mode Time Courses (mean \u00b1 std across subjects) \u2014 {label}",
         fontsize=13,
         y=1.01,
     )
@@ -503,8 +500,7 @@ def _run_transposed_features(
         n_subjects, n_channels, n_freqs, n_ica
     )  # (S, C, F, K)
     _logger.info(
-        f"[{label}] ICA: sources={ica_sources.shape}, "
-        f"mixing_4d={mixing_4d.shape}"
+        f"[{label}] ICA: sources={ica_sources.shape}, mixing_4d={mixing_4d.shape}"
     )
 
     # Plot 1 — PCA scree

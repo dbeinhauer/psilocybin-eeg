@@ -273,9 +273,7 @@ def _plot_temporal_profiles(
         axes = [axes]
 
     for i, ax in enumerate(axes):
-        ax.plot(
-            time, mean_temporal[i], lw=0.8, color="mediumpurple", label="mean"
-        )
+        ax.plot(time, mean_temporal[i], lw=0.8, color="mediumpurple", label="mean")
         ax.fill_between(
             time,
             mean_temporal[i] - std_temporal[i],
@@ -291,8 +289,7 @@ def _plot_temporal_profiles(
 
     axes[-1].set_xlabel("Time (s)")
     fig.suptitle(
-        f"ICA Mode Temporal Profiles (mean \u00b1 std across subjects) "
-        f"\u2014 {label}",
+        f"ICA Mode Temporal Profiles (mean \u00b1 std across subjects) \u2014 {label}",
         fontsize=13,
         y=1.01,
     )
@@ -450,9 +447,7 @@ def _plot_subject_mixing(
         axes = [axes]
 
     for i, ax in enumerate(axes):
-        ax.barh(
-            range(n_subjects), subject_mixing[:, i], color="mediumpurple"
-        )
+        ax.barh(range(n_subjects), subject_mixing[:, i], color="mediumpurple")
         ax.set_yticks(range(n_subjects))
         ax.set_yticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=8)
         ax.set_xlabel("|mixing|")
@@ -493,16 +488,13 @@ def _run_inverted_subject_freq_features(
     n_subjects, n_channels, n_freqs, n_times = data_4d.shape
     time = np.arange(n_times) / sfreq
     _logger.info(
-        f"[{label}] Inverted Subject-Freq Features: {data_4d.shape}  "
-        f"sfreq={sfreq} Hz"
+        f"[{label}] Inverted Subject-Freq Features: {data_4d.shape}  sfreq={sfreq} Hz"
     )
 
     # Step 1 — Z-score and reshape: (S,C,F,T) → (S,F,C,T) → (S*F,C*T) → T to (C*T,S*F)
     bb_z = zscore_by_time(data_4d)
     bb_z_sf = bb_z.transpose(0, 2, 1, 3)  # (S, F, C, T)
-    X_inv = bb_z_sf.reshape(
-        n_subjects * n_freqs, n_channels * n_times
-    ).T  # (C*T, S*F)
+    X_inv = bb_z_sf.reshape(n_subjects * n_freqs, n_channels * n_times).T  # (C*T, S*F)
     _logger.info(f"[{label}] Inverted: {X_inv.shape}  (C*T, S*F)")
 
     # Step 2 — PCA + ICA
@@ -525,15 +517,10 @@ def _run_inverted_subject_freq_features(
     ica_full_mixing = pca.components_.T @ ica.mixing_  # (S*F, K_ica)
 
     # Reshape for downstream analysis
-    mixing_2d = ica_full_mixing.reshape(
-        n_subjects, n_freqs, n_ica
-    )  # (S, F, K)
-    sources_2d = ica_sources.T.reshape(
-        n_ica, n_channels, n_times
-    )  # (K, C, T)
+    mixing_2d = ica_full_mixing.reshape(n_subjects, n_freqs, n_ica)  # (S, F, K)
+    sources_2d = ica_sources.T.reshape(n_ica, n_channels, n_times)  # (K, C, T)
     _logger.info(
-        f"[{label}] ICA: mixing_2d={mixing_2d.shape}, "
-        f"sources_2d={sources_2d.shape}"
+        f"[{label}] ICA: mixing_2d={mixing_2d.shape}, sources_2d={sources_2d.shape}"
     )
 
     # Plot 1 — PCA scree
