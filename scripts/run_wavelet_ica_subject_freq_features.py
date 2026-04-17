@@ -312,9 +312,9 @@ def _plot_time_frequency(
     n_channels = components_2d.shape[1]
     # Channel weights from components: mean over time
     channel_weights = components_2d.mean(axis=2)  # (K, C)
-    # Project bb_z through channel weights
+    # Project bb_z through channel weights: sum over channels
     weighted_data = np.einsum("kc,scft->skft", channel_weights, bb_z)  # (S,K,F,T)
-    # Combine with scores_2d
+    # Combine with scores_2d and average over subjects and channels
     ft_loading = np.einsum("sfk,skft->kft", scores_2d, weighted_data) / (
         n_subjects * n_channels
     )
