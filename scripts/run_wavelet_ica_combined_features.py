@@ -562,7 +562,7 @@ def _plot_subject_consistency_bar(
     label: str,
     save_path: Path,
 ) -> None:
-    """Subject-consistency (mean pairwise ISC) per IC as a bar chart."""
+    """Subject-consistency (mean pairwise inter-subject correlation) per IC."""
     n_subjects, n_channels, n_freqs, _ = scores_4d.shape
     subject_cf_load = scores_4d.reshape(n_subjects, n_channels * n_freqs, n_ica)
 
