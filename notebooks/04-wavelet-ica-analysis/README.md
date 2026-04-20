@@ -61,10 +61,8 @@ frequency loadings.
 | (e) | Per-subject loading bars | Individual-level contribution to each IC |
 | (f) | IC temporal patterns | Raw component waveforms (temporal fingerprint) |
 | (g) | Per-subject per-component heatmap | Subjects × ICs loading strength matrix |
-| (h) | Subject-averaged freq × time heatmap | One summary heatmap per IC |
 | (i) | Subject-consistency bar plot | Mean pairwise inter-subject correlation per IC |
 | (j) | Frequency profile per component | Which band dominates each IC |
-| (k) | STFT spectrogram | Spectral content of each IC's temporal activation |
 
 ### Approach 2 — Subject-Frequency Features (S×F observations, C×T features)
 

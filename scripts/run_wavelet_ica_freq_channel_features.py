@@ -21,7 +21,7 @@ Usage::
 
     python scripts/run_wavelet_ica_freq_channel_features.py \\
         --condition Placebo --music_type CLASSIC PSYTRANCE \\
-        --n_pca 20 --n_ica 10 --reuse_wavelets
+        --n_pca 50 --n_ica 10 --reuse_wavelets
 """
 
 from __future__ import annotations
@@ -96,7 +96,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--n_pca",
         type=int,
-        default=20,
+        default=50,
         help="Number of PCA components to retain.",
     )
     parser.add_argument(

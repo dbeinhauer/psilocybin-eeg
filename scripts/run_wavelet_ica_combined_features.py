@@ -17,16 +17,14 @@ and writes every plot into the canonical per-condition layout under::
             ica_subject_loadings_<label>.png
             ica_component_timecourse_<label>.png
             ica_subject_component_heatmap_<label>.png
-            ica_freq_time_loading_<label>.png
             ica_subject_consistency_bar_<label>.png
             ica_frequency_profile_<label>.png
-            ica_stft_spectrogram_<label>.png
 
 Usage::
 
     python scripts/run_wavelet_ica_combined_features.py \\
         --condition Placebo --music_type CLASSIC PSYTRANCE \\
-        --n_pca 20 --n_ica 10 --reuse_wavelets
+        --n_pca 50 --n_ica 10 --reuse_wavelets
 """
 
 from __future__ import annotations
@@ -44,7 +42,6 @@ import matplotlib.pyplot as plt  # noqa: E402
 import mne  # noqa: E402
 import numpy as np  # noqa: E402
 from mne.viz import plot_topomap  # noqa: E402
-from scipy.signal import spectrogram as sp_spectrogram  # noqa: E402
 from sklearn.decomposition import PCA, FastICA  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -103,7 +100,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--n_pca",
         type=int,
-        default=20,
+        default=50,
         help="Number of PCA components to retain.",
     )
     parser.add_argument(
@@ -508,53 +505,6 @@ def _plot_subject_component_heatmap(
     plt.close(fig)
 
 
-def _plot_freq_time_loading(
-    scores_4d: np.ndarray,
-    bb_z: np.ndarray,
-    time: np.ndarray,
-    freqs: np.ndarray,
-    n_ica: int,
-    *,
-    label: str,
-    save_path: Path,
-) -> None:
-    """Freq × Time mean-loading heatmap with per-subplot colorbars."""
-    n_subjects, n_channels = scores_4d.shape[:2]
-    ft_loading = np.einsum("scfk,scft->kft", scores_4d, bb_z) / (
-        n_subjects * n_channels
-    )
-
-    n_show = n_ica
-    fig, axes = plt.subplots(n_show, 1, figsize=(14, 3 * n_show), sharex=True)
-    if n_show == 1:
-        axes = [axes]
-
-    for i, ax in enumerate(axes):
-        data_i = ft_loading[i]
-        vmin_s, vmax_s = np.percentile(data_i, 1), np.percentile(data_i, 99)
-        im = ax.pcolormesh(
-            time,
-            freqs,
-            data_i,
-            cmap="inferno",
-            vmin=vmin_s,
-            vmax=vmax_s,
-        )
-        ax.set_ylabel("Freq (Hz)")
-        ax.set_title(f"IC {i + 1} \u2014 Freq \u00d7 Time Mean Loading", fontsize=10)
-        plt.colorbar(im, ax=ax, label="mean loading")
-
-    axes[-1].set_xlabel("Time (s)")
-    fig.suptitle(
-        f"Frequency \u00d7 Time Mean Loading per IC (subject-averaged) \u2014 {label}",
-        fontsize=13,
-        y=1.01,
-    )
-    fig.tight_layout()
-    fig.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-
-
 def _plot_subject_consistency_bar(
     scores_4d: np.ndarray,
     n_ica: int,
@@ -635,63 +585,6 @@ def _plot_frequency_profile(
         f"Frequency Profile per Component \u2014 {label}",
         fontsize=13,
         y=1.02,
-    )
-    fig.tight_layout()
-    fig.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-
-
-def _plot_stft_spectrogram(
-    scores_4d: np.ndarray,
-    bb_z: np.ndarray,
-    sfreq: float,
-    n_ica: int,
-    *,
-    label: str,
-    save_path: Path,
-) -> None:
-    """STFT spectrogram of the subject-averaged temporal loading per IC."""
-    n_subjects, n_channels, n_freqs, n_times = scores_4d.shape
-    subject_temporal = np.einsum("scfk,scft->skt", scores_4d, bb_z) / (
-        n_channels * n_freqs
-    )
-    mean_temporal = subject_temporal.mean(axis=0)  # (K, T)
-
-    nperseg = min(256, n_times // 4)
-    noverlap = nperseg * 3 // 4
-
-    n_show = n_ica
-    fig, axes = plt.subplots(n_show, 1, figsize=(14, 3 * n_show), sharex=True)
-    if n_show == 1:
-        axes = [axes]
-
-    for i, ax in enumerate(axes):
-        f_stft, t_stft, Sxx = sp_spectrogram(
-            mean_temporal[i],
-            fs=sfreq,
-            nperseg=nperseg,
-            noverlap=noverlap,
-        )
-        Sxx_db = 10 * np.log10(Sxx + 1e-12)
-        vmin_s, vmax_s = np.percentile(Sxx_db, 1), np.percentile(Sxx_db, 99)
-        ax.pcolormesh(
-            t_stft,
-            f_stft,
-            Sxx_db,
-            cmap="viridis",
-            vmin=vmin_s,
-            vmax=vmax_s,
-        )
-        ax.set_ylabel("Freq (Hz)")
-        ax.set_title(
-            f"IC {i + 1} \u2014 STFT Spectrogram of Temporal Loading", fontsize=10
-        )
-
-    axes[-1].set_xlabel("Time (s)")
-    fig.suptitle(
-        f"Spectrogram of Mean Temporal Loadings (STFT) \u2014 {label}",
-        fontsize=13,
-        y=1.01,
     )
     fig.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
@@ -816,18 +709,7 @@ def _run_combined_features(
         save_path=out_dir / f"ica_subject_component_heatmap_{label}.png",
     )
 
-    # Plot 10 — Freq × Time mean-loading heatmap (with colorbars)
-    _plot_freq_time_loading(
-        scores_4d,
-        bb_z,
-        time,
-        freqs,
-        n_ica,
-        label=label,
-        save_path=out_dir / f"ica_freq_time_loading_{label}.png",
-    )
-
-    # Plot 11 — Subject-consistency bar plot
+    # Plot 10 — Subject-consistency bar plot
     _plot_subject_consistency_bar(
         scores_4d,
         n_ica,
@@ -835,7 +717,7 @@ def _run_combined_features(
         save_path=out_dir / f"ica_subject_consistency_bar_{label}.png",
     )
 
-    # Plot 12 — Frequency profile per component
+    # Plot 11 — Frequency profile per component
     _plot_frequency_profile(
         scores_4d,
         freqs,
@@ -844,17 +726,7 @@ def _run_combined_features(
         save_path=out_dir / f"ica_frequency_profile_{label}.png",
     )
 
-    # Plot 13 — STFT spectrogram of mean temporal loadings
-    _plot_stft_spectrogram(
-        scores_4d,
-        bb_z,
-        sfreq,
-        n_ica,
-        label=label,
-        save_path=out_dir / f"ica_stft_spectrogram_{label}.png",
-    )
-
-    _logger.info(f"[{label}] Combined Features: 13 plots saved to {out_dir}")
+    _logger.info(f"[{label}] Combined Features: 11 plots saved to {out_dir}")
 
 
 # ---------------------------------------------------------------------------
