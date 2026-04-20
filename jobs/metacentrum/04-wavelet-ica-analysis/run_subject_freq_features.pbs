@@ -6,7 +6,7 @@
 #PBS -j oe
 
 # ---------------------------------------------------------------------------
-# Stage-04 Subject-Frequency Features wavelet-ICA analysis (Approach 8).
+# Stage-04 Subject-Frequency Features wavelet-ICA analysis (Approach 2).
 #
 # Runs the exact same pipeline as
 # notebooks/04-wavelet-ica-analysis/wavelet_ica_subject_freq_features.ipynb

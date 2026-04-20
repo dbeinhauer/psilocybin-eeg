@@ -1,7 +1,7 @@
 """
 CLI script reproducing the exact analyses from
 ``notebooks/04-wavelet-ica-analysis/wavelet_ica_subject_freq_features.ipynb``
-(Approach 8 — Subject-Frequency Features: observations = S×F, features = C×T).
+(Approach 2 — Subject-Frequency Features: observations = S×F, features = C×T).
 
 Produces **all** ICA components (not just the first 6 shown in the notebook)
 and writes every plot into the canonical per-condition layout under::
@@ -69,7 +69,7 @@ _STAGE_DIR = "04-subject-freq-features-wavelet-ica-analysis"
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run the Subject-Frequency Features ICA analysis (Approach 8) on "
+            "Run the Subject-Frequency Features ICA analysis (Approach 2) on "
             "preprocessed EEG wavelet power.  Produces the exact same plots "
             "as wavelet_ica_subject_freq_features.ipynb, but for ALL ICA "
             "components."

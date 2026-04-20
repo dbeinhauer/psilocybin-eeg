@@ -1,7 +1,7 @@
 """
 CLI script reproducing the exact analyses from
 ``notebooks/04-wavelet-ica-analysis/wavelet_ica_combined_features.ipynb``
-(Approach 6 — Combined Features: observations = S×C×F, features = T).
+(Approach 1 — Combined Features: observations = S×C×F, features = T).
 
 Produces **all** ICA components (not just the first 6 shown in the notebook)
 and writes every plot into the canonical per-condition layout under::
@@ -77,7 +77,7 @@ _STAGE_DIR = "04-combined-features-wavelet-ica-analysis"
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run the Combined-Features ICA analysis (Approach 6) on "
+            "Run the Combined-Features ICA analysis (Approach 1) on "
             "preprocessed EEG wavelet power.  Produces the exact same "
             "plots as wavelet_ica_combined_features.ipynb, but for ALL "
             "ICA components."

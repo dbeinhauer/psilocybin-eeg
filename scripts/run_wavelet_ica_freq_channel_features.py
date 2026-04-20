@@ -1,7 +1,7 @@
 """
 CLI script reproducing the exact analyses from
 ``notebooks/04-wavelet-ica-analysis/wavelet_ica_freq_channel_features.ipynb``
-(Approach 10 — Freq-Channel Features: observations = F×C, features = S×T).
+(Approach 3 — Freq-Channel Features: observations = F×C, features = S×T).
 
 Produces **all** ICA components (not just the first 6 shown in the notebook)
 and writes every plot into the canonical per-condition layout under::
@@ -70,7 +70,7 @@ _STAGE_DIR = "04-freq-channel-features-wavelet-ica-analysis"
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run the Freq-Channel Features ICA analysis (Approach 10) on "
+            "Run the Freq-Channel Features ICA analysis (Approach 3) on "
             "preprocessed EEG wavelet power.  Produces the exact same plots "
             "as wavelet_ica_freq_channel_features.ipynb, but for ALL ICA "
             "components."

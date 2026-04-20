@@ -6,7 +6,7 @@
 #PBS -j oe
 
 # ---------------------------------------------------------------------------
-# Stage-04 Combined-Features wavelet-ICA analysis (Approach 6).
+# Stage-04 Combined-Features wavelet-ICA analysis (Approach 1).
 #
 # Runs the exact same pipeline as
 # notebooks/04-wavelet-ica-analysis/wavelet_ica_combined_features.ipynb

@@ -6,7 +6,7 @@
 #PBS -j oe
 
 # ---------------------------------------------------------------------------
-# Stage-04 Freq-Channel Features wavelet-ICA analysis (Approach 10).
+# Stage-04 Freq-Channel Features wavelet-ICA analysis (Approach 3).
 #
 # Runs the exact same pipeline as
 # notebooks/04-wavelet-ica-analysis/wavelet_ica_freq_channel_features.ipynb
