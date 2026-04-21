@@ -15,6 +15,10 @@ and writes every plot into the canonical per-condition layout under::
             ica_topomap_mean_<label>.png
             ica_topomap_variance_<label>.png
             ica_subject_loadings_<label>.png
+            ica_component_timecourse_<label>.png
+            ica_subject_component_heatmap_<label>.png
+            ica_subject_consistency_bar_<label>.png
+            ica_frequency_profile_<label>.png
 
 Usage::
 
@@ -43,6 +47,7 @@ from sklearn.decomposition import PCA, FastICA  # noqa: E402
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.analysis_common import (  # noqa: E402
+    FREQUENCY_BANDS,
     _broadband_wavelet_4d,
     analyzers_to_datasets,
     load_analyzers,
@@ -465,6 +470,148 @@ def _plot_subject_loadings(
     plt.close(fig)
 
 
+def _plot_component_timecourse(
+    components_2d: np.ndarray,
+    time: np.ndarray,
+    n_ica: int,
+    *,
+    label: str,
+    save_path: Path,
+) -> None:
+    """IC temporal patterns (channel-averaged component waveforms) for ALL ICs (cell 25)."""
+    # Channel-averaged temporal profiles: (K, T)
+    component_time_profiles = components_2d.mean(axis=1)
+
+    n_show = n_ica
+    fig, axes = plt.subplots(n_show, 1, figsize=(14, 2.0 * n_show), sharex=True)
+    if n_show == 1:
+        axes = [axes]
+
+    for i, ax in enumerate(axes):
+        ax.plot(time, component_time_profiles[i], lw=0.6, color="teal")
+        ax.set_ylabel(f"IC {i + 1}")
+        ax.set_title(f"Component {i + 1} \u2014 Temporal Waveform", fontsize=10)
+
+    axes[-1].set_xlabel("Time (s)")
+    fig.suptitle(
+        f"ICA Component Temporal Patterns \u2014 {label}",
+        fontsize=13,
+        y=1.01,
+    )
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_subject_component_heatmap(
+    scores_2d: np.ndarray,
+    n_ica: int,
+    *,
+    label: str,
+    save_path: Path,
+) -> None:
+    """Per-subject per-component loading heatmap for ALL ICs (cell 27)."""
+    n_subjects = scores_2d.shape[0]
+    # Mean |loading| across frequencies for each subject × IC
+    subject_loadings_hm = np.abs(scores_2d).mean(axis=1)  # (S, K)
+
+    fig, ax = plt.subplots(
+        figsize=(max(8, n_ica * 0.8), max(4, n_subjects * 0.4))
+    )
+    im = ax.imshow(subject_loadings_hm, aspect="auto", cmap="YlOrRd")
+    ax.set_xticks(range(n_ica))
+    ax.set_xticklabels([f"IC {k + 1}" for k in range(n_ica)], fontsize=9)
+    ax.set_yticks(range(n_subjects))
+    ax.set_yticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=9)
+    ax.set_xlabel("Component")
+    ax.set_ylabel("Subject")
+    ax.set_title(
+        f"Per-Subject Per-Component Loading Heatmap \u2014 {label}", fontsize=13
+    )
+    plt.colorbar(im, ax=ax, label="mean |loading|")
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_subject_consistency_bar(
+    scores_2d: np.ndarray,
+    n_ica: int,
+    *,
+    label: str,
+    save_path: Path,
+) -> None:
+    """Subject-consistency bar plot for ALL ICs (cell 29)."""
+    n_subjects = scores_2d.shape[0]
+    isc_per_ic = np.zeros(n_ica)
+    for k in range(n_ica):
+        corr_mat = np.corrcoef(scores_2d[:, :, k])  # (S, S)
+        triu_idx = np.triu_indices(n_subjects, k=1)
+        isc_per_ic[k] = corr_mat[triu_idx].mean()
+
+    fig, ax = plt.subplots(figsize=(max(8, n_ica * 0.7), 4))
+    colors = ["steelblue" if v >= 0 else "salmon" for v in isc_per_ic]
+    ax.bar(range(1, n_ica + 1), isc_per_ic, color=colors)
+    ax.set_xlabel("Component")
+    ax.set_ylabel("Mean pairwise ISC (Pearson r)")
+    ax.set_xticks(range(1, n_ica + 1))
+    ax.axhline(0, color="gray", ls="--", lw=0.8)
+    ax.set_title(f"Subject-Consistency per IC \u2014 {label}", fontsize=13)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_frequency_profile(
+    scores_2d: np.ndarray,
+    freqs: np.ndarray,
+    n_ica: int,
+    *,
+    label: str,
+    save_path: Path,
+) -> None:
+    """Frequency profile per component for ALL ICs (cell 31)."""
+    band_names = list(FREQUENCY_BANDS.keys())
+    band_ranges = list(FREQUENCY_BANDS.values())
+    n_bands = len(band_names)
+
+    # Mean |loading| per frequency per IC: average over subjects
+    freq_profile = np.abs(scores_2d).mean(axis=0)  # (F, K)
+
+    band_profile = np.zeros((n_bands, n_ica))
+    for b_idx, (lo, hi) in enumerate(band_ranges):
+        mask = (freqs >= lo) & (freqs < hi)
+        if mask.sum() > 0:
+            band_profile[b_idx] = freq_profile[mask].mean(axis=0)
+
+    n_show = n_ica
+    fig, axes = plt.subplots(1, n_show, figsize=(3 * n_show, 4), sharey=True)
+    if n_show == 1:
+        axes = [axes]
+
+    band_colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
+    for i, ax in enumerate(axes):
+        ax.barh(
+            range(n_bands),
+            band_profile[:, i],
+            color=band_colors[:n_bands],
+        )
+        ax.set_yticks(range(n_bands))
+        ax.set_yticklabels(band_names, fontsize=9)
+        ax.set_xlabel("mean |loading|")
+        ax.set_title(f"IC {i + 1}", fontsize=10)
+
+    axes[0].set_ylabel("Frequency band")
+    fig.suptitle(
+        f"Frequency Profile per Component \u2014 {label}",
+        fontsize=13,
+        y=1.02,
+    )
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 # ---------------------------------------------------------------------------
 # Main analysis pipeline
 # ---------------------------------------------------------------------------
@@ -579,7 +726,41 @@ def _run_subject_freq_features(
         save_path=out_dir / f"ica_subject_loadings_{label}.png",
     )
 
-    _logger.info(f"[{label}] Subject-Freq Features: 7 plots saved to {out_dir}")
+    # Plot 8 — IC temporal patterns (component waveforms)
+    _plot_component_timecourse(
+        components_2d,
+        time,
+        n_ica,
+        label=label,
+        save_path=out_dir / f"ica_component_timecourse_{label}.png",
+    )
+
+    # Plot 9 — Per-subject per-component loading heatmap
+    _plot_subject_component_heatmap(
+        scores_2d,
+        n_ica,
+        label=label,
+        save_path=out_dir / f"ica_subject_component_heatmap_{label}.png",
+    )
+
+    # Plot 10 — Subject-consistency bar
+    _plot_subject_consistency_bar(
+        scores_2d,
+        n_ica,
+        label=label,
+        save_path=out_dir / f"ica_subject_consistency_bar_{label}.png",
+    )
+
+    # Plot 11 — Frequency profile per component
+    _plot_frequency_profile(
+        scores_2d,
+        freqs,
+        n_ica,
+        label=label,
+        save_path=out_dir / f"ica_frequency_profile_{label}.png",
+    )
+
+    _logger.info(f"[{label}] Subject-Freq Features: 11 plots saved to {out_dir}")
 
 
 # ---------------------------------------------------------------------------
