@@ -288,7 +288,6 @@ def _plot_temporal_profiles(
 
 def _plot_time_frequency(
     scores_2d: np.ndarray,
-    components_2d: np.ndarray,
     bb_z: np.ndarray,
     time: np.ndarray,
     freqs: np.ndarray,
@@ -298,17 +297,13 @@ def _plot_time_frequency(
     save_path: Path,
 ) -> None:
     """Freq × Time mean-loading heatmap for ALL ICs (cell 19)."""
-    n_subjects = bb_z.shape[0]
     # Frequency weights from scores: mean over channels
     freq_weights = scores_2d.mean(axis=1)  # (F, K)
-    # Subject weights from components: mean over time
-    sub_weights = components_2d.mean(axis=2)  # (K, S)
-    # Weighted data: mean over channels, then weight by subject weights
+    # Uniform mean over channels then subjects — each subject contributes equally
     bb_z_chan_avg = bb_z.mean(axis=1)  # (S, F, T)
-    # weighted_sub(k, f, t) = mean_s[ sub_weights(k,s) * bb_z_chan_avg(s,f,t) ]
-    weighted_sub = np.einsum("ks,sft->kft", sub_weights, bb_z_chan_avg) / n_subjects
-    # Final: loading(k, f, t) = freq_weights(f, k) * weighted_sub(k, f, t)
-    ft_loading = np.einsum("fk,kft->kft", freq_weights, weighted_sub)
+    mean_sub = bb_z_chan_avg.mean(axis=0)  # (F, T) — simple mean over subjects
+    # Final: loading(k, f, t) = freq_weights(f, k) * mean_sub(f, t)
+    ft_loading = np.einsum("fk,ft->kft", freq_weights, mean_sub)  # (K, F, T)
 
     n_show = n_ica
     fig, axes = plt.subplots(n_show, 1, figsize=(14, 3 * n_show), sharex=True)
@@ -353,15 +348,15 @@ def _plot_topomaps(
 ) -> None:
     """Mean and variance topomaps for ALL ICs (cell 21)."""
     score_channel_loadings = scores_2d.mean(axis=0)  # (C, K)
-    subject_mean_activation = components_2d.mean(axis=2).T  # (S, K)
-    ica_channel_loadings = np.einsum(
-        "sk,ck->sck",
-        subject_mean_activation,
-        score_channel_loadings,
-    )  # (S, C, K)
+    n_freqs = scores_2d.shape[0]
+    n_times = bb_z.shape[3]
+    # Per-subject channel loadings via projection onto temporal component patterns.
+    # per_subj_ch[s, c, k] = mean_f mean_t [ bb_z[s,c,f,t] * components_2d[k,s,t] ]
+    # Each subject contributes equally regardless of overall activation strength.
+    per_subj_ch = np.einsum("scft,kst->sck", bb_z, components_2d) / (n_freqs * n_times)
 
-    ica_ch_mean = ica_channel_loadings.mean(axis=0)  # (C, K)
-    ica_ch_var = ica_channel_loadings.var(axis=0)  # (C, K)
+    ica_ch_mean = per_subj_ch.mean(axis=0)  # (C, K)
+    ica_ch_var = per_subj_ch.var(axis=0)  # (C, K)
 
     topo_info = mne.pick_info(info, mne.pick_types(info, eeg=True))
     if n_channels < len(topo_info.ch_names):
@@ -598,7 +593,6 @@ def _run_freq_channel_features(
     # Plot 4 — Freq × Time mean-loading heatmap
     _plot_time_frequency(
         scores_2d,
-        components_2d,
         bb_z,
         time,
         freqs,
