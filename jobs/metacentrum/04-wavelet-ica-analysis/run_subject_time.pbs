@@ -1,0 +1,82 @@
+#!/bin/bash
+#PBS -N PSILO_ST_ICA_04
+#PBS -l walltime=2:00:00
+#PBS -l select=1:ncpus=8:mem=350gb:scratch_local=80gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-04 Subject-Time wavelet-ICA analysis.
+#
+# Runs the exact same pipeline as
+# notebooks/04-wavelet-ica-analysis/wavelet_ica_subject_time.ipynb
+# but on full data (no subject/channel/time subset) and plotting ALL ICA
+# components.  Processes the Placebo condition on both music types.
+#
+# Output:
+#   plots/04-subject-time-wavelet-ica-analysis/Placebo_CLASSIC/
+#       broadband/subject_time/*.png
+#   plots/04-subject-time-wavelet-ica-analysis/Placebo_PSYTRANCE/
+#       broadband/subject_time/*.png
+#
+# Reuses cached wavelet tensors from Stage-03 (run_wavelet_power.pbs).
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music.sif"
+
+export TMPDIR=$SCRATCHDIR
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+
+WAVELET_DIR="/mnt/data/processed/psilo_music/wavelets"
+
+python /mnt/scripts/run_wavelet_ica_subject_time.py \
+    --condition Placebo \
+    --music_type CLASSIC PSYTRANCE \
+    --n_pca 50 \
+    --n_ica 10 \
+    --random_state 42 \
+    --wavelet_data_dir "$WAVELET_DIR" \
+    --reuse_wavelets \
+    --n_jobs -1
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch
