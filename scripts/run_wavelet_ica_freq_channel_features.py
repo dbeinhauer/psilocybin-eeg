@@ -337,7 +337,7 @@ def _plot_time_frequency(
 
 def _plot_topomaps(
     scores_2d: np.ndarray,
-    components_2d: np.ndarray,
+    bb_z: np.ndarray,
     info,
     n_channels: int,
     n_ica: int,
@@ -604,7 +604,7 @@ def _run_freq_channel_features(
     # Plot 5+6 — Mean and variance topomaps
     _plot_topomaps(
         scores_2d,
-        components_2d,
+        bb_z,
         info,
         n_channels,
         n_ica,
