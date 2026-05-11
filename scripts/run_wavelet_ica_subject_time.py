@@ -25,7 +25,7 @@ Usage::
     python scripts/run_wavelet_ica_subject_time.py \\
         --condition Placebo --music_type CLASSIC PSYTRANCE \\
         --n_pca 50 --n_ica 10 --reuse_wavelets \\
-        --sliding_variants 1.0:0.5 2.0:1.0 5.0:2.5
+        --sliding_variants 1.0:0.5
 
     # alpha-band only
     python scripts/run_wavelet_ica_subject_time.py \\
@@ -169,10 +169,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--sliding_variants",
         nargs="+",
-        default=["1.0:0.5", "2.0:1.0", "5.0:2.5"],
+        default=["1.0:0.5"],
         help=(
             "Sliding-window LOO-ISC variants as 'window_sec:step_sec' strings. "
-            "Three or more space-separated entries are overlaid on each IC plot."
+            "If multiple entries are supplied, only the one with the smallest "
+            "step is plotted."
         ),
     )
     parser.add_argument(
@@ -339,14 +340,14 @@ def _plot_time_frequency(
 
     for i, ax in enumerate(axes):
         data_i = ft_maps[i]  # (F, T)
-        vmin_s, vmax_s = np.percentile(data_i, 1), np.percentile(data_i, 99)
+        vlim_i = float(np.percentile(np.abs(data_i), 99))
         mesh = ax.pcolormesh(
             time,
             freqs,
             data_i,
-            cmap="inferno",
-            vmin=vmin_s,
-            vmax=vmax_s,
+            cmap="RdBu_r",
+            vmin=-vlim_i,
+            vmax=vlim_i,
             shading="auto",
         )
         ax.set_ylabel("Freq (Hz)")
@@ -369,7 +370,6 @@ def _plot_time_frequency(
 
 def _plot_topomap_mean(
     scores_2d: np.ndarray,
-    components_2d: np.ndarray,
     info,
     n_channels: int,
     n_ica: int,
@@ -379,44 +379,39 @@ def _plot_topomap_mean(
 ) -> None:
     """Analysis (d) — Mean component channel loading (topomap) for ALL ICs.
 
-    act_per_subj[k, s]   = mean_t  components_2d[k, s, t]            (K, S)
-    chan_profile[c, k]   = mean_f  scores_2d[f, c, k]                (C, K)
-    topo_per_subj[k,s,c] = act_per_subj[k, s] * chan_profile[c, k]   (K, S, C)
-    ica_ch_mean[c, k]    = mean_s topo_per_subj[k, s, c]             (C, K)
+    chan_loading[c, k] = mean_f  scores_2d[f, c, k]                  (C, K)
+
+    Each component is plotted with its own symmetric color scale.
     """
-    act_per_subj = components_2d.mean(axis=2)  # (K, S)
-    chan_profile = scores_2d.mean(axis=0)  # (C, K)
-    topo_per_subj = np.einsum("ks,ck->ksc", act_per_subj, chan_profile)  # (K, S, C)
-    ica_ch_mean = topo_per_subj.mean(axis=1).T  # (C, K)
+    chan_loading = scores_2d.mean(axis=0)  # (C, K)
 
     topo_info = mne.pick_info(info, mne.pick_types(info, eeg=True))
     if n_channels < len(topo_info.ch_names):
         topo_info = mne.pick_info(topo_info, list(range(n_channels)))
 
     n_show = n_ica
-    _vlim_mean = np.percentile(np.abs(ica_ch_mean[:, :n_show]), 99)
 
     fig, axes = plt.subplots(1, n_show, figsize=(3.5 * n_show, 4))
     if n_show == 1:
         axes = [axes]
 
-    im = None
     for i, ax in enumerate(axes):
+        vlim_i = np.percentile(np.abs(chan_loading[:, i]), 99)
         im, _ = plot_topomap(
-            ica_ch_mean[:, i],
+            chan_loading[:, i],
             topo_info,
             axes=ax,
             show=False,
             cmap="RdBu_r",
-            vlim=(-_vlim_mean, _vlim_mean),
+            vlim=(-vlim_i, vlim_i),
         )
         ax.set_title(f"IC {i + 1}", fontsize=10)
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
     fig.suptitle(
         f"Mean Component Channel Loading (topomap) — {label}",
         fontsize=12,
     )
-    plt.colorbar(im, ax=axes[-1], label="mean loading")
     fig.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -515,6 +510,55 @@ def _plot_subject_time_heatmap(
     plt.close(fig)
 
 
+def _plot_freq_channel_heatmap(
+    scores_2d: np.ndarray,
+    freqs: np.ndarray,
+    n_ica: int,
+    *,
+    label: str,
+    save_path: Path,
+) -> None:
+    """Analysis (h) — Frequency × Channel heatmap of ICA scores per component.
+
+    Companion to the topomap in (d): the ICA scores `(F, C, K)` are shown
+    without collapsing the frequency axis, with each component on its own
+    symmetric color scale.
+    """
+    n_freqs, n_channels, _ = scores_2d.shape
+    n_show = n_ica
+    channels = np.arange(n_channels)
+
+    fig, axes = plt.subplots(1, n_show, figsize=(3.5 * n_show, 4.5), sharey=True)
+    if n_show == 1:
+        axes = [axes]
+
+    for i, ax in enumerate(axes):
+        data_i = scores_2d[:, :, i]  # (F, C)
+        vlim_i = float(np.percentile(np.abs(data_i), 99))
+        mesh = ax.pcolormesh(
+            channels,
+            freqs,
+            data_i,
+            cmap="RdBu_r",
+            vmin=-vlim_i,
+            vmax=vlim_i,
+            shading="auto",
+        )
+        ax.set_xlabel("Channel")
+        ax.set_title(f"IC {i + 1}", fontsize=10)
+        fig.colorbar(mesh, ax=ax, fraction=0.046, pad=0.04, label="score")
+
+    axes[0].set_ylabel("Frequency (Hz)")
+    fig.suptitle(
+        f"Frequency × Channel ICA Score Heatmaps — {label}",
+        fontsize=13,
+        y=1.02,
+    )
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def _parse_sliding_variants(values: list[str]) -> list[tuple[float, float]]:
     """Parse 'window_sec:step_sec' strings into (window, step) float tuples."""
     parsed: list[tuple[float, float]] = []
@@ -581,9 +625,6 @@ def _close_to_end(
     return np.append(edges, t_end), np.append(vals, vals[-1])
 
 
-_SLIDING_VARIANT_COLORS = ["steelblue", "darkorange", "seagreen", "purple", "brown"]
-
-
 def _plot_sliding_window_loo_isc(
     components_2d: np.ndarray,
     sfreq: float,
@@ -593,14 +634,16 @@ def _plot_sliding_window_loo_isc(
     label: str,
     save_path: Path,
 ) -> None:
-    """Analysis (f) — Sliding-window LOO-ISC per IC, overlaid for each variant."""
+    """Analysis (f) — Sliding-window LOO-ISC per IC for a single (win, step).
+
+    If multiple variants are supplied, the one with the smallest step is used.
+    """
+    win, step = min(sliding_variants, key=lambda v: v[1])
+
     n_times = components_2d.shape[2]
     t_end = n_times / sfreq
 
-    variants_data = {
-        (win, step): _compute_sliding_loo_isc(components_2d, sfreq, win, step)
-        for win, step in sliding_variants
-    }
+    v = _compute_sliding_loo_isc(components_2d, sfreq, win, step)
 
     n_show = n_ica
     fig, axes = plt.subplots(n_show, 1, figsize=(14, 2.8 * n_show), sharex=True)
@@ -608,38 +651,37 @@ def _plot_sliding_window_loo_isc(
         axes = [axes]
 
     for i, ax in enumerate(axes):
-        for (win, step), color in zip(sliding_variants, _SLIDING_VARIANT_COLORS):
-            v = variants_data[(win, step)]
-            edges_m, mean_m = _close_to_end(v["edges"], v["mean"][i], t_end)
-            _, std_m = _close_to_end(v["edges"], v["std"][i], t_end)
-            ax.plot(
-                edges_m,
-                mean_m,
-                lw=1.2,
-                color=color,
-                drawstyle="steps-post",
-                label=f"win={win:.1f}s step={step:.1f}s mean" if i == 0 else None,
-            )
-            ax.fill_between(
-                edges_m,
-                mean_m - std_m,
-                mean_m + std_m,
-                alpha=0.15,
-                color=color,
-                step="post",
-                label=f"win={win:.1f}s step={step:.1f}s ± √var" if i == 0 else None,
-            )
+        edges_m, mean_m = _close_to_end(v["edges"], v["mean"][i], t_end)
+        _, std_m = _close_to_end(v["edges"], v["std"][i], t_end)
+        ax.plot(
+            edges_m,
+            mean_m,
+            lw=1.2,
+            color="steelblue",
+            drawstyle="steps-post",
+            label="mean" if i == 0 else None,
+        )
+        ax.fill_between(
+            edges_m,
+            mean_m - std_m,
+            mean_m + std_m,
+            alpha=0.2,
+            color="steelblue",
+            step="post",
+            label="± √variance" if i == 0 else None,
+        )
         ax.axhline(0.0, ls="--", lw=0.6, color="gray")
         ax.set_xlim(0.0, t_end)
         ax.set_ylim(-1.05, 1.05)
         ax.set_ylabel(f"IC {i + 1}\nLOO-ISC")
         ax.set_title(f"Component {i + 1} — Sliding-Window LOO-ISC", fontsize=10)
         if i == 0:
-            ax.legend(loc="upper right", fontsize=7, ncol=len(sliding_variants))
+            ax.legend(loc="upper right", fontsize=8)
 
     axes[-1].set_xlabel("Time (s)")
     fig.suptitle(
-        f"Per-IC Sliding-Window LOO-ISC — Window/Step Comparison — {label}",
+        f"Per-IC Sliding-Window LOO-ISC "
+        f"(win={win:.1f}s, step={step:.1f}s) — {label}",
         fontsize=13,
         y=1.01,
     )
@@ -752,7 +794,6 @@ def _run_subject_time(
     # Plot 5 — (d) Mean component channel loading topomap
     _plot_topomap_mean(
         scores_2d,
-        components_2d,
         info,
         n_channels,
         n_ica,
@@ -769,7 +810,7 @@ def _run_subject_time(
         save_path=out_dir / f"{prefix}ica_mean_variance_over_time_{label}.png",
     )
 
-    # Plot 7 — (f) Sliding-window LOO-ISC per IC, three (window, step) variants
+    # Plot 7 — (f) Sliding-window LOO-ISC per IC, smallest-step variant
     _plot_sliding_window_loo_isc(
         components_2d,
         sfreq,
@@ -788,7 +829,16 @@ def _run_subject_time(
         save_path=out_dir / f"{prefix}ica_subject_time_heatmap_{label}.png",
     )
 
-    _logger.info(f"[{label}] Subject-Time: 8 plots saved to {out_dir}")
+    # Plot 9 — (h) Frequency × Channel heatmap of ICA scores per IC
+    _plot_freq_channel_heatmap(
+        scores_2d,
+        freqs,
+        n_ica,
+        label=label,
+        save_path=out_dir / f"{prefix}ica_freq_channel_heatmap_{label}.png",
+    )
+
+    _logger.info(f"[{label}] Subject-Time: 9 plots saved to {out_dir}")
 
 
 # ---------------------------------------------------------------------------
