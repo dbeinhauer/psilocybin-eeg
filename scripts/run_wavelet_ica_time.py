@@ -106,7 +106,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--n_pca",
         type=int,
         default=50,
-        help="Number of PCA components to retain.",
+        help="Number of PCA components to retain. Ignored when --skip_pca is set.",
+    )
+    parser.add_argument(
+        "--skip_pca",
+        action="store_true",
+        help=(
+            "Skip the PCA dimensionality reduction and run FastICA directly "
+            "on the z-scored observation matrix."
+        ),
     )
     parser.add_argument(
         "--n_ica",
@@ -553,6 +561,7 @@ def _run_time(
     random_state: int,
     save_dir: Path,
     band: str | None = None,
+    skip_pca: bool = False,
 ) -> None:
     """Run the full Time ICA pipeline and save all plots.
 
@@ -578,22 +587,27 @@ def _run_time(
     X = bb_z_sfc.reshape(n_obs, n_times)
     _logger.info(f"[{label}] Reshaped: {X.shape}  (S*F*C, T)")
 
-    # Step 2 — PCA + ICA
-    pca = PCA(n_components=n_pca, random_state=random_state)
-    pca_scores = pca.fit_transform(X)
-    _logger.info(
-        f"[{label}] PCA: {pca_scores.shape}, "
-        f"explained={np.cumsum(pca.explained_variance_ratio_)[-1] * 100:.1f}%"
-    )
-
+    # Step 2 — (optional) PCA + ICA
     ica = FastICA(
         n_components=n_ica,
         random_state=random_state,
         max_iter=500,
         whiten="unit-variance",
     )
-    ica_scores = ica.fit_transform(pca_scores)  # (S*F*C, K)
-    ica_components = ica.components_ @ pca.components_  # (K, T)
+
+    if skip_pca:
+        _logger.info(f"[{label}] Skipping PCA; running FastICA directly on X.")
+        ica_scores = ica.fit_transform(X)  # (S*F*C, K)
+        ica_components = ica.components_  # (K, T)
+    else:
+        pca = PCA(n_components=n_pca, random_state=random_state)
+        pca_scores = pca.fit_transform(X)
+        _logger.info(
+            f"[{label}] PCA: {pca_scores.shape}, "
+            f"explained={np.cumsum(pca.explained_variance_ratio_)[-1] * 100:.1f}%"
+        )
+        ica_scores = ica.fit_transform(pca_scores)  # (S*F*C, K)
+        ica_components = ica.components_ @ pca.components_  # (K, T)
 
     # Reshape ICA scores back to (S, F, C, K); components stay as (K, T)
     scores_2d = ica_scores.reshape(n_subjects, n_freqs, n_channels, n_ica)
@@ -603,12 +617,13 @@ def _run_time(
         f"components_2d={components_2d.shape}"
     )
 
-    # Plot 1 — PCA scree
-    _plot_pca_scree(
-        pca.explained_variance_ratio_,
-        label=label,
-        save_path=out_dir / f"{prefix}pca_scree_{label}.png",
-    )
+    # Plot 1 — PCA scree (skipped when PCA is not run)
+    if not skip_pca:
+        _plot_pca_scree(
+            pca.explained_variance_ratio_,
+            label=label,
+            save_path=out_dir / f"{prefix}pca_scree_{label}.png",
+        )
 
     # Plot 2 — (a) ISC matrix from per-subject score maps
     _plot_isc_matrix(
@@ -675,7 +690,8 @@ def _run_time(
         save_path=out_dir / f"{prefix}ica_subject_time_heatmap_{label}.png",
     )
 
-    _logger.info(f"[{label}] Time: 8 plots saved to {out_dir}")
+    n_plots = 8 if not skip_pca else 7
+    _logger.info(f"[{label}] Time: {n_plots} plots saved to {out_dir}")
 
 
 # ---------------------------------------------------------------------------
@@ -780,6 +796,7 @@ if __name__ == "__main__":
             random_state=args.random_state,
             save_dir=save_dir,
             band=band_name,
+            skip_pca=args.skip_pca,
         )
 
     _logger.info("Time ICA analysis complete.")

@@ -1,17 +1,17 @@
 """
 CLI script reproducing the exact analyses from
-``notebooks/04-wavelet-ica-analysis/wavelet_ica_subject_time.ipynb``
-(Subject-Time approach: observations = F×C, features = S×T;
-components live in subject × time).
+``notebooks/04-wavelet-ica-analysis/wavelet_ica_channel_time.ipynb``
+(Channel-Time approach: observations = S×F, features = C×T;
+components live in channel × time, scores in subject × frequency).
 
 Produces **all** ICA components (not just the first 6 shown in the notebook)
 and writes every plot into the canonical per-condition layout under::
 
-    plots/04-subject-time-wavelet-ica-analysis/<Condition>_<MusicType>/
-        broadband/subject_time/                       # default (no --band)
+    plots/04-channel-time-wavelet-ica-analysis/<Condition>_<MusicType>/
+        broadband/channel_time/                       # default (no --band)
             pca_scree_<label>.png
             ...
-        bands/subject_time/                           # when --band <name> is given
+        bands/channel_time/                           # when --band <name> is given
             <band>_pca_scree_<label>.png
             ...
 
@@ -22,13 +22,12 @@ broadband cache is reused — no separate per-band cache is needed.
 Usage::
 
     # broadband
-    python scripts/run_wavelet_ica_subject_time.py \\
+    python scripts/run_wavelet_ica_channel_time.py \\
         --condition Placebo --music_type CLASSIC PSYTRANCE \\
-        --n_pca 50 --n_ica 10 --reuse_wavelets \\
-        --sliding_variants 1.0:0.5
+        --n_pca 50 --n_ica 10 --reuse_wavelets
 
     # alpha-band only
-    python scripts/run_wavelet_ica_subject_time.py \\
+    python scripts/run_wavelet_ica_channel_time.py \\
         --condition Placebo --music_type CLASSIC PSYTRANCE \\
         --band alpha --n_pca 50 --n_ica 10 --reuse_wavelets
 """
@@ -48,7 +47,6 @@ import matplotlib.pyplot as plt  # noqa: E402
 import mne  # noqa: E402
 import numpy as np  # noqa: E402
 from mne.viz import plot_topomap  # noqa: E402
-from scipy.stats import pearsonr  # noqa: E402
 from sklearn.decomposition import PCA, FastICA  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -71,7 +69,7 @@ from src.definitions.fields import (  # noqa: E402
 
 _logger = logging.getLogger(__name__)
 
-_STAGE_DIR = "04-subject-time-wavelet-ica-analysis"
+_STAGE_DIR = "04-channel-time-wavelet-ica-analysis"
 
 
 # ---------------------------------------------------------------------------
@@ -82,9 +80,9 @@ _STAGE_DIR = "04-subject-time-wavelet-ica-analysis"
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run the Subject-Time ICA analysis on preprocessed EEG wavelet "
-            "power.  Produces the exact same plots as "
-            "wavelet_ica_subject_time.ipynb, but for ALL ICA components."
+            "Run the Channel-Time ICA analysis on preprocessed EEG wavelet "
+            "power. Produces the exact same plots as "
+            "wavelet_ica_channel_time.ipynb, but for ALL ICA components."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -115,7 +113,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Skip the PCA dimensionality reduction and run FastICA directly "
-            "on the (F*C, S*T) z-scored matrix."
+            "on the z-scored observation matrix."
         ),
     )
     parser.add_argument(
@@ -175,23 +173,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Number of parallel jobs for data loading.",
     )
     parser.add_argument(
-        "--sliding_variants",
-        nargs="+",
-        default=["1.0:0.5"],
-        help=(
-            "Sliding-window LOO-ISC variants as 'window_sec:step_sec' strings. "
-            "If multiple entries are supplied, only the one with the smallest "
-            "step is plotted."
-        ),
-    )
-    parser.add_argument(
         "--band",
         choices=[b.value for b in FrequencyBandNames],
         default=None,
         help=(
             "Optional frequency band. When set, the cached broadband wavelet "
             "tensor is sliced to the band's frequency range before ICA, and "
-            "plots are written to the 'bands/subject_time/' subdirectory with "
+            "plots are written to the 'bands/channel_time/' subdirectory with "
             "a '<band>_' filename prefix. Default: full broadband."
         ),
     )
@@ -242,32 +230,26 @@ def _plot_pca_scree(
 
 
 def _plot_isc_matrix(
-    components_2d: np.ndarray,
+    scores_2d: np.ndarray,
     n_ica: int,
     *,
     label: str,
     save_path: Path,
 ) -> None:
-    """Analysis (a) — Intersubject correlation matrix for ALL ICA components.
-
-    Each row of components_2d[k] is one subject's temporal profile (length T);
-    np.corrcoef gives the (S, S) inter-subject correlation per component.
-    """
-    n_subjects = components_2d.shape[1]
+    """Analysis (a) — Per-IC subject × subject correlation of frequency profiles."""
+    n_subjects = scores_2d.shape[0]
     n_show = n_ica
-
     fig, axes = plt.subplots(
-        1,
-        n_show,
-        figsize=(3.5 * n_show, 3.5),
-        constrained_layout=True,
+        1, n_show, figsize=(3.5 * n_show, 3.5), constrained_layout=True
     )
     if n_show == 1:
         axes = [axes]
 
     im = None
     for i, ax in enumerate(axes):
-        corr_mat = np.corrcoef(components_2d[i])  # (S, S)
+        # Each row of scores_2d[:, :, i] is one subject's frequency profile (length F);
+        # np.corrcoef rows-as-variables gives the (S, S) inter-subject correlation.
+        corr_mat = np.corrcoef(scores_2d[:, :, i])
         im = ax.imshow(corr_mat, vmin=-1, vmax=1, cmap="RdBu_r")
         ax.set_xticks(range(n_subjects))
         ax.set_yticks(range(n_subjects))
@@ -276,24 +258,25 @@ def _plot_isc_matrix(
         ax.set_title(f"IC {i + 1}", fontsize=10)
 
     fig.suptitle(
-        f"Intersubject Correlation of IC Temporal Profiles — {label}",
+        f"Intersubject Correlation of IC Frequency Profiles — {label}",
         fontsize=12,
     )
-    plt.colorbar(im, ax=axes[-1], label="Pearson r", shrink=0.8)
+    if im is not None:
+        plt.colorbar(im, ax=axes[-1], label="Pearson r", shrink=0.8)
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
 
 def _plot_subject_loadings(
-    components_2d: np.ndarray,
+    scores_2d: np.ndarray,
     n_ica: int,
     *,
     label: str,
     save_path: Path,
 ) -> None:
-    """Analysis (b) — Per-subject mean loading bar plot for ALL ICs."""
-    n_subjects = components_2d.shape[1]
-    subject_loadings = np.abs(components_2d).mean(axis=2).T  # (S, K)
+    """Analysis (b) — Per-subject mean |score| over frequencies per component."""
+    n_subjects = scores_2d.shape[0]
+    subject_loadings = np.abs(scores_2d).mean(axis=1)  # (S, K)
 
     n_show = n_ica
     fig, axes = plt.subplots(1, n_show, figsize=(3 * n_show, 4), sharey=True)
@@ -304,7 +287,7 @@ def _plot_subject_loadings(
         ax.barh(range(n_subjects), subject_loadings[:, i], color="darkorange")
         ax.set_yticks(range(n_subjects))
         ax.set_yticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=8)
-        ax.set_xlabel("|activation|")
+        ax.set_xlabel("|score|")
         ax.set_title(f"IC {i + 1}", fontsize=10)
 
     axes[0].set_ylabel("Subject")
@@ -328,17 +311,11 @@ def _plot_time_frequency(
     label: str,
     save_path: Path,
 ) -> None:
-    """Analysis (c) — Time × Frequency map per component (outer product) for ALL ICs.
-
-    freq_profile[k] = mean_c scores_2d[:, :, k]              (F,)
-    time_profile[k] = mean_s components_2d[k, :, :]          (T,)
-    tf_map[k]       = outer(freq_profile[k], time_profile[k])  (F, T)
-    """
-    # Frequency profile: collapse channels from ICA scores  (F, C, K) → (F, K)
-    freq_profiles = scores_2d.mean(axis=1)  # (F, K)
-    # Time profile: average subject activations from ICA components  (K, S, T) → (K, T)
-    time_profiles = components_2d.mean(axis=1)  # (K, T)
-    # Outer product: (F, K) x (K, T) → (K, F, T)
+    """Analysis (c) — Frequency × Time outer-product map per component."""
+    # Frequency profile: collapse subjects from ICA scores  (S, F, K) → (F, K)
+    freq_profiles = scores_2d.mean(axis=0)
+    # Time profile: average channels from ICA components  (K, C, T) → (K, T)
+    time_profiles = components_2d.mean(axis=1)
     ft_maps = np.einsum("fk,kt->kft", freq_profiles, time_profiles)  # (K, F, T)
 
     n_show = n_ica
@@ -347,22 +324,19 @@ def _plot_time_frequency(
         axes = [axes]
 
     for i, ax in enumerate(axes):
-        data_i = ft_maps[i]  # (F, T)
-        vlim_i = float(np.percentile(np.abs(data_i), 99))
+        data_i = ft_maps[i]
+        vmin_s, vmax_s = np.percentile(data_i, 1), np.percentile(data_i, 99)
         mesh = ax.pcolormesh(
             time,
             freqs,
             data_i,
-            cmap="RdBu_r",
-            vmin=-vlim_i,
-            vmax=vlim_i,
+            cmap="inferno",
+            vmin=vmin_s,
+            vmax=vmax_s,
             shading="auto",
         )
         ax.set_ylabel("Freq (Hz)")
-        ax.set_title(
-            f"IC {i + 1} — Freq × Time Map (outer product)",
-            fontsize=10,
-        )
+        ax.set_title(f"IC {i + 1} — Freq × Time Map (outer product)", fontsize=10)
         fig.colorbar(mesh, ax=ax, pad=0.01, fraction=0.025)
 
     axes[-1].set_xlabel("Time (s)")
@@ -376,8 +350,9 @@ def _plot_time_frequency(
     plt.close(fig)
 
 
-def _plot_topomap_mean(
+def _plot_topomap_mean_variance(
     scores_2d: np.ndarray,
+    components_2d: np.ndarray,
     info,
     n_channels: int,
     n_ica: int,
@@ -385,47 +360,115 @@ def _plot_topomap_mean(
     label: str,
     save_path: Path,
 ) -> None:
-    """Analysis (d) — Mean component channel loading (topomap) for ALL ICs.
+    """Analysis (d) — Two-row topomap: mean (top) and across-subject variance (bottom)."""
+    # Time-averaged channel profile from components → (C, K)
+    chan_profile = components_2d.mean(axis=2).T  # (C, K)
+    # Per-subject score per IC (mean over frequencies) → (S, K)
+    subj_score = scores_2d.mean(axis=1)
+    # Per-subject topomap via outer product → (K, S, C)
+    topo_per_subj = np.einsum("sk,ck->ksc", subj_score, chan_profile)
 
-    chan_loading[c, k] = mean_f  scores_2d[f, c, k]                  (C, K)
+    ica_ch_mean = topo_per_subj.mean(axis=1).T  # (C, K)
+    ica_ch_var = topo_per_subj.var(axis=1).T  # (C, K)
 
-    Each component is plotted with its own symmetric color scale.
-    """
-    chan_loading = scores_2d.mean(axis=0)  # (C, K)
-
-    topo_info = mne.pick_info(info, mne.pick_types(info, eeg=True))
-    if n_channels < len(topo_info.ch_names):
-        topo_info = mne.pick_info(topo_info, list(range(n_channels)))
+    info = mne.pick_info(info, mne.pick_types(info, eeg=True))
+    if n_channels < len(info.ch_names):
+        info = mne.pick_info(info, list(range(n_channels)))
 
     n_show = n_ica
+    vlim_mean = float(np.percentile(np.abs(ica_ch_mean[:, :n_show]), 99))
+    vmax_var = float(np.percentile(ica_ch_var[:, :n_show], 99))
 
-    fig, axes = plt.subplots(1, n_show, figsize=(3.5 * n_show, 4))
+    fig, axes = plt.subplots(2, n_show, figsize=(3.5 * n_show, 7.5))
+    if n_show == 1:
+        axes = axes.reshape(2, 1)
+
+    im_mean = None
+    im_var = None
+    for i in range(n_show):
+        im_mean, _ = plot_topomap(
+            ica_ch_mean[:, i],
+            info,
+            axes=axes[0, i],
+            show=False,
+            cmap="RdBu_r",
+            vlim=(-vlim_mean, vlim_mean),
+        )
+        axes[0, i].set_title(f"IC {i + 1}", fontsize=10)
+
+        im_var, _ = plot_topomap(
+            ica_ch_var[:, i],
+            info,
+            axes=axes[1, i],
+            show=False,
+            cmap="viridis",
+            vlim=(0, vmax_var),
+        )
+
+    axes[0, 0].set_ylabel("Mean", fontsize=11)
+    axes[1, 0].set_ylabel("Variance", fontsize=11)
+
+    fig.suptitle(
+        f"Component Channel Loading (topomap) — Mean & Across-Subject Variance — {label}",
+        fontsize=12,
+    )
+    if im_mean is not None:
+        plt.colorbar(im_mean, ax=axes[0, -1], label="mean loading")
+    if im_var is not None:
+        plt.colorbar(im_var, ax=axes[1, -1], label="variance")
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_subject_frequency_heatmap(
+    scores_2d: np.ndarray,
+    freqs: np.ndarray,
+    n_ica: int,
+    *,
+    label: str,
+    save_path: Path,
+) -> None:
+    """Analysis (e) — Subject × Frequency loading heatmap per component."""
+    n_subjects = scores_2d.shape[0]
+    # scores_2d already has shape (S, F, K) — no axis to collapse
+    sf_loadings = scores_2d
+
+    n_show = n_ica
+    vlim = float(np.percentile(np.abs(sf_loadings[:, :, :n_show]), 99))
+
+    fig, axes = plt.subplots(n_show, 1, figsize=(14, 2.6 * n_show), sharex=True)
     if n_show == 1:
         axes = [axes]
 
     for i, ax in enumerate(axes):
-        vlim_i = np.percentile(np.abs(chan_loading[:, i]), 99)
-        im, _ = plot_topomap(
-            chan_loading[:, i],
-            topo_info,
-            axes=ax,
-            show=False,
+        mesh = ax.pcolormesh(
+            freqs,
+            np.arange(n_subjects),
+            sf_loadings[:, :, i],
             cmap="RdBu_r",
-            vlim=(-vlim_i, vlim_i),
+            vmin=-vlim,
+            vmax=vlim,
+            shading="auto",
         )
-        ax.set_title(f"IC {i + 1}", fontsize=10)
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        ax.set_yticks(range(n_subjects))
+        ax.set_yticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=8)
+        ax.set_ylabel("Subject")
+        ax.set_title(f"IC {i + 1} — Subject × Frequency Loading", fontsize=10)
+        fig.colorbar(mesh, ax=ax, pad=0.01, fraction=0.025, label="loading")
 
+    axes[-1].set_xlabel("Frequency (Hz)")
     fig.suptitle(
-        f"Mean Component Channel Loading (topomap) — {label}",
-        fontsize=12,
+        f"Subject × Frequency Loading Heatmaps per IC — {label}",
+        fontsize=13,
+        y=1.01,
     )
     fig.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
 
-def _plot_mean_variance_over_time(
+def _plot_component_timecourses(
     components_2d: np.ndarray,
     time: np.ndarray,
     n_ica: int,
@@ -433,37 +476,25 @@ def _plot_mean_variance_over_time(
     label: str,
     save_path: Path,
 ) -> None:
-    """Analysis (e) — Mean & variance of IC signal over time across subjects."""
-    mean_temporal = components_2d.mean(axis=1)  # (K, T)
-    var_temporal = components_2d.var(axis=1)  # (K, T)
-    std_temporal = np.sqrt(var_temporal)  # (K, T)
+    """Analysis (f) — Channel-averaged temporal pattern of each ICA component."""
+    time_profiles = components_2d.mean(axis=1)  # (K, T)
 
     n_show = n_ica
-    fig, axes = plt.subplots(n_show, 1, figsize=(14, 2.5 * n_show), sharex=True)
+    fig, axes = plt.subplots(n_show, 1, figsize=(14, 2.2 * n_show), sharex=True)
     if n_show == 1:
         axes = [axes]
 
     for i, ax in enumerate(axes):
-        ax.plot(time, mean_temporal[i], lw=0.9, color="darkorange", label="mean")
-        ax.fill_between(
-            time,
-            mean_temporal[i] - std_temporal[i],
-            mean_temporal[i] + std_temporal[i],
-            alpha=0.25,
-            color="darkorange",
-            label="± √variance",
-        )
+        ax.plot(time, time_profiles[i], lw=0.8, color="darkorange")
+        ax.axhline(0.0, color="gray", lw=0.5, ls="--")
         ax.set_ylabel(f"IC {i + 1}")
         ax.set_title(
-            f"Component {i + 1} — Mean & Variance Across Subjects",
-            fontsize=10,
+            f"Component {i + 1} — Channel-Averaged Temporal Pattern", fontsize=10
         )
-        if i == 0:
-            ax.legend(loc="upper right", fontsize=8)
 
     axes[-1].set_xlabel("Time (s)")
     fig.suptitle(
-        f"Per-IC Mean and Variance of Activation Over Time — {label}",
+        f"ICA Component Time Courses (channel-averaged) — {label}",
         fontsize=13,
         y=1.01,
     )
@@ -473,6 +504,7 @@ def _plot_mean_variance_over_time(
 
 
 def _plot_subject_time_heatmap(
+    scores_2d: np.ndarray,
     components_2d: np.ndarray,
     time: np.ndarray,
     n_ica: int,
@@ -480,22 +512,28 @@ def _plot_subject_time_heatmap(
     label: str,
     save_path: Path,
 ) -> None:
-    """Analysis (g) — Subject × Time activation heatmap per component."""
-    n_subjects = components_2d.shape[1]
-    n_show = n_ica
+    """Analysis (g) — Subject × Time activation heatmap per component (outer product)."""
+    n_subjects = scores_2d.shape[0]
 
-    vlim = float(np.percentile(np.abs(components_2d[:n_show]), 99))
+    # Subject profile: collapse frequencies  (S, F, K) → (S, K)
+    subj_profile = scores_2d.mean(axis=1)
+    # Time profile: channel-averaged components  (K, C, T) → (K, T)
+    time_profile = components_2d.mean(axis=1)
+    # Outer product per component: (S, K) x (K, T) → (K, S, T)
+    st_maps = np.einsum("sk,kt->kst", subj_profile, time_profile)
+
+    n_show = n_ica
+    vlim = float(np.percentile(np.abs(st_maps[:n_show]), 99))
 
     fig, axes = plt.subplots(n_show, 1, figsize=(14, 2.6 * n_show), sharex=True)
     if n_show == 1:
         axes = [axes]
 
-    mesh = None
     for i, ax in enumerate(axes):
         mesh = ax.pcolormesh(
             time,
             np.arange(n_subjects),
-            components_2d[i],
+            st_maps[i],
             cmap="RdBu_r",
             vmin=-vlim,
             vmax=vlim,
@@ -504,7 +542,9 @@ def _plot_subject_time_heatmap(
         ax.set_yticks(range(n_subjects))
         ax.set_yticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=8)
         ax.set_ylabel("Subject")
-        ax.set_title(f"IC {i + 1} — Subject × Time Activation", fontsize=10)
+        ax.set_title(
+            f"IC {i + 1} — Subject × Time Activation (outer product)", fontsize=10
+        )
         fig.colorbar(mesh, ax=ax, pad=0.01, fraction=0.025, label="activation")
 
     axes[-1].set_xlabel("Time (s)")
@@ -518,192 +558,12 @@ def _plot_subject_time_heatmap(
     plt.close(fig)
 
 
-def _plot_freq_channel_heatmap(
-    scores_2d: np.ndarray,
-    freqs: np.ndarray,
-    n_ica: int,
-    *,
-    label: str,
-    save_path: Path,
-) -> None:
-    """Analysis (h) — Frequency × Channel heatmap of ICA scores per component.
-
-    Companion to the topomap in (d): the ICA scores `(F, C, K)` are shown
-    without collapsing the frequency axis, with each component on its own
-    symmetric color scale.
-    """
-    n_freqs, n_channels, _ = scores_2d.shape
-    n_show = n_ica
-    channels = np.arange(n_channels)
-
-    fig, axes = plt.subplots(1, n_show, figsize=(3.5 * n_show, 4.5), sharey=True)
-    if n_show == 1:
-        axes = [axes]
-
-    for i, ax in enumerate(axes):
-        data_i = scores_2d[:, :, i]  # (F, C)
-        vlim_i = float(np.percentile(np.abs(data_i), 99))
-        mesh = ax.pcolormesh(
-            channels,
-            freqs,
-            data_i,
-            cmap="RdBu_r",
-            vmin=-vlim_i,
-            vmax=vlim_i,
-            shading="auto",
-        )
-        ax.set_xlabel("Channel")
-        ax.set_title(f"IC {i + 1}", fontsize=10)
-        fig.colorbar(mesh, ax=ax, fraction=0.046, pad=0.04, label="score")
-
-    axes[0].set_ylabel("Frequency (Hz)")
-    fig.suptitle(
-        f"Frequency × Channel ICA Score Heatmaps — {label}",
-        fontsize=13,
-        y=1.02,
-    )
-    fig.tight_layout()
-    fig.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-
-
-def _parse_sliding_variants(values: list[str]) -> list[tuple[float, float]]:
-    """Parse 'window_sec:step_sec' strings into (window, step) float tuples."""
-    parsed: list[tuple[float, float]] = []
-    for raw in values:
-        if ":" not in raw:
-            raise ValueError(
-                f"--sliding_variants entry {raw!r} must use 'window_sec:step_sec'."
-            )
-        win_s, step_s = raw.split(":", 1)
-        parsed.append((float(win_s), float(step_s)))
-    return parsed
-
-
-def _compute_sliding_loo_isc(
-    components_2d: np.ndarray,
-    sfreq: float,
-    window_sec: float,
-    step_sec: float,
-) -> dict:
-    """Per-subject and across-subject LOO-ISC for one (window, step) pair.
-
-    components_2d: (K, S, T)
-    Returns dict with per_subject (K, W, S), mean (K, W), std (K, W), edges (W,).
-    """
-    n_ica, n_subjects, n_times = components_2d.shape
-    win_samples = int(round(window_sec * sfreq))
-    step_samples = int(round(step_sec * sfreq))
-    if win_samples < 2 or win_samples > n_times:
-        raise ValueError(
-            f"window_sec={window_sec}s -> {win_samples} samples; "
-            f"must be in [2, {n_times}]."
-        )
-    if step_samples < 1:
-        raise ValueError(
-            f"step_sec={step_sec}s -> {step_samples} samples; must be ≥ 1."
-        )
-
-    starts = np.arange(0, n_times - win_samples + 1, step_samples)
-    edges = starts / sfreq  # window-start times → first stair begins at t=0
-
-    per_subject = np.zeros((n_ica, len(starts), n_subjects))
-    for k in range(n_ica):
-        comp = components_2d[k]  # (S, T)
-        for w_idx, start in enumerate(starts):
-            win = comp[:, start : start + win_samples]
-            for s in range(n_subjects):
-                others_mean = np.delete(win, s, axis=0).mean(axis=0)
-                per_subject[k, w_idx, s] = float(pearsonr(win[s], others_mean)[0])
-
-    return {
-        "per_subject": per_subject,
-        "mean": per_subject.mean(axis=2),
-        "std": per_subject.std(axis=2),
-        "edges": edges,
-    }
-
-
-def _close_to_end(
-    edges: np.ndarray, vals: np.ndarray, t_end: float
-) -> tuple[np.ndarray, np.ndarray]:
-    """Append t_end and duplicate last value so steps-post extends to t_end."""
-    if edges[-1] >= t_end:
-        return edges, vals
-    return np.append(edges, t_end), np.append(vals, vals[-1])
-
-
-def _plot_sliding_window_loo_isc(
-    components_2d: np.ndarray,
-    sfreq: float,
-    n_ica: int,
-    sliding_variants: list[tuple[float, float]],
-    *,
-    label: str,
-    save_path: Path,
-) -> None:
-    """Analysis (f) — Sliding-window LOO-ISC per IC for a single (win, step).
-
-    If multiple variants are supplied, the one with the smallest step is used.
-    """
-    win, step = min(sliding_variants, key=lambda v: v[1])
-
-    n_times = components_2d.shape[2]
-    t_end = n_times / sfreq
-
-    v = _compute_sliding_loo_isc(components_2d, sfreq, win, step)
-
-    n_show = n_ica
-    fig, axes = plt.subplots(n_show, 1, figsize=(14, 2.8 * n_show), sharex=True)
-    if n_show == 1:
-        axes = [axes]
-
-    for i, ax in enumerate(axes):
-        edges_m, mean_m = _close_to_end(v["edges"], v["mean"][i], t_end)
-        _, std_m = _close_to_end(v["edges"], v["std"][i], t_end)
-        ax.plot(
-            edges_m,
-            mean_m,
-            lw=1.2,
-            color="steelblue",
-            drawstyle="steps-post",
-            label="mean" if i == 0 else None,
-        )
-        ax.fill_between(
-            edges_m,
-            mean_m - std_m,
-            mean_m + std_m,
-            alpha=0.2,
-            color="steelblue",
-            step="post",
-            label="± √variance" if i == 0 else None,
-        )
-        ax.axhline(0.0, ls="--", lw=0.6, color="gray")
-        ax.set_xlim(0.0, t_end)
-        ax.set_ylim(-1.05, 1.05)
-        ax.set_ylabel(f"IC {i + 1}\nLOO-ISC")
-        ax.set_title(f"Component {i + 1} — Sliding-Window LOO-ISC", fontsize=10)
-        if i == 0:
-            ax.legend(loc="upper right", fontsize=8)
-
-    axes[-1].set_xlabel("Time (s)")
-    fig.suptitle(
-        f"Per-IC Sliding-Window LOO-ISC "
-        f"(win={win:.1f}s, step={step:.1f}s) — {label}",
-        fontsize=13,
-        y=1.01,
-    )
-    fig.tight_layout()
-    fig.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-
-
 # ---------------------------------------------------------------------------
 # Main analysis pipeline
 # ---------------------------------------------------------------------------
 
 
-def _run_subject_time(
+def _run_channel_time(
     data_4d: np.ndarray,
     sfreq: float,
     freqs: np.ndarray,
@@ -713,33 +573,34 @@ def _run_subject_time(
     n_pca: int,
     n_ica: int,
     random_state: int,
-    sliding_variants: list[tuple[float, float]],
     save_dir: Path,
     band: str | None = None,
     skip_pca: bool = False,
 ) -> None:
-    """Run the full subject-time ICA pipeline and save all plots.
+    """Run the full Channel-Time ICA pipeline and save all plots.
 
-    When ``band`` is given the outputs land in ``bands/subject_time/`` with
+    When ``band`` is given the outputs land in ``bands/channel_time/`` with
     filenames prefixed by ``<band>_``. Otherwise the broadband layout is used.
     """
     if band is None:
-        out_dir = save_dir / "broadband" / "subject_time"
+        out_dir = save_dir / "broadband" / "channel_time"
         prefix = ""
     else:
-        out_dir = save_dir / "bands" / "subject_time"
+        out_dir = save_dir / "bands" / "channel_time"
         prefix = f"{band}_"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     n_subjects, n_channels, n_freqs, n_times = data_4d.shape
     time = np.arange(n_times) / sfreq
-    _logger.info(f"[{label}] Subject-Time: {data_4d.shape}  sfreq={sfreq} Hz")
+    _logger.info(f"[{label}] Channel-Time: {data_4d.shape}  sfreq={sfreq} Hz")
 
-    # Step 1 — Z-score and reshape: (S,C,F,T) → (F,C,S,T) → (F*C, S*T)
+    # Step 1 — Z-score and reshape: (S, C, F, T) → (S, F, C, T) → (S*F, C*T)
     bb_z = zscore_by_time(data_4d)
-    bb_z_fc = bb_z.transpose(2, 1, 0, 3)  # (F, C, S, T)
-    X_fc = bb_z_fc.reshape(n_freqs * n_channels, n_subjects * n_times)
-    _logger.info(f"[{label}] Reshaped: {X_fc.shape}  (F*C, S*T)")
+    bb_z_sf = bb_z.transpose(0, 2, 1, 3)  # (S, F, C, T)
+    n_obs = n_subjects * n_freqs
+    n_feat = n_channels * n_times
+    X = bb_z_sf.reshape(n_obs, n_feat)
+    _logger.info(f"[{label}] Reshaped: {X.shape}  (S*F, C*T)")
 
     # Step 2 — (optional) PCA + ICA
     ica = FastICA(
@@ -750,22 +611,22 @@ def _run_subject_time(
     )
 
     if skip_pca:
-        _logger.info(f"[{label}] Skipping PCA; running FastICA directly on X_fc.")
-        ica_scores = ica.fit_transform(X_fc)  # (F*C, K)
-        ica_components = ica.components_  # (K, S*T)
+        _logger.info(f"[{label}] Skipping PCA; running FastICA directly on X.")
+        ica_scores = ica.fit_transform(X)  # (S*F, K)
+        ica_components = ica.components_  # (K, C*T)
     else:
         pca = PCA(n_components=n_pca, random_state=random_state)
-        pca_scores = pca.fit_transform(X_fc)
+        pca_scores = pca.fit_transform(X)
         _logger.info(
             f"[{label}] PCA: {pca_scores.shape}, "
             f"explained={np.cumsum(pca.explained_variance_ratio_)[-1] * 100:.1f}%"
         )
-        ica_scores = ica.fit_transform(pca_scores)
-        ica_components = ica.components_ @ pca.components_  # (K, S*T)
+        ica_scores = ica.fit_transform(pca_scores)  # (S*F, K)
+        ica_components = ica.components_ @ pca.components_  # (K, C*T)
 
-    # Reshape
-    scores_2d = ica_scores.reshape(n_freqs, n_channels, n_ica)  # (F, C, K)
-    components_2d = ica_components.reshape(n_ica, n_subjects, n_times)  # (K, S, T)
+    # Reshape ICA scores to (S, F, K) and components to (K, C, T)
+    scores_2d = ica_scores.reshape(n_subjects, n_freqs, n_ica)
+    components_2d = ica_components.reshape(n_ica, n_channels, n_times)
     _logger.info(
         f"[{label}] ICA: scores_2d={scores_2d.shape}, "
         f"components_2d={components_2d.shape}"
@@ -779,9 +640,9 @@ def _run_subject_time(
             save_path=out_dir / f"{prefix}pca_scree_{label}.png",
         )
 
-    # Plot 2 — (a) ISC matrix
+    # Plot 2 — (a) ISC matrix from per-subject frequency profiles
     _plot_isc_matrix(
-        components_2d,
+        scores_2d,
         n_ica,
         label=label,
         save_path=out_dir / f"{prefix}isc_component_matrix_{label}.png",
@@ -789,13 +650,13 @@ def _run_subject_time(
 
     # Plot 3 — (b) Subject loadings bar plot
     _plot_subject_loadings(
-        components_2d,
+        scores_2d,
         n_ica,
         label=label,
         save_path=out_dir / f"{prefix}ica_subject_loadings_{label}.png",
     )
 
-    # Plot 4 — (c) Freq × Time map (outer product)
+    # Plot 4 — (c) Freq × Time outer-product map
     _plot_time_frequency(
         scores_2d,
         components_2d,
@@ -806,37 +667,38 @@ def _run_subject_time(
         save_path=out_dir / f"{prefix}ica_time_frequency_{label}.png",
     )
 
-    # Plot 5 — (d) Mean component channel loading topomap
-    _plot_topomap_mean(
+    # Plot 5 — (d) Mean + variance topomap
+    _plot_topomap_mean_variance(
         scores_2d,
+        components_2d,
         info,
         n_channels,
         n_ica,
         label=label,
-        save_path=out_dir / f"{prefix}ica_topomap_mean_{label}.png",
+        save_path=out_dir / f"{prefix}ica_topomap_mean_variance_{label}.png",
     )
 
-    # Plot 6 — (e) Mean & variance of IC signal over time across subjects
-    _plot_mean_variance_over_time(
+    # Plot 6 — (e) Subject × Frequency loading heatmap
+    _plot_subject_frequency_heatmap(
+        scores_2d,
+        freqs,
+        n_ica,
+        label=label,
+        save_path=out_dir / f"{prefix}ica_subject_frequency_heatmap_{label}.png",
+    )
+
+    # Plot 7 — (f) Component time courses (channel-averaged)
+    _plot_component_timecourses(
         components_2d,
         time,
         n_ica,
         label=label,
-        save_path=out_dir / f"{prefix}ica_mean_variance_over_time_{label}.png",
+        save_path=out_dir / f"{prefix}ica_component_timecourses_{label}.png",
     )
 
-    # Plot 7 — (f) Sliding-window LOO-ISC per IC, smallest-step variant
-    _plot_sliding_window_loo_isc(
-        components_2d,
-        sfreq,
-        n_ica,
-        sliding_variants,
-        label=label,
-        save_path=out_dir / f"{prefix}ica_sliding_window_loo_isc_{label}.png",
-    )
-
-    # Plot 8 — (g) Subject × Time activation heatmap per IC
+    # Plot 8 — (g) Subject × Time activation heatmap
     _plot_subject_time_heatmap(
+        scores_2d,
         components_2d,
         time,
         n_ica,
@@ -844,17 +706,8 @@ def _run_subject_time(
         save_path=out_dir / f"{prefix}ica_subject_time_heatmap_{label}.png",
     )
 
-    # Plot 9 — (h) Frequency × Channel heatmap of ICA scores per IC
-    _plot_freq_channel_heatmap(
-        scores_2d,
-        freqs,
-        n_ica,
-        label=label,
-        save_path=out_dir / f"{prefix}ica_freq_channel_heatmap_{label}.png",
-    )
-
-    n_plots = 9 if not skip_pca else 8
-    _logger.info(f"[{label}] Subject-Time: {n_plots} plots saved to {out_dir}")
+    n_plots = 8 if not skip_pca else 7
+    _logger.info(f"[{label}] Channel-Time: {n_plots} plots saved to {out_dir}")
 
 
 # ---------------------------------------------------------------------------
@@ -884,11 +737,10 @@ if __name__ == "__main__":
         args.wavelet_freq_max,
         args.wavelet_n_freqs,
     )
-    sliding_variants = _parse_sliding_variants(args.sliding_variants)
     band_name = args.band  # None or e.g. "alpha"
 
     _logger.info(
-        f"Subject-Time ICA: condition={condition.value}, "
+        f"Channel-Time ICA: condition={condition.value}, "
         f"music_types={[mt.value for mt in music_types]}, "
         f"n_pca={args.n_pca}, n_ica={args.n_ica}, "
         f"band={band_name or 'broadband'}"
@@ -949,7 +801,7 @@ if __name__ == "__main__":
             )
 
         save_dir = save_root / _STAGE_DIR / dataset_key
-        _run_subject_time(
+        _run_channel_time(
             data_4d,
             wd.sfreq,
             ica_freqs,
@@ -958,10 +810,9 @@ if __name__ == "__main__":
             n_pca=args.n_pca,
             n_ica=args.n_ica,
             random_state=args.random_state,
-            sliding_variants=sliding_variants,
             save_dir=save_dir,
             band=band_name,
             skip_pca=args.skip_pca,
         )
 
-    _logger.info("Subject-Time ICA analysis complete.")
+    _logger.info("Channel-Time ICA analysis complete.")
