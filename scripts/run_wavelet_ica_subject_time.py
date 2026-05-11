@@ -567,6 +567,47 @@ def _plot_freq_channel_heatmap(
     plt.close(fig)
 
 
+def _plot_loo_isc_bar(
+    components_2d: np.ndarray,
+    n_ica: int,
+    *,
+    label: str,
+    save_path: Path,
+) -> None:
+    """Analysis (i) — Bar plot of mean LOO-ISC across participants per IC.
+
+    Per-subject vector is each subject's temporal profile
+    ``components_2d[k, s, :]`` (length T). Bars whose across-subject mean
+    LOO-ISC is negative are coloured red; positive bars are steel blue.
+    """
+    n_subjects = components_2d.shape[1]
+    loo_isc_per_subject = np.zeros((n_ica, n_subjects))
+    for k in range(n_ica):
+        vecs = components_2d[k]  # (S, T)
+        for s in range(n_subjects):
+            others_mean = np.delete(vecs, s, axis=0).mean(axis=0)
+            loo_isc_per_subject[k, s] = float(pearsonr(vecs[s], others_mean)[0])
+
+    loo_isc_mean = loo_isc_per_subject.mean(axis=1)  # (K,)
+    loo_isc_std = loo_isc_per_subject.std(axis=1)  # (K,)
+    bar_colors = ["firebrick" if m < 0 else "steelblue" for m in loo_isc_mean]
+
+    fig, ax = plt.subplots(figsize=(max(8, 0.9 * n_ica), 4.5))
+    xs = np.arange(n_ica)
+    ax.bar(xs, loo_isc_mean, yerr=loo_isc_std, color=bar_colors, capsize=4)
+    ax.axhline(0.0, ls="--", lw=0.6, color="gray")
+    ax.set_xticks(xs)
+    ax.set_xticklabels([f"IC {k + 1}" for k in range(n_ica)])
+    ax.set_xlabel("Component")
+    ax.set_ylabel("Mean LOO-ISC across subjects")
+    ax.set_ylim(-1.05, 1.05)
+    ax.set_title(f"Per-IC Mean LOO-ISC Across Participants — {label}")
+
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def _parse_sliding_variants(values: list[str]) -> list[tuple[float, float]]:
     """Parse 'window_sec:step_sec' strings into (window, step) float tuples."""
     parsed: list[tuple[float, float]] = []
@@ -853,7 +894,15 @@ def _run_subject_time(
         save_path=out_dir / f"{prefix}ica_freq_channel_heatmap_{label}.png",
     )
 
-    n_plots = 9 if not skip_pca else 8
+    # Plot 10 — (i) Mean LOO-ISC across participants per IC (bar plot)
+    _plot_loo_isc_bar(
+        components_2d,
+        n_ica,
+        label=label,
+        save_path=out_dir / f"{prefix}ica_loo_isc_bar_{label}.png",
+    )
+
+    n_plots = 10 if not skip_pca else 9
     _logger.info(f"[{label}] Subject-Time: {n_plots} plots saved to {out_dir}")
 
 

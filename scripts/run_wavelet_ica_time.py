@@ -47,6 +47,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import mne  # noqa: E402
 import numpy as np  # noqa: E402
 from mne.viz import plot_topomap  # noqa: E402
+from scipy.stats import pearsonr  # noqa: E402
 from sklearn.decomposition import PCA, FastICA  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -324,14 +325,14 @@ def _plot_time_frequency(
 
     for i, ax in enumerate(axes):
         data_i = ft_maps[i]
-        vmin_s, vmax_s = np.percentile(data_i, 1), np.percentile(data_i, 99)
+        vlim_i = float(np.percentile(np.abs(data_i), 99))
         mesh = ax.pcolormesh(
             time,
             freqs,
             data_i,
-            cmap="inferno",
-            vmin=vmin_s,
-            vmax=vmax_s,
+            cmap="RdBu_r",
+            vmin=-vlim_i,
+            vmax=vlim_i,
             shading="auto",
         )
         ax.set_ylabel("Freq (Hz)")
@@ -369,25 +370,27 @@ def _plot_topomap_mean_variance(
         info = mne.pick_info(info, list(range(n_channels)))
 
     n_show = n_ica
-    vlim_mean = float(np.percentile(np.abs(ica_ch_mean[:, :n_show]), 99))
-    vmax_var = float(np.percentile(ica_ch_var[:, :n_show], 99))
 
     fig, axes = plt.subplots(2, n_show, figsize=(3.5 * n_show, 7.5))
     if n_show == 1:
         axes = axes.reshape(2, 1)
 
-    im_mean = None
-    im_var = None
     for i in range(n_show):
+        # Per-component symmetric color scale around zero for the mean row
+        vlim_mean_i = float(np.percentile(np.abs(ica_ch_mean[:, i]), 99))
+        # Per-component sequential color scale (variance is non-negative)
+        vmax_var_i = float(np.percentile(ica_ch_var[:, i], 99))
+
         im_mean, _ = plot_topomap(
             ica_ch_mean[:, i],
             info,
             axes=axes[0, i],
             show=False,
             cmap="RdBu_r",
-            vlim=(-vlim_mean, vlim_mean),
+            vlim=(-vlim_mean_i, vlim_mean_i),
         )
         axes[0, i].set_title(f"IC {i + 1}", fontsize=10)
+        fig.colorbar(im_mean, ax=axes[0, i], fraction=0.046, pad=0.04)
 
         im_var, _ = plot_topomap(
             ica_ch_var[:, i],
@@ -395,8 +398,9 @@ def _plot_topomap_mean_variance(
             axes=axes[1, i],
             show=False,
             cmap="viridis",
-            vlim=(0, vmax_var),
+            vlim=(0, vmax_var_i),
         )
+        fig.colorbar(im_var, ax=axes[1, i], fraction=0.046, pad=0.04)
 
     axes[0, 0].set_ylabel("Mean", fontsize=11)
     axes[1, 0].set_ylabel("Variance", fontsize=11)
@@ -405,10 +409,6 @@ def _plot_topomap_mean_variance(
         f"Component Channel Loading (topomap) — Mean & Across-Subject Variance — {label}",
         fontsize=12,
     )
-    if im_mean is not None:
-        plt.colorbar(im_mean, ax=axes[0, -1], label="mean loading")
-    if im_var is not None:
-        plt.colorbar(im_var, ax=axes[1, -1], label="variance")
     fig.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -454,6 +454,103 @@ def _plot_subject_frequency_heatmap(
         f"Subject × Frequency Loading Heatmaps per IC — {label}",
         fontsize=13,
         y=1.01,
+    )
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_subject_channel_heatmap(
+    scores_2d: np.ndarray,
+    n_ica: int,
+    *,
+    label: str,
+    save_path: Path,
+) -> None:
+    """Analysis (f) — Subject × Channel loading heatmap per component.
+
+    sc_loadings[s, c, k] = mean_f  scores_2d[s, f, c, k]   (S, C, K)
+    """
+    n_subjects, _, n_channels, _ = scores_2d.shape
+    sc_loadings = scores_2d.mean(axis=1)  # (S, C, K)
+    channels = np.arange(n_channels)
+
+    n_show = n_ica
+    vlim = float(np.percentile(np.abs(sc_loadings[:, :, :n_show]), 99))
+
+    fig, axes = plt.subplots(n_show, 1, figsize=(14, 2.6 * n_show), sharex=True)
+    if n_show == 1:
+        axes = [axes]
+
+    for i, ax in enumerate(axes):
+        mesh = ax.pcolormesh(
+            channels,
+            np.arange(n_subjects),
+            sc_loadings[:, :, i],
+            cmap="RdBu_r",
+            vmin=-vlim,
+            vmax=vlim,
+            shading="auto",
+        )
+        ax.set_yticks(range(n_subjects))
+        ax.set_yticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=8)
+        ax.set_ylabel("Subject")
+        ax.set_title(f"IC {i + 1} — Subject × Channel Loading", fontsize=10)
+        fig.colorbar(mesh, ax=ax, pad=0.01, fraction=0.025, label="loading")
+
+    axes[-1].set_xlabel("Channel")
+    fig.suptitle(
+        f"Subject × Channel Loading Heatmaps per IC — {label}",
+        fontsize=13,
+        y=1.01,
+    )
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_channel_frequency_heatmap(
+    scores_2d: np.ndarray,
+    freqs: np.ndarray,
+    n_ica: int,
+    *,
+    label: str,
+    save_path: Path,
+) -> None:
+    """Analysis (g) — Channel × Frequency loading heatmap per component.
+
+    cf_loadings[c, f, k] = mean_s  scores_2d[s, f, c, k]   (C, F, K)
+    """
+    n_channels = scores_2d.shape[2]
+    cf_loadings = scores_2d.mean(axis=0).transpose(1, 0, 2)  # (C, F, K)
+    channels = np.arange(n_channels)
+
+    n_show = n_ica
+    vlim = float(np.percentile(np.abs(cf_loadings[:, :, :n_show]), 99))
+
+    fig, axes = plt.subplots(1, n_show, figsize=(3.5 * n_show, 4.5), sharey=True)
+    if n_show == 1:
+        axes = [axes]
+
+    for i, ax in enumerate(axes):
+        mesh = ax.pcolormesh(
+            channels,
+            freqs,
+            cf_loadings[:, :, i].T,  # (F, C)
+            cmap="RdBu_r",
+            vmin=-vlim,
+            vmax=vlim,
+            shading="auto",
+        )
+        ax.set_xlabel("Channel")
+        ax.set_title(f"IC {i + 1}", fontsize=10)
+        fig.colorbar(mesh, ax=ax, fraction=0.046, pad=0.04, label="loading")
+
+    axes[0].set_ylabel("Frequency (Hz)")
+    fig.suptitle(
+        f"Channel × Frequency Loading Heatmaps per IC — {label}",
+        fontsize=13,
+        y=1.02,
     )
     fig.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
@@ -539,6 +636,48 @@ def _plot_subject_time_heatmap(
         fontsize=13,
         y=1.01,
     )
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_loo_isc_bar(
+    scores_2d: np.ndarray,
+    n_ica: int,
+    *,
+    label: str,
+    save_path: Path,
+) -> None:
+    """Analysis (h) — Bar plot of mean LOO-ISC across participants per IC.
+
+    Per-subject vector is the subject's flattened (freq × chan) loading
+    map ``scores_2d[s, :, :, k].reshape(-1)`` (length F·C). Bars whose
+    across-subject mean LOO-ISC is negative are coloured red; positive
+    bars are steel blue.
+    """
+    n_subjects = scores_2d.shape[0]
+    loo_isc_per_subject = np.zeros((n_ica, n_subjects))
+    for k in range(n_ica):
+        vecs = scores_2d[:, :, :, k].reshape(n_subjects, -1)  # (S, F*C)
+        for s in range(n_subjects):
+            others_mean = np.delete(vecs, s, axis=0).mean(axis=0)
+            loo_isc_per_subject[k, s] = float(pearsonr(vecs[s], others_mean)[0])
+
+    loo_isc_mean = loo_isc_per_subject.mean(axis=1)  # (K,)
+    loo_isc_std = loo_isc_per_subject.std(axis=1)  # (K,)
+    bar_colors = ["firebrick" if m < 0 else "steelblue" for m in loo_isc_mean]
+
+    fig, ax = plt.subplots(figsize=(max(8, 0.9 * n_ica), 4.5))
+    xs = np.arange(n_ica)
+    ax.bar(xs, loo_isc_mean, yerr=loo_isc_std, color=bar_colors, capsize=4)
+    ax.axhline(0.0, ls="--", lw=0.6, color="gray")
+    ax.set_xticks(xs)
+    ax.set_xticklabels([f"IC {k + 1}" for k in range(n_ica)])
+    ax.set_xlabel("Component")
+    ax.set_ylabel("Mean LOO-ISC across subjects")
+    ax.set_ylim(-1.05, 1.05)
+    ax.set_title(f"Per-IC Mean LOO-ISC Across Participants — {label}")
+
     fig.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -671,7 +810,24 @@ def _run_time(
         save_path=out_dir / f"{prefix}ica_subject_frequency_heatmap_{label}.png",
     )
 
-    # Plot 7 — (f) Component time courses
+    # Plot 7 — (f) Subject × Channel loading heatmap
+    _plot_subject_channel_heatmap(
+        scores_2d,
+        n_ica,
+        label=label,
+        save_path=out_dir / f"{prefix}ica_subject_channel_heatmap_{label}.png",
+    )
+
+    # Plot 8 — (g) Channel × Frequency loading heatmap
+    _plot_channel_frequency_heatmap(
+        scores_2d,
+        freqs,
+        n_ica,
+        label=label,
+        save_path=out_dir / f"{prefix}ica_channel_frequency_heatmap_{label}.png",
+    )
+
+    # Plot 9 — (h) Component time courses
     _plot_component_timecourses(
         components_2d,
         time,
@@ -680,7 +836,7 @@ def _run_time(
         save_path=out_dir / f"{prefix}ica_component_timecourses_{label}.png",
     )
 
-    # Plot 8 — (g) Subject × Time activation heatmap
+    # Plot 10 — (i) Subject × Time activation heatmap
     _plot_subject_time_heatmap(
         scores_2d,
         components_2d,
@@ -690,7 +846,15 @@ def _run_time(
         save_path=out_dir / f"{prefix}ica_subject_time_heatmap_{label}.png",
     )
 
-    n_plots = 8 if not skip_pca else 7
+    # Plot 11 — (j) Mean LOO-ISC across participants per IC (bar plot)
+    _plot_loo_isc_bar(
+        scores_2d,
+        n_ica,
+        label=label,
+        save_path=out_dir / f"{prefix}ica_loo_isc_bar_{label}.png",
+    )
+
+    n_plots = 11 if not skip_pca else 10
     _logger.info(f"[{label}] Time: {n_plots} plots saved to {out_dir}")
 
 

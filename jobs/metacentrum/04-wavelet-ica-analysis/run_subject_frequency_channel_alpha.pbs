@@ -1,25 +1,25 @@
 #!/bin/bash
-#PBS -N PSILO_ST_ICA_04
+#PBS -N PSILO_SFC_ICA_04_ALPHA
 #PBS -l walltime=2:00:00
 #PBS -l select=1:ncpus=8:mem=350gb:scratch_local=80gb
 #PBS -m ae
 #PBS -j oe
 
 # ---------------------------------------------------------------------------
-# Stage-04 Subject-Time wavelet-ICA analysis.
+# Stage-04 Subject-Frequency-Channel wavelet-ICA analysis,
+# restricted to the ALPHA band.
 #
-# Runs the exact same pipeline as
-# notebooks/04-wavelet-ica-analysis/wavelet_ica_subject_time.ipynb
+# Reuses the broadband wavelet cache from Stage-03 (run_wavelet_power.pbs)
+# and slices the frequency axis to 8-13 Hz in memory before running ICA.
+# Mirrors notebooks/04-wavelet-ica-analysis/wavelet_ica_subject_frequency_channel.ipynb
 # but on full data (no subject/channel/time subset) and plotting ALL ICA
 # components.  Processes the Placebo condition on both music types.
 #
 # Output:
-#   plots/04-subject-time-wavelet-ica-analysis/Placebo_CLASSIC/
-#       broadband/subject_time/*.png
-#   plots/04-subject-time-wavelet-ica-analysis/Placebo_PSYTRANCE/
-#       broadband/subject_time/*.png
-#
-# Reuses cached wavelet tensors from Stage-03 (run_wavelet_power.pbs).
+#   plots/04-subject-frequency-channel-wavelet-ica-analysis/Placebo_CLASSIC/
+#       bands/subject_frequency_channel/alpha_*.png
+#   plots/04-subject-frequency-channel-wavelet-ica-analysis/Placebo_PSYTRANCE/
+#       bands/subject_frequency_channel/alpha_*.png
 # ---------------------------------------------------------------------------
 
 set -e
@@ -57,15 +57,15 @@ source /opt/myproject/.venv/bin/activate
 
 WAVELET_DIR="/mnt/data/processed/psilo_music/wavelets"
 
-python /mnt/scripts/run_wavelet_ica_subject_time.py \
+python /mnt/scripts/run_wavelet_ica_subject_frequency_channel.py \
     --condition Placebo \
     --music_type CLASSIC PSYTRANCE \
-    --skip_pca \
+    --band alpha \
+    --n_pca 30 \
     --n_ica 10 \
     --random_state 42 \
     --wavelet_data_dir "$WAVELET_DIR" \
     --reuse_wavelets \
-    --sliding_variants 2.0:1.0 5.0:2.5 10.0:5.0 \
     --n_jobs -1
 EOF
 
