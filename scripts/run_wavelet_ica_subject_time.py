@@ -688,8 +688,7 @@ def _plot_sliding_window_loo_isc(
 
     axes[-1].set_xlabel("Time (s)")
     fig.suptitle(
-        f"Per-IC Sliding-Window LOO-ISC "
-        f"(win={win:.1f}s, step={step:.1f}s) — {label}",
+        f"Per-IC Sliding-Window LOO-ISC (win={win:.1f}s, step={step:.1f}s) — {label}",
         fontsize=13,
         y=1.01,
     )
