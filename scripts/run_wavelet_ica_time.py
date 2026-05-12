@@ -615,9 +615,7 @@ def _plot_subject_frequency_heatmap(
     n_show = n_ica
     vlim = float(np.percentile(np.abs(sf_loadings[:, :, :n_show]), 99))
 
-    fig, axes = plt.subplots(
-        1, n_show, figsize=(3.5 * n_show, 4.5), sharey=True
-    )
+    fig, axes = plt.subplots(1, n_show, figsize=(3.5 * n_show, 4.5), sharey=True)
     if n_show == 1:
         axes = [axes]
 
@@ -671,9 +669,7 @@ def _plot_subject_channel_heatmap(
     n_show = n_ica
     vlim = float(np.percentile(np.abs(sc_loadings[:, :, :n_show]), 99))
 
-    fig, axes = plt.subplots(
-        1, n_show, figsize=(3.5 * n_show, 4.5), sharey=True
-    )
+    fig, axes = plt.subplots(1, n_show, figsize=(3.5 * n_show, 4.5), sharey=True)
     if n_show == 1:
         axes = [axes]
 
@@ -1076,9 +1072,7 @@ def _run_time(
     )
 
     n_plots = 12 if not skip_pca else 11
-    _logger.info(
-        f"[{label}] Time: {n_plots} plots + cluster CSV saved to {out_dir}"
-    )
+    _logger.info(f"[{label}] Time: {n_plots} plots + cluster CSV saved to {out_dir}")
 
 
 # ---------------------------------------------------------------------------

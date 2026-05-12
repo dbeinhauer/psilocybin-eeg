@@ -632,9 +632,7 @@ def _plot_subject_frequency_heatmap(
     n_show = n_ica
     vlim = float(np.percentile(np.abs(sf_loadings[:, :, :n_show]), 99))
 
-    fig, axes = plt.subplots(
-        1, n_show, figsize=(3.5 * n_show, 4.5), sharey=True
-    )
+    fig, axes = plt.subplots(1, n_show, figsize=(3.5 * n_show, 4.5), sharey=True)
     if n_show == 1:
         axes = [axes]
 
