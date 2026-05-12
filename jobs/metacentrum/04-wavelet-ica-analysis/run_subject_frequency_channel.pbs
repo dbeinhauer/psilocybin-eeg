@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N PSILO_SFC_ICA_04
-#PBS -l walltime=2:00:00
+#PBS -l walltime=3:00:00
 #PBS -l select=1:ncpus=8:mem=350gb:scratch_local=80gb
 #PBS -m ae
 #PBS -j oe

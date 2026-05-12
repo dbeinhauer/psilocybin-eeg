@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from collections import Counter
 from pathlib import Path
 
 import matplotlib
@@ -46,7 +47,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import mne  # noqa: E402
 import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+from matplotlib.colors import BoundaryNorm, ListedColormap  # noqa: E402
 from mne.viz import plot_topomap  # noqa: E402
+from scipy.sparse.csgraph import connected_components  # noqa: E402
 from scipy.stats import pearsonr  # noqa: E402
 from sklearn.decomposition import PCA, FastICA  # noqa: E402
 
@@ -71,6 +75,83 @@ from src.definitions.fields import (  # noqa: E402
 _logger = logging.getLogger(__name__)
 
 _STAGE_DIR = "04-time-wavelet-ica-analysis"
+
+# ---------------------------------------------------------------------------
+# Cluster-analysis constants and helpers
+# ---------------------------------------------------------------------------
+
+# Pearson-r thresholds used for the cluster strip below each ISC matrix.
+ISC_CLUSTER_THRESHOLDS: tuple[float, ...] = (0.3, 0.5, 0.7)
+
+# Cluster-agreement ratio thresholds used for the overall cluster strip.
+OVERALL_RATIO_THRESHOLDS: tuple[float, ...] = (0.3, 0.5, 0.7)
+
+# Discrete colormap: light gray for singletons (0) + tab10 for groups (1..10).
+_GROUP_PALETTE = list(plt.colormaps["tab10"].colors)
+_CLUSTER_CMAP = ListedColormap(["#dddddd"] + _GROUP_PALETTE)
+_CLUSTER_NORM = BoundaryNorm(
+    np.arange(-0.5, len(_GROUP_PALETTE) + 1.5, 1.0), _CLUSTER_CMAP.N
+)
+
+
+def _cluster_grid(corr_mat: np.ndarray, n_subjects: int) -> np.ndarray:
+    """(T, S) grid of within-row cluster IDs. Singletons → 0, groups → 1, 2, ...."""
+    grid = np.zeros((len(ISC_CLUSTER_THRESHOLDS), n_subjects), dtype=int)
+    for t_idx, thr in enumerate(ISC_CLUSTER_THRESHOLDS):
+        adj = (corr_mat >= thr) & ~np.eye(n_subjects, dtype=bool)
+        _, comp_labels = connected_components(adj, directed=False)
+        counts = Counter(comp_labels.tolist())
+        next_group = 1
+        group_map: dict[int, int] = {}
+        for s in range(n_subjects):
+            lab = int(comp_labels[s])
+            if counts[lab] == 1:
+                grid[t_idx, s] = 0
+            else:
+                if lab not in group_map:
+                    group_map[lab] = next_group
+                    next_group += 1
+                grid[t_idx, s] = group_map[lab]
+    return grid
+
+
+def _overall_cluster_grid(ratio_mat: np.ndarray, n_subjects: int) -> np.ndarray:
+    """(T, S) grid of overall cluster IDs at each agreement threshold."""
+    grid = np.zeros((len(OVERALL_RATIO_THRESHOLDS), n_subjects), dtype=int)
+    for t_idx, thr in enumerate(OVERALL_RATIO_THRESHOLDS):
+        adj = (ratio_mat >= thr) & ~np.eye(n_subjects, dtype=bool)
+        _, labels = connected_components(adj, directed=False)
+        counts = Counter(labels.tolist())
+        next_group = 1
+        group_map: dict[int, int] = {}
+        for s in range(n_subjects):
+            lab = int(labels[s])
+            if counts[lab] == 1:
+                grid[t_idx, s] = 0
+            else:
+                if lab not in group_map:
+                    group_map[lab] = next_group
+                    next_group += 1
+                grid[t_idx, s] = group_map[lab]
+    return grid
+
+
+def _annotate_cluster_grid(ax, grid: np.ndarray) -> None:
+    """Overlay numeric cluster IDs (>0) on a cluster-strip imshow."""
+    for ti in range(grid.shape[0]):
+        for sj in range(grid.shape[1]):
+            val = int(grid[ti, sj])
+            if val > 0:
+                ax.text(
+                    sj,
+                    ti,
+                    str(val),
+                    ha="center",
+                    va="center",
+                    fontsize=7,
+                    color="white",
+                    weight="bold",
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -231,41 +312,142 @@ def _plot_pca_scree(
 
 
 def _plot_isc_matrix(
-    scores_2d: np.ndarray,
-    n_ica: int,
+    corr_mats: np.ndarray,
+    *,
+    label: str,
+    suptitle: str,
+    save_path: Path,
+) -> None:
+    """Analysis (a) — Per-IC subject × subject ISC matrices with a cluster strip.
+
+    ``corr_mats`` has shape ``(K, S, S)``; each ``K`` panel renders the
+    correlation heatmap on top and a per-threshold cluster-membership strip
+    underneath. Singletons are gray; grouped subjects share a color and
+    carry a numeric label.
+    """
+    n_ica, n_subjects, _ = corr_mats.shape
+    fig, axes = plt.subplots(
+        2,
+        n_ica,
+        figsize=(3.5 * n_ica, 5.5),
+        gridspec_kw={"height_ratios": [3, 1.2]},
+        constrained_layout=True,
+    )
+    if n_ica == 1:
+        axes = axes.reshape(2, 1)
+
+    im_corr = None
+    for i in range(n_ica):
+        corr_mat = corr_mats[i]
+
+        ax_top = axes[0, i]
+        im_corr = ax_top.imshow(corr_mat, vmin=-1, vmax=1, cmap="RdBu_r")
+        ax_top.set_xticks(range(n_subjects))
+        ax_top.set_yticks(range(n_subjects))
+        ax_top.set_xticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=7)
+        ax_top.set_yticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=7)
+        ax_top.set_title(f"IC {i + 1}", fontsize=10)
+
+        ax_bot = axes[1, i]
+        grid = _cluster_grid(corr_mat, n_subjects)
+        ax_bot.imshow(grid, cmap=_CLUSTER_CMAP, norm=_CLUSTER_NORM, aspect="auto")
+        _annotate_cluster_grid(ax_bot, grid)
+        ax_bot.set_xticks(range(n_subjects))
+        ax_bot.set_xticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=7)
+        ax_bot.set_yticks(range(len(ISC_CLUSTER_THRESHOLDS)))
+        ax_bot.set_yticklabels(
+            [f"r≥{thr}" for thr in ISC_CLUSTER_THRESHOLDS], fontsize=8
+        )
+        if i == 0:
+            ax_bot.set_ylabel("Threshold")
+
+    fig.suptitle(f"{suptitle} — {label}", fontsize=12)
+    if im_corr is not None:
+        fig.colorbar(im_corr, ax=axes[0, -1], label="Pearson r", shrink=0.8)
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_overall_cluster_matrix(
+    corr_mats: np.ndarray,
     *,
     label: str,
     save_path: Path,
 ) -> None:
-    """Analysis (a) — Per-IC subject × subject correlation of (F×C) score maps."""
-    n_subjects = scores_2d.shape[0]
-    n_show = n_ica
-    fig, axes = plt.subplots(
-        1, n_show, figsize=(3.5 * n_show, 3.5), constrained_layout=True
-    )
-    if n_show == 1:
-        axes = [axes]
+    """Overall co-clustering ratio matrix + cluster strip aggregated over ICs."""
+    n_ica, n_subjects, _ = corr_mats.shape
+    n_total = n_ica * len(ISC_CLUSTER_THRESHOLDS)
+    co_count = np.zeros((n_subjects, n_subjects), dtype=int)
+    for k in range(n_ica):
+        for thr in ISC_CLUSTER_THRESHOLDS:
+            adj = (corr_mats[k] >= thr) & ~np.eye(n_subjects, dtype=bool)
+            _, labels = connected_components(adj, directed=False)
+            same = labels[:, None] == labels[None, :]
+            co_count += same.astype(int)
+    overall_ratio = co_count / n_total
 
-    im = None
-    for i, ax in enumerate(axes):
-        # scores_2d[:, :, :, i] has shape (S, F, C); flatten F×C → row per subject
-        subj_maps = scores_2d[:, :, :, i].reshape(n_subjects, -1)  # (S, F*C)
-        corr_mat = np.corrcoef(subj_maps)
-        im = ax.imshow(corr_mat, vmin=-1, vmax=1, cmap="RdBu_r")
-        ax.set_xticks(range(n_subjects))
-        ax.set_yticks(range(n_subjects))
-        ax.set_xticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=7)
-        ax.set_yticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=7)
-        ax.set_title(f"IC {i + 1}", fontsize=10)
-
-    fig.suptitle(
-        f"Intersubject Correlation of IC Score Maps (F×C) — {label}",
-        fontsize=12,
+    fig, (ax_top, ax_bot) = plt.subplots(
+        2,
+        1,
+        figsize=(5.0, 6.0),
+        gridspec_kw={"height_ratios": [3, 1.2]},
+        constrained_layout=True,
     )
-    if im is not None:
-        plt.colorbar(im, ax=axes[-1], label="Pearson r", shrink=0.8)
+
+    im_ratio = ax_top.imshow(overall_ratio, vmin=0.0, vmax=1.0, cmap="viridis")
+    ax_top.set_xticks(range(n_subjects))
+    ax_top.set_yticks(range(n_subjects))
+    ax_top.set_xticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=7)
+    ax_top.set_yticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=7)
+    ax_top.set_title(
+        "Overall co-clustering ratio (mean over ICs × r-thresholds)",
+        fontsize=10,
+    )
+    fig.colorbar(im_ratio, ax=ax_top, label="share of cases in same cluster")
+
+    overall_grid = _overall_cluster_grid(overall_ratio, n_subjects)
+    ax_bot.imshow(overall_grid, cmap=_CLUSTER_CMAP, norm=_CLUSTER_NORM, aspect="auto")
+    _annotate_cluster_grid(ax_bot, overall_grid)
+    ax_bot.set_xticks(range(n_subjects))
+    ax_bot.set_xticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=7)
+    ax_bot.set_yticks(range(len(OVERALL_RATIO_THRESHOLDS)))
+    ax_bot.set_yticklabels(
+        [f"ratio≥{thr}" for thr in OVERALL_RATIO_THRESHOLDS], fontsize=8
+    )
+    ax_bot.set_ylabel("Threshold")
+
+    fig.suptitle(f"Overall Subject Co-Clustering — {label}", fontsize=12)
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
+
+
+def _export_isc_clusters_csv(corr_mats: np.ndarray, save_path: Path) -> None:
+    """Export per-(IC, threshold) clusters with two or more members to CSV."""
+    n_ica, n_subjects, _ = corr_mats.shape
+    rows = []
+    for k in range(n_ica):
+        for thr in ISC_CLUSTER_THRESHOLDS:
+            adj = (corr_mats[k] >= thr) & ~np.eye(n_subjects, dtype=bool)
+            _, comp_labels = connected_components(adj, directed=False)
+            kept = 0
+            for cid in np.unique(comp_labels):
+                members = np.where(comp_labels == cid)[0]
+                if len(members) < 2:
+                    continue
+                kept += 1
+                rows.append(
+                    {
+                        "component": f"IC{k + 1}",
+                        "threshold": thr,
+                        "cluster_id": kept,
+                        "cluster_size": int(len(members)),
+                        "subject_ids": ",".join(f"S{s + 1}" for s in members),
+                    }
+                )
+    pd.DataFrame(
+        rows,
+        columns=["component", "threshold", "cluster_id", "cluster_size", "subject_ids"],
+    ).to_csv(save_path, index=False)
 
 
 def _plot_subject_loadings(
@@ -312,7 +494,7 @@ def _plot_time_frequency(
     label: str,
     save_path: Path,
 ) -> None:
-    """Analysis (c) — Frequency × Time outer-product map per component."""
+    """Analysis (c) — Time × Frequency outer-product map per component."""
     # Frequency profile: collapse subjects and channels  (S, F, C, K) → (F, K)
     freq_profiles = scores_2d.mean(axis=(0, 2))  # (F, K)
     time_profiles = components_2d  # (K, T)
@@ -336,12 +518,12 @@ def _plot_time_frequency(
             shading="auto",
         )
         ax.set_ylabel("Freq (Hz)")
-        ax.set_title(f"IC {i + 1} — Freq × Time Map (outer product)", fontsize=10)
+        ax.set_title(f"IC {i + 1} — Time × Frequency Map (outer product)", fontsize=10)
         fig.colorbar(mesh, ax=ax, pad=0.01, fraction=0.025)
 
     axes[-1].set_xlabel("Time (s)")
     fig.suptitle(
-        f"Frequency × Time Maps per IC — {label}",
+        f"Time × Frequency Maps per IC — {label}",
         fontsize=13,
         y=1.01,
     )
@@ -422,38 +604,46 @@ def _plot_subject_frequency_heatmap(
     label: str,
     save_path: Path,
 ) -> None:
-    """Analysis (e) — Subject × Frequency loading heatmap per component."""
+    """Analysis (e) — Subject × Frequency loading heatmap per component.
+
+    Layout: 1 row × ``n_ica`` columns; subject on the x-axis, frequency on
+    the y-axis, with limits shared across the displayed components.
+    """
     n_subjects = scores_2d.shape[0]
     sf_loadings = scores_2d.mean(axis=2)  # (S, F, K)
 
     n_show = n_ica
     vlim = float(np.percentile(np.abs(sf_loadings[:, :, :n_show]), 99))
 
-    fig, axes = plt.subplots(n_show, 1, figsize=(14, 2.6 * n_show), sharex=True)
+    fig, axes = plt.subplots(
+        1, n_show, figsize=(3.5 * n_show, 4.5), sharey=True
+    )
     if n_show == 1:
         axes = [axes]
 
+    mesh = None
     for i, ax in enumerate(axes):
+        # Transpose to (F, S): subject on x-axis, frequency on y-axis.
         mesh = ax.pcolormesh(
-            freqs,
             np.arange(n_subjects),
-            sf_loadings[:, :, i],
+            freqs,
+            sf_loadings[:, :, i].T,
             cmap="RdBu_r",
             vmin=-vlim,
             vmax=vlim,
             shading="auto",
         )
-        ax.set_yticks(range(n_subjects))
-        ax.set_yticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=8)
-        ax.set_ylabel("Subject")
-        ax.set_title(f"IC {i + 1} — Subject × Frequency Loading", fontsize=10)
-        fig.colorbar(mesh, ax=ax, pad=0.01, fraction=0.025, label="loading")
+        ax.set_xticks(range(n_subjects))
+        ax.set_xticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=8)
+        ax.set_xlabel("Subject")
+        ax.set_title(f"IC {i + 1}", fontsize=10)
+        fig.colorbar(mesh, ax=ax, fraction=0.046, pad=0.04, label="loading")
 
-    axes[-1].set_xlabel("Frequency (Hz)")
+    axes[0].set_ylabel("Frequency (Hz)")
     fig.suptitle(
         f"Subject × Frequency Loading Heatmaps per IC — {label}",
         fontsize=13,
-        y=1.01,
+        y=1.02,
     )
     fig.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
@@ -470,6 +660,9 @@ def _plot_subject_channel_heatmap(
     """Analysis (f) — Subject × Channel loading heatmap per component.
 
     sc_loadings[s, c, k] = mean_f  scores_2d[s, f, c, k]   (S, C, K)
+
+    Layout: 1 row × ``n_ica`` columns; subject on the x-axis, channel on
+    the y-axis.
     """
     n_subjects, _, n_channels, _ = scores_2d.shape
     sc_loadings = scores_2d.mean(axis=1)  # (S, C, K)
@@ -478,31 +671,35 @@ def _plot_subject_channel_heatmap(
     n_show = n_ica
     vlim = float(np.percentile(np.abs(sc_loadings[:, :, :n_show]), 99))
 
-    fig, axes = plt.subplots(n_show, 1, figsize=(14, 2.6 * n_show), sharex=True)
+    fig, axes = plt.subplots(
+        1, n_show, figsize=(3.5 * n_show, 4.5), sharey=True
+    )
     if n_show == 1:
         axes = [axes]
 
+    mesh = None
     for i, ax in enumerate(axes):
+        # Transpose to (C, S): subject on x-axis, channel on y-axis.
         mesh = ax.pcolormesh(
-            channels,
             np.arange(n_subjects),
-            sc_loadings[:, :, i],
+            channels,
+            sc_loadings[:, :, i].T,
             cmap="RdBu_r",
             vmin=-vlim,
             vmax=vlim,
             shading="auto",
         )
-        ax.set_yticks(range(n_subjects))
-        ax.set_yticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=8)
-        ax.set_ylabel("Subject")
-        ax.set_title(f"IC {i + 1} — Subject × Channel Loading", fontsize=10)
-        fig.colorbar(mesh, ax=ax, pad=0.01, fraction=0.025, label="loading")
+        ax.set_xticks(range(n_subjects))
+        ax.set_xticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=8)
+        ax.set_xlabel("Subject")
+        ax.set_title(f"IC {i + 1}", fontsize=10)
+        fig.colorbar(mesh, ax=ax, fraction=0.046, pad=0.04, label="loading")
 
-    axes[-1].set_xlabel("Channel")
+    axes[0].set_ylabel("Channel")
     fig.suptitle(
         f"Subject × Channel Loading Heatmaps per IC — {label}",
         fontsize=13,
-        y=1.01,
+        y=1.02,
     )
     fig.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
@@ -517,9 +714,12 @@ def _plot_channel_frequency_heatmap(
     label: str,
     save_path: Path,
 ) -> None:
-    """Analysis (g) — Channel × Frequency loading heatmap per component.
+    """Analysis (g) — Frequency × Channel loading heatmap per component.
 
     cf_loadings[c, f, k] = mean_s  scores_2d[s, f, c, k]   (C, F, K)
+
+    Layout: 1 row × ``n_ica`` columns; frequency on the x-axis, channel
+    on the y-axis.
     """
     n_channels = scores_2d.shape[2]
     cf_loadings = scores_2d.mean(axis=0).transpose(1, 0, 2)  # (C, F, K)
@@ -533,22 +733,23 @@ def _plot_channel_frequency_heatmap(
         axes = [axes]
 
     for i, ax in enumerate(axes):
+        # cf_loadings[:, :, i] is (C, F): freqs on x, channels on y.
         mesh = ax.pcolormesh(
-            channels,
             freqs,
-            cf_loadings[:, :, i].T,  # (F, C)
+            channels,
+            cf_loadings[:, :, i],
             cmap="RdBu_r",
             vmin=-vlim,
             vmax=vlim,
             shading="auto",
         )
-        ax.set_xlabel("Channel")
+        ax.set_xlabel("Frequency (Hz)")
         ax.set_title(f"IC {i + 1}", fontsize=10)
         fig.colorbar(mesh, ax=ax, fraction=0.046, pad=0.04, label="loading")
 
-    axes[0].set_ylabel("Frequency (Hz)")
+    axes[0].set_ylabel("Channel")
     fig.suptitle(
-        f"Channel × Frequency Loading Heatmaps per IC — {label}",
+        f"Frequency × Channel Loading Heatmaps per IC — {label}",
         fontsize=13,
         y=1.02,
     )
@@ -597,7 +798,7 @@ def _plot_subject_time_heatmap(
     label: str,
     save_path: Path,
 ) -> None:
-    """Analysis (g) — Subject × Time activation heatmap per component (outer product)."""
+    """Analysis (g) — Time × Subject activation heatmap per component (outer product)."""
     n_subjects = scores_2d.shape[0]
 
     # Subject profile: collapse frequencies and channels  (S, F, C, K) → (S, K)
@@ -626,13 +827,13 @@ def _plot_subject_time_heatmap(
         ax.set_yticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=8)
         ax.set_ylabel("Subject")
         ax.set_title(
-            f"IC {i + 1} — Subject × Time Activation (outer product)", fontsize=10
+            f"IC {i + 1} — Time × Subject Activation (outer product)", fontsize=10
         )
         fig.colorbar(mesh, ax=ax, pad=0.01, fraction=0.025, label="activation")
 
     axes[-1].set_xlabel("Time (s)")
     fig.suptitle(
-        f"Subject × Time Activation Heatmaps per IC — {label}",
+        f"Time × Subject Activation Heatmaps per IC — {label}",
         fontsize=13,
         y=1.01,
     )
@@ -764,12 +965,32 @@ def _run_time(
             save_path=out_dir / f"{prefix}pca_scree_{label}.png",
         )
 
+    # Per-IC subject × subject ISC matrices, reused by (a), the overall
+    # co-clustering plot, and the CSV cluster export.
+    corr_mats = np.zeros((n_ica, n_subjects, n_subjects))
+    for k in range(n_ica):
+        subj_maps = scores_2d[:, :, :, k].reshape(n_subjects, -1)  # (S, F*C)
+        corr_mats[k] = np.corrcoef(subj_maps)
+
     # Plot 2 — (a) ISC matrix from per-subject score maps
     _plot_isc_matrix(
-        scores_2d,
-        n_ica,
+        corr_mats,
         label=label,
+        suptitle="Intersubject Correlation of IC Score Maps (F×C)",
         save_path=out_dir / f"{prefix}isc_component_matrix_{label}.png",
+    )
+
+    # Plot 2a — Overall co-clustering matrix aggregated over ICs and thresholds
+    _plot_overall_cluster_matrix(
+        corr_mats,
+        label=label,
+        save_path=out_dir / f"{prefix}isc_overall_cluster_matrix_{label}.png",
+    )
+
+    # CSV export of per-(IC, threshold) clusters with ≥2 members
+    _export_isc_clusters_csv(
+        corr_mats,
+        save_path=out_dir / f"{prefix}ica_isc_clusters_{label}.csv",
     )
 
     # Plot 3 — (b) Subject loadings bar plot
@@ -780,7 +1001,7 @@ def _run_time(
         save_path=out_dir / f"{prefix}ica_subject_loadings_{label}.png",
     )
 
-    # Plot 4 — (c) Freq × Time outer-product map
+    # Plot 4 — (c) Time × Frequency outer-product map
     _plot_time_frequency(
         scores_2d,
         components_2d,
@@ -818,7 +1039,7 @@ def _run_time(
         save_path=out_dir / f"{prefix}ica_subject_channel_heatmap_{label}.png",
     )
 
-    # Plot 8 — (g) Channel × Frequency loading heatmap
+    # Plot 8 — (g) Frequency × Channel loading heatmap
     _plot_channel_frequency_heatmap(
         scores_2d,
         freqs,
@@ -836,7 +1057,7 @@ def _run_time(
         save_path=out_dir / f"{prefix}ica_component_timecourses_{label}.png",
     )
 
-    # Plot 10 — (i) Subject × Time activation heatmap
+    # Plot 10 — (i) Time × Subject activation heatmap
     _plot_subject_time_heatmap(
         scores_2d,
         components_2d,
@@ -854,8 +1075,10 @@ def _run_time(
         save_path=out_dir / f"{prefix}ica_loo_isc_bar_{label}.png",
     )
 
-    n_plots = 11 if not skip_pca else 10
-    _logger.info(f"[{label}] Time: {n_plots} plots saved to {out_dir}")
+    n_plots = 12 if not skip_pca else 11
+    _logger.info(
+        f"[{label}] Time: {n_plots} plots + cluster CSV saved to {out_dir}"
+    )
 
 
 # ---------------------------------------------------------------------------
