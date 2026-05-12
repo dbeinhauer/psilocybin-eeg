@@ -57,9 +57,9 @@ uv run --with "streamlit>=1.32.0" --with "pyyaml>=6.0" --with "numpy>=1.24.0" --
 - **`io/`** — Filename parsing (`parsing.py`), data loading (`loading.py`), saving (`saving.py`). All file I/O routes through here.
 - **`preprocessing/`** — Pipeline order: **channel_prep → filtering → ica → time_alignment**. Uses MNE-Python `Raw`/`Epochs` objects.
 - **`analysis/`** — ISC computation (`isc.py`), intersubject mean-variance synchrony (`mean_variance.py`), data containers (`data_representations.py` → `AnalysisData`), results CSV export (`results_store.py`), high-level orchestrator (`summary.py` → `EEGSummarizedAnalyzer`). Input shape convention: `(n_subjects, n_channels, n_timepoints)`.
-- **`visualization/`** — Seaborn for statistical plots, Matplotlib for EEG topomaps. All plot functions accept an optional `save_path` parameter.
+- **`visualization/`** — Seaborn for statistical plots, Matplotlib for EEG topomaps. All plot functions accept an optional `save_path` parameter. Modules: `preprocessing_plots.py`, `isc_plots.py`, `mean_variance_plots.py`, `wavelet_plots.py`.
 - **`filtering/`** — `DatasetFilter` for metadata-level DataFrame filtering.
-- **`utils/`** — `LoggerMixin` for class-level logging.
+- **`utils/`** — `LoggerMixin`, `setup_logging`, and `LogLevel` context manager in `logging_config.py`.
 
 ### Key Patterns
 
