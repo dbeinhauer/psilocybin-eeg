@@ -272,6 +272,50 @@ def _plot_isc_matrix(
     plt.close(fig)
 
 
+def _plot_subject_loadings(
+    components_3d: np.ndarray,
+    n_ica: int,
+    *,
+    label: str,
+    save_path: Path,
+) -> None:
+    """Analysis (b) — Mean subject loading per IC (bar plot).
+
+    ``components_3d`` has shape ``(K, F, C, S)``; mean of absolute values
+    over ``F`` and ``C`` gives a scalar per ``(subject, component)`` pair,
+    summarising how strongly each participant contributes to the
+    freq–channel–subject pattern.
+    """
+    n_subjects = components_3d.shape[3]
+    subject_loadings = np.abs(components_3d).mean(axis=(1, 2)).T  # (S, K)
+
+    n_show = n_ica
+    fig, axes = plt.subplots(1, n_show, figsize=(3 * n_show, 4), sharey=True)
+    if n_show == 1:
+        axes = [axes]
+
+    for i, ax in enumerate(axes):
+        ax.barh(
+            range(n_subjects),
+            subject_loadings[:, i],
+            color="darkorange",
+        )
+        ax.set_yticks(range(n_subjects))
+        ax.set_yticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=8)
+        ax.set_xlabel("|loading|")
+        ax.set_title(f"IC {i + 1}", fontsize=10)
+
+    axes[0].set_ylabel("Subject")
+    fig.suptitle(
+        f"Per-Subject Mean Loading per Component — {label}",
+        fontsize=13,
+        y=1.02,
+    )
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def _plot_time_frequency(
     ica_scores: np.ndarray,
     components_3d: np.ndarray,
@@ -282,7 +326,7 @@ def _plot_time_frequency(
     label: str,
     save_path: Path,
 ) -> None:
-    """Analysis (b) — Time × Frequency map per component (outer product).
+    """Analysis (c) — Time × Frequency map per component (outer product).
 
     freq_profile[k] = mean_(c, s)  components_3d[k]    (K, F)
     time_profile[k] = ica_scores[:, k]                 (K, T)
@@ -334,7 +378,7 @@ def _plot_loo_isc_bar(
     label: str,
     save_path: Path,
 ) -> None:
-    """Analysis (c) — Mean LOO-ISC across participants per IC (bar plot).
+    """Analysis (d) — Mean LOO-ISC across participants per IC (bar plot).
 
     Per-subject vector for each IC is the flattened ``(F, C)`` loading map
     of length ``F*C``; matches the subject vectors used in Analysis (a).
@@ -380,7 +424,7 @@ def _plot_pairwise_heatmap(
 ) -> None:
     """Generic 1×K row of heatmaps with per-panel symmetric color scale.
 
-    Used for Analysis (d): one figure per pairwise view of ``components_3d``
+    Used for Analysis (e): one figure per pairwise view of ``components_3d``
     averaged along the third dimension.
     """
     n_show = n_ica
@@ -504,7 +548,15 @@ def _run_subject_frequency_channel(
         save_path=out_dir / f"{prefix}isc_component_matrix_{label}.png",
     )
 
-    # Plot 3 — (b) Frequency × Time outer-product map
+    # Plot 3 — (b) Mean subject loading per IC
+    _plot_subject_loadings(
+        components_3d,
+        n_ica,
+        label=label,
+        save_path=out_dir / f"{prefix}ica_subject_loadings_{label}.png",
+    )
+
+    # Plot 4 — (c) Frequency × Time outer-product map
     _plot_time_frequency(
         ica_scores,
         components_3d,
@@ -515,7 +567,7 @@ def _run_subject_frequency_channel(
         save_path=out_dir / f"{prefix}ica_time_frequency_{label}.png",
     )
 
-    # Plot 4 — (c) Mean LOO-ISC across participants per IC
+    # Plot 5 — (d) Mean LOO-ISC across participants per IC
     _plot_loo_isc_bar(
         components_3d,
         n_ica,
@@ -523,7 +575,7 @@ def _run_subject_frequency_channel(
         save_path=out_dir / f"{prefix}ica_loo_isc_bar_{label}.png",
     )
 
-    # Plot 5–7 — (d) Pairwise component heatmaps, one figure per pair
+    # Plot 6–8 — (e) Pairwise component heatmaps, one figure per pair
     sf_maps = components_3d.mean(axis=2)  # (K, F, S) — mean over channels
     sc_maps = components_3d.mean(axis=1)  # (K, C, S) — mean over frequencies
     fc_maps = components_3d.mean(axis=3)  # (K, F, C) — mean over subjects
@@ -562,7 +614,7 @@ def _run_subject_frequency_channel(
         save_path=out_dir / f"{prefix}ica_pairwise_frequency_channel_{label}.png",
     )
 
-    n_plots = 7 if not skip_pca else 6
+    n_plots = 8 if not skip_pca else 7
     _logger.info(
         f"[{label}] Subject-Frequency-Channel: {n_plots} plots saved to {out_dir}"
     )
