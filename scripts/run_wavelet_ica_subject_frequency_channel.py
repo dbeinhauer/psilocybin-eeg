@@ -345,9 +345,7 @@ def _plot_loo_isc_bar(
         subj_vectors = components_3d[k].transpose(2, 0, 1).reshape(n_subjects, -1)
         for s in range(n_subjects):
             others_mean = np.delete(subj_vectors, s, axis=0).mean(axis=0)
-            loo_isc_per_subject[k, s] = float(
-                pearsonr(subj_vectors[s], others_mean)[0]
-            )
+            loo_isc_per_subject[k, s] = float(pearsonr(subj_vectors[s], others_mean)[0])
 
     loo_isc_mean = loo_isc_per_subject.mean(axis=1)  # (K,)
     loo_isc_std = loo_isc_per_subject.std(axis=1)  # (K,)
