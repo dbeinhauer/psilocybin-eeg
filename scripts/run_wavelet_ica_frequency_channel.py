@@ -1,17 +1,18 @@
 """
 CLI script reproducing the exact analyses from
-``notebooks/04-wavelet-ica-analysis/wavelet_ica_subject_time.ipynb``
-(Subject-Time approach: observations = F×C, features = S×T;
-components live in subject × time).
+``notebooks/04-wavelet-ica-analysis/wavelet_ica_frequency_channel.ipynb``
+(Frequency-Channel approach: observations = S×T, features = F×C;
+components live in frequency × channel — the transposed companion of the
+Subject-Time variant, which has F×C observations and S×T features).
 
 Produces **all** ICA components (not just the first 6 shown in the notebook)
 and writes every plot into the canonical per-condition layout under::
 
-    plots/04-subject-time-wavelet-ica-analysis/<Condition>_<MusicType>/
-        broadband/subject_time/                       # default (no --band)
+    plots/04-frequency-channel-wavelet-ica-analysis/<Condition>_<MusicType>/
+        broadband/frequency_channel/                  # default (no --band)
             pca_scree_<label>.png
             ...
-        bands/subject_time/                           # when --band <name> is given
+        bands/frequency_channel/                      # when --band <name> is given
             <band>_pca_scree_<label>.png
             ...
 
@@ -22,15 +23,15 @@ broadband cache is reused — no separate per-band cache is needed.
 Usage::
 
     # broadband
-    python scripts/run_wavelet_ica_subject_time.py \\
+    python scripts/run_wavelet_ica_frequency_channel.py \\
         --condition Placebo --music_type CLASSIC PSYTRANCE \\
         --n_pca 50 --n_ica 10 --reuse_wavelets \\
         --sliding_variants 1.0:0.5
 
     # alpha-band only
-    python scripts/run_wavelet_ica_subject_time.py \\
+    python scripts/run_wavelet_ica_frequency_channel.py \\
         --condition Placebo --music_type CLASSIC PSYTRANCE \\
-        --band alpha --n_pca 50 --n_ica 10 --reuse_wavelets
+        --band alpha --n_pca 30 --n_ica 10 --reuse_wavelets
 """
 
 from __future__ import annotations
@@ -75,7 +76,7 @@ from src.definitions.fields import (  # noqa: E402
 
 _logger = logging.getLogger(__name__)
 
-_STAGE_DIR = "04-subject-time-wavelet-ica-analysis"
+_STAGE_DIR = "04-frequency-channel-wavelet-ica-analysis"
 
 # ---------------------------------------------------------------------------
 # Cluster-analysis constants and helpers
@@ -88,8 +89,6 @@ ISC_CLUSTER_THRESHOLDS: tuple[float, ...] = (0.3, 0.5, 0.7)
 OVERALL_RATIO_THRESHOLDS: tuple[float, ...] = (0.3, 0.5, 0.7)
 
 # Top-percent-by-mean-LOO-ISC windows highlighted in the sliding-window plot.
-# Inspired by the windowed-ISC plot in
-# notebooks/03-wavelet-analysis/wavelet_power_exploration.ipynb.
 HIGHLIGHT_TOP_PERCENT: float = 10.0
 
 # Discrete colormap: light gray for singletons (0) + tab10 for groups (1..10).
@@ -168,9 +167,9 @@ def _annotate_cluster_grid(ax, grid: np.ndarray) -> None:
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run the Subject-Time ICA analysis on preprocessed EEG wavelet "
-            "power.  Produces the exact same plots as "
-            "wavelet_ica_subject_time.ipynb, but for ALL ICA components."
+            "Run the Frequency-Channel ICA analysis on preprocessed EEG "
+            "wavelet power.  Produces the exact same plots as "
+            "wavelet_ica_frequency_channel.ipynb, but for ALL ICA components."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -201,7 +200,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Skip the PCA dimensionality reduction and run FastICA directly "
-            "on the (F*C, S*T) z-scored matrix."
+            "on the (S*T, F*C) z-scored matrix."
         ),
     )
     parser.add_argument(
@@ -277,8 +276,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Optional frequency band. When set, the cached broadband wavelet "
             "tensor is sliced to the band's frequency range before ICA, and "
-            "plots are written to the 'bands/subject_time/' subdirectory with "
-            "a '<band>_' filename prefix. Default: full broadband."
+            "plots are written to the 'bands/frequency_channel/' subdirectory "
+            "with a '<band>_' filename prefix. Default: full broadband."
         ),
     )
     parser.add_argument(
@@ -297,6 +296,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 # ---------------------------------------------------------------------------
 # Plot functions — exact replicas of the notebook cells, showing ALL ICs
+#
+# The helpers take their natural input shapes:
+#   * ``subj_time_view``  has shape ``(K, S, T)`` — per-IC subject × time map.
+#     In this variant it is ``scores_3d.transpose(2, 0, 1)``.
+#   * ``freq_chan_view``  has shape ``(F, C, K)`` — per-IC freq × channel map.
+#     In this variant it is ``components_2d.transpose(1, 2, 0)``.
+# Helpers are byte-identical in structure to the Subject-Time script; the
+# data sources differ only at the call sites below.
 # ---------------------------------------------------------------------------
 
 
@@ -334,13 +341,7 @@ def _plot_isc_matrix(
     suptitle: str,
     save_path: Path,
 ) -> None:
-    """Analysis (a) — Per-IC subject × subject ISC matrices with a cluster strip.
-
-    ``corr_mats`` has shape ``(K, S, S)``; each ``K`` panel renders the
-    correlation heatmap on top and a per-threshold cluster-membership strip
-    underneath. Singletons are gray; grouped subjects share a color and
-    carry a numeric label.
-    """
+    """Analysis (a) — Per-IC subject × subject ISC matrices with a cluster strip."""
     n_ica, n_subjects, _ = corr_mats.shape
     fig, axes = plt.subplots(
         2,
@@ -467,15 +468,20 @@ def _export_isc_clusters_csv(corr_mats: np.ndarray, save_path: Path) -> None:
 
 
 def _plot_subject_loadings(
-    components_2d: np.ndarray,
+    subj_time_view: np.ndarray,
     n_ica: int,
     *,
     label: str,
     save_path: Path,
 ) -> None:
-    """Analysis (b) — Per-subject mean loading bar plot for ALL ICs."""
-    n_subjects = components_2d.shape[1]
-    subject_loadings = np.abs(components_2d).mean(axis=2).T  # (S, K)
+    """Analysis (b) — Per-subject mean loading bar plot for ALL ICs.
+
+    Per-IC scalar per subject is ``mean_t |scores_3d[s, t, k]|``, equivalent to
+    ``np.abs(subj_time_view).mean(axis=2).T`` since
+    ``subj_time_view = scores_3d.transpose(2, 0, 1)`` has shape ``(K, S, T)``.
+    """
+    n_subjects = subj_time_view.shape[1]
+    subject_loadings = np.abs(subj_time_view).mean(axis=2).T  # (S, K)
 
     n_show = n_ica
     fig, axes = plt.subplots(1, n_show, figsize=(3 * n_show, 4), sharey=True)
@@ -486,7 +492,7 @@ def _plot_subject_loadings(
         ax.barh(range(n_subjects), subject_loadings[:, i], color="darkorange")
         ax.set_yticks(range(n_subjects))
         ax.set_yticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=8)
-        ax.set_xlabel("|activation|")
+        ax.set_xlabel("|score|")
         ax.set_title(f"IC {i + 1}", fontsize=10)
 
     axes[0].set_ylabel("Subject")
@@ -501,8 +507,8 @@ def _plot_subject_loadings(
 
 
 def _plot_time_frequency(
-    scores_2d: np.ndarray,
-    components_2d: np.ndarray,
+    freq_chan_view: np.ndarray,
+    subj_time_view: np.ndarray,
     time: np.ndarray,
     freqs: np.ndarray,
     n_ica: int,
@@ -512,16 +518,18 @@ def _plot_time_frequency(
 ) -> None:
     """Analysis (c) — Time × Frequency map per component (outer product) for ALL ICs.
 
-    freq_profile[k] = mean_c scores_2d[:, :, k]              (F,)
-    time_profile[k] = mean_s components_2d[k, :, :]          (T,)
-    tf_map[k]       = outer(freq_profile[k], time_profile[k])  (F, T)
+    freq_profile[k] = mean_c components_2d[k, :, :]               (F,)
+    time_profile[k] = mean_s scores_3d[:, :, k]                   (T,)
+    tf_map[k]       = outer(freq_profile[k], time_profile[k])     (F, T)
     """
-    # Frequency profile: collapse channels from ICA scores  (F, C, K) → (F, K)
-    freq_profiles = scores_2d.mean(axis=1)  # (F, K)
-    # Time profile: average subject activations from ICA components  (K, S, T) → (K, T)
-    time_profiles = components_2d.mean(axis=1)  # (K, T)
+    # Frequency profile: collapse channels from ICA components — given
+    # freq_chan_view shape (F, C, K), mean over C → (F, K)
+    freq_profiles = freq_chan_view.mean(axis=1)  # (F, K)
+    # Time profile: average subject scores — given subj_time_view (K, S, T),
+    # mean over S → (K, T)
+    time_profiles = subj_time_view.mean(axis=1)  # (K, T)
     # Outer product: (F, K) x (K, T) → (K, F, T)
-    ft_maps = np.einsum("fk,kt->kft", freq_profiles, time_profiles)  # (K, F, T)
+    ft_maps = np.einsum("fk,kt->kft", freq_profiles, time_profiles)
 
     n_show = n_ica
     fig, axes = plt.subplots(n_show, 1, figsize=(14, 3 * n_show), sharex=True)
@@ -559,7 +567,7 @@ def _plot_time_frequency(
 
 
 def _plot_topomap_mean(
-    scores_2d: np.ndarray,
+    freq_chan_view: np.ndarray,
     info,
     n_channels: int,
     n_ica: int,
@@ -569,11 +577,12 @@ def _plot_topomap_mean(
 ) -> None:
     """Analysis (d) — Mean component channel loading (topomap) for ALL ICs.
 
-    chan_loading[c, k] = mean_f  scores_2d[f, c, k]                  (C, K)
+    chan_loading[c, k] = mean_f  components_2d[k, f, c]              (C, K)
 
+    Given ``freq_chan_view`` of shape ``(F, C, K)``, this is the mean over F.
     Each component is plotted with its own symmetric color scale.
     """
-    chan_loading = scores_2d.mean(axis=0)  # (C, K)
+    chan_loading = freq_chan_view.mean(axis=0)  # (C, K)
 
     topo_info = mne.pick_info(info, mne.pick_types(info, eeg=True))
     if n_channels < len(topo_info.ch_names):
@@ -608,7 +617,7 @@ def _plot_topomap_mean(
 
 
 def _plot_mean_variance_over_time(
-    components_2d: np.ndarray,
+    subj_time_view: np.ndarray,
     time: np.ndarray,
     n_ica: int,
     *,
@@ -616,8 +625,8 @@ def _plot_mean_variance_over_time(
     save_path: Path,
 ) -> None:
     """Analysis (e) — Mean & variance of IC signal over time across subjects."""
-    mean_temporal = components_2d.mean(axis=1)  # (K, T)
-    var_temporal = components_2d.var(axis=1)  # (K, T)
+    mean_temporal = subj_time_view.mean(axis=1)  # (K, T)
+    var_temporal = subj_time_view.var(axis=1)  # (K, T)
     std_temporal = np.sqrt(var_temporal)  # (K, T)
 
     n_show = n_ica
@@ -655,7 +664,7 @@ def _plot_mean_variance_over_time(
 
 
 def _plot_subject_time_heatmap(
-    components_2d: np.ndarray,
+    subj_time_view: np.ndarray,
     time: np.ndarray,
     n_ica: int,
     *,
@@ -663,10 +672,10 @@ def _plot_subject_time_heatmap(
     save_path: Path,
 ) -> None:
     """Analysis (g) — Time × Subject activation heatmap per component."""
-    n_subjects = components_2d.shape[1]
+    n_subjects = subj_time_view.shape[1]
     n_show = n_ica
 
-    vlim = float(np.percentile(np.abs(components_2d[:n_show]), 99))
+    vlim = float(np.percentile(np.abs(subj_time_view[:n_show]), 99))
 
     fig, axes = plt.subplots(n_show, 1, figsize=(14, 2.6 * n_show), sharex=True)
     if n_show == 1:
@@ -677,7 +686,7 @@ def _plot_subject_time_heatmap(
         mesh = ax.pcolormesh(
             time,
             np.arange(n_subjects),
-            components_2d[i],
+            subj_time_view[i],
             cmap="RdBu_r",
             vmin=-vlim,
             vmax=vlim,
@@ -701,20 +710,21 @@ def _plot_subject_time_heatmap(
 
 
 def _plot_freq_channel_heatmap(
-    scores_2d: np.ndarray,
+    freq_chan_view: np.ndarray,
     freqs: np.ndarray,
     n_ica: int,
     *,
     label: str,
     save_path: Path,
 ) -> None:
-    """Analysis (h) — Frequency × Channel heatmap of ICA scores per component.
+    """Analysis (h) — Frequency × Channel heatmap of ICA components per IC.
 
-    Companion to the topomap in (d): the ICA scores `(F, C, K)` are shown
-    without collapsing the frequency axis, with each component on its own
+    In this variant the ICA components themselves live in (F, C), so each
+    IC's heatmap is read off ``components_2d`` directly (here via
+    ``freq_chan_view`` of shape ``(F, C, K)``). Each component uses its own
     symmetric color scale.
     """
-    n_freqs, n_channels, _ = scores_2d.shape
+    n_freqs, n_channels, _ = freq_chan_view.shape
     n_show = n_ica
     channels = np.arange(n_channels)
 
@@ -723,8 +733,8 @@ def _plot_freq_channel_heatmap(
         axes = [axes]
 
     for i, ax in enumerate(axes):
-        # scores_2d[:, :, i] is (F, C); transpose so x-axis = frequency, y = channel.
-        data_i = scores_2d[:, :, i].T  # (C, F)
+        # freq_chan_view[:, :, i] is (F, C); transpose so x = frequency, y = channel.
+        data_i = freq_chan_view[:, :, i].T  # (C, F)
         vlim_i = float(np.percentile(np.abs(data_i), 99))
         mesh = ax.pcolormesh(
             freqs,
@@ -737,11 +747,11 @@ def _plot_freq_channel_heatmap(
         )
         ax.set_xlabel("Frequency (Hz)")
         ax.set_title(f"IC {i + 1}", fontsize=10)
-        fig.colorbar(mesh, ax=ax, fraction=0.046, pad=0.04, label="score")
+        fig.colorbar(mesh, ax=ax, fraction=0.046, pad=0.04, label="loading")
 
     axes[0].set_ylabel("Channel")
     fig.suptitle(
-        f"Frequency × Channel ICA Score Heatmaps — {label}",
+        f"Frequency × Channel ICA Component Heatmaps — {label}",
         fontsize=13,
         y=1.02,
     )
@@ -751,7 +761,7 @@ def _plot_freq_channel_heatmap(
 
 
 def _plot_loo_isc_bar(
-    components_2d: np.ndarray,
+    subj_time_view: np.ndarray,
     n_ica: int,
     *,
     label: str,
@@ -759,14 +769,14 @@ def _plot_loo_isc_bar(
 ) -> None:
     """Analysis (i) — Bar plot of mean LOO-ISC across participants per IC.
 
-    Per-subject vector is each subject's temporal profile
-    ``components_2d[k, s, :]`` (length T). Bars whose across-subject mean
+    Per-subject vector is each subject's temporal score profile
+    ``scores_3d[s, :, k]`` (length T). Bars whose across-subject mean
     LOO-ISC is negative are coloured red; positive bars are steel blue.
     """
-    n_subjects = components_2d.shape[1]
+    n_subjects = subj_time_view.shape[1]
     loo_isc_per_subject = np.zeros((n_ica, n_subjects))
     for k in range(n_ica):
-        vecs = components_2d[k]  # (S, T)
+        vecs = subj_time_view[k]  # (S, T)
         for s in range(n_subjects):
             others_mean = np.delete(vecs, s, axis=0).mean(axis=0)
             loo_isc_per_subject[k, s] = float(pearsonr(vecs[s], others_mean)[0])
@@ -805,17 +815,17 @@ def _parse_sliding_variants(values: list[str]) -> list[tuple[float, float]]:
 
 
 def _compute_sliding_loo_isc(
-    components_2d: np.ndarray,
+    subj_time_view: np.ndarray,
     sfreq: float,
     window_sec: float,
     step_sec: float,
 ) -> dict:
     """Per-subject and across-subject LOO-ISC for one (window, step) pair.
 
-    components_2d: (K, S, T)
+    subj_time_view: (K, S, T)
     Returns dict with per_subject (K, W, S), mean (K, W), std (K, W), edges (W,).
     """
-    n_ica, n_subjects, n_times = components_2d.shape
+    n_ica, n_subjects, n_times = subj_time_view.shape
     win_samples = int(round(window_sec * sfreq))
     step_samples = int(round(step_sec * sfreq))
     if win_samples < 2 or win_samples > n_times:
@@ -829,11 +839,11 @@ def _compute_sliding_loo_isc(
         )
 
     starts = np.arange(0, n_times - win_samples + 1, step_samples)
-    edges = starts / sfreq  # window-start times → first stair begins at t=0
+    edges = starts / sfreq
 
     per_subject = np.zeros((n_ica, len(starts), n_subjects))
     for k in range(n_ica):
-        comp = components_2d[k]  # (S, T)
+        comp = subj_time_view[k]  # (S, T)
         for w_idx, start in enumerate(starts):
             win = comp[:, start : start + win_samples]
             for s in range(n_subjects):
@@ -858,7 +868,7 @@ def _close_to_end(
 
 
 def _plot_sliding_window_loo_isc(
-    components_2d: np.ndarray,
+    subj_time_view: np.ndarray,
     sfreq: float,
     n_ica: int,
     sliding_variants: list[tuple[float, float]],
@@ -872,10 +882,10 @@ def _plot_sliding_window_loo_isc(
     """
     win, step = min(sliding_variants, key=lambda v: v[1])
 
-    n_times = components_2d.shape[2]
+    n_times = subj_time_view.shape[2]
     t_end = n_times / sfreq
 
-    v = _compute_sliding_loo_isc(components_2d, sfreq, win, step)
+    v = _compute_sliding_loo_isc(subj_time_view, sfreq, win, step)
 
     n_show = n_ica
     fig, axes = plt.subplots(n_show, 1, figsize=(14, 2.8 * n_show), sharex=True)
@@ -883,16 +893,13 @@ def _plot_sliding_window_loo_isc(
         axes = [axes]
 
     edges_orig = v["edges"]
-    edges_end = np.append(edges_orig[1:], t_end)  # right edge of each window
+    edges_end = np.append(edges_orig[1:], t_end)
 
     for i, ax in enumerate(axes):
         mean_orig = v["mean"][i]
         edges_m, mean_m = _close_to_end(edges_orig, mean_orig, t_end)
         _, std_m = _close_to_end(edges_orig, v["std"][i], t_end)
 
-        # Highlight the top HIGHLIGHT_TOP_PERCENT % of windows by mean LOO-ISC.
-        # Threshold is per-IC so weak components are still shown relative to
-        # themselves rather than being washed out by stronger components.
         thr_i = float(np.percentile(mean_orig, 100.0 - HIGHLIGHT_TOP_PERCENT))
         sig_mask = mean_orig >= thr_i
         for w_idx, is_sig in enumerate(sig_mask):
@@ -961,7 +968,7 @@ def _plot_sliding_window_loo_isc(
 # ---------------------------------------------------------------------------
 
 
-def _run_subject_time(
+def _run_frequency_channel(
     data_4d: np.ndarray,
     sfreq: float,
     freqs: np.ndarray,
@@ -976,28 +983,28 @@ def _run_subject_time(
     band: str | None = None,
     skip_pca: bool = False,
 ) -> None:
-    """Run the full subject-time ICA pipeline and save all plots.
+    """Run the full frequency–channel ICA pipeline and save all plots.
 
-    When ``band`` is given the outputs land in ``bands/subject_time/`` with
+    When ``band`` is given the outputs land in ``bands/frequency_channel/`` with
     filenames prefixed by ``<band>_``. Otherwise the broadband layout is used.
     """
     if band is None:
-        out_dir = save_dir / "broadband" / "subject_time"
+        out_dir = save_dir / "broadband" / "frequency_channel"
         prefix = ""
     else:
-        out_dir = save_dir / "bands" / "subject_time"
+        out_dir = save_dir / "bands" / "frequency_channel"
         prefix = f"{band}_"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     n_subjects, n_channels, n_freqs, n_times = data_4d.shape
     time = np.arange(n_times) / sfreq
-    _logger.info(f"[{label}] Subject-Time: {data_4d.shape}  sfreq={sfreq} Hz")
+    _logger.info(f"[{label}] Frequency-Channel: {data_4d.shape}  sfreq={sfreq} Hz")
 
-    # Step 1 — Z-score and reshape: (S,C,F,T) → (F,C,S,T) → (F*C, S*T)
+    # Step 1 — Z-score and reshape: (S,C,F,T) → (S,T,F,C) → (S*T, F*C)
     bb_z = zscore_by_time(data_4d)
-    bb_z_fc = bb_z.transpose(2, 1, 0, 3)  # (F, C, S, T)
-    X_fc = bb_z_fc.reshape(n_freqs * n_channels, n_subjects * n_times)
-    _logger.info(f"[{label}] Reshaped: {X_fc.shape}  (F*C, S*T)")
+    bb_z_st = bb_z.transpose(0, 3, 2, 1)  # (S, T, F, C)
+    X_st = bb_z_st.reshape(n_subjects * n_times, n_freqs * n_channels)
+    _logger.info(f"[{label}] Reshaped: {X_st.shape}  (S*T, F*C)")
 
     # Step 2 — (optional) PCA + ICA
     ica = FastICA(
@@ -1008,26 +1015,34 @@ def _run_subject_time(
     )
 
     if skip_pca:
-        _logger.info(f"[{label}] Skipping PCA; running FastICA directly on X_fc.")
-        ica_scores = ica.fit_transform(X_fc)  # (F*C, K)
-        ica_components = ica.components_  # (K, S*T)
+        _logger.info(f"[{label}] Skipping PCA; running FastICA directly on X_st.")
+        ica_scores = ica.fit_transform(X_st)  # (S*T, K)
+        ica_components = ica.components_  # (K, F*C)
     else:
         pca = PCA(n_components=n_pca, random_state=random_state)
-        pca_scores = pca.fit_transform(X_fc)
+        pca_scores = pca.fit_transform(X_st)
         _logger.info(
             f"[{label}] PCA: {pca_scores.shape}, "
             f"explained={np.cumsum(pca.explained_variance_ratio_)[-1] * 100:.1f}%"
         )
         ica_scores = ica.fit_transform(pca_scores)
-        ica_components = ica.components_ @ pca.components_  # (K, S*T)
+        ica_components = ica.components_ @ pca.components_  # (K, F*C)
 
-    # Reshape
-    scores_2d = ica_scores.reshape(n_freqs, n_channels, n_ica)  # (F, C, K)
-    components_2d = ica_components.reshape(n_ica, n_subjects, n_times)  # (K, S, T)
+    # Reshape to natural per-axis layouts
+    scores_3d = ica_scores.reshape(n_subjects, n_times, n_ica)  # (S, T, K)
+    components_2d = ica_components.reshape(n_ica, n_freqs, n_channels)  # (K, F, C)
     _logger.info(
-        f"[{label}] ICA: scores_2d={scores_2d.shape}, "
+        f"[{label}] ICA: scores_3d={scores_3d.shape}, "
         f"components_2d={components_2d.shape}"
     )
+
+    # Views in the shapes expected by the shared plot helpers.
+    # subj_time_view: per-IC subject × time map (used by ISC, sliding LOO-ISC,
+    # loadings bar, mean/var-over-time, time × subject heatmap, LOO-ISC bar).
+    subj_time_view = scores_3d.transpose(2, 0, 1)  # (K, S, T)
+    # freq_chan_view: per-IC freq × channel map (used by topomap, freq × chan
+    # heatmap, time × frequency outer product).
+    freq_chan_view = components_2d.transpose(1, 2, 0)  # (F, C, K)
 
     # Plot 1 — PCA scree (skipped when PCA is not run)
     if not skip_pca:
@@ -1037,11 +1052,10 @@ def _run_subject_time(
             save_path=out_dir / f"{prefix}pca_scree_{label}.png",
         )
 
-    # Per-IC subject × subject ISC matrices, reused by (a), the overall
-    # co-clustering plot, and the CSV cluster export.
+    # Per-IC subject × subject ISC matrices from the temporal score profiles.
     corr_mats = np.zeros((n_ica, n_subjects, n_subjects))
     for k in range(n_ica):
-        corr_mats[k] = np.corrcoef(components_2d[k])  # (S, T) → (S, S)
+        corr_mats[k] = np.corrcoef(subj_time_view[k])  # (S, T) → (S, S)
 
     # Plot 2 — (a) ISC matrix
     _plot_isc_matrix(
@@ -1066,7 +1080,7 @@ def _run_subject_time(
 
     # Plot 3 — (b) Subject loadings bar plot
     _plot_subject_loadings(
-        components_2d,
+        subj_time_view,
         n_ica,
         label=label,
         save_path=out_dir / f"{prefix}ica_subject_loadings_{label}.png",
@@ -1074,8 +1088,8 @@ def _run_subject_time(
 
     # Plot 4 — (c) Time × Frequency map (outer product)
     _plot_time_frequency(
-        scores_2d,
-        components_2d,
+        freq_chan_view,
+        subj_time_view,
         time,
         freqs,
         n_ica,
@@ -1085,7 +1099,7 @@ def _run_subject_time(
 
     # Plot 5 — (d) Mean component channel loading topomap
     _plot_topomap_mean(
-        scores_2d,
+        freq_chan_view,
         info,
         n_channels,
         n_ica,
@@ -1095,7 +1109,7 @@ def _run_subject_time(
 
     # Plot 6 — (e) Mean & variance of IC signal over time across subjects
     _plot_mean_variance_over_time(
-        components_2d,
+        subj_time_view,
         time,
         n_ica,
         label=label,
@@ -1104,7 +1118,7 @@ def _run_subject_time(
 
     # Plot 7 — (f) Sliding-window LOO-ISC per IC, smallest-step variant
     _plot_sliding_window_loo_isc(
-        components_2d,
+        subj_time_view,
         sfreq,
         n_ica,
         sliding_variants,
@@ -1114,16 +1128,16 @@ def _run_subject_time(
 
     # Plot 8 — (g) Time × Subject activation heatmap per IC
     _plot_subject_time_heatmap(
-        components_2d,
+        subj_time_view,
         time,
         n_ica,
         label=label,
         save_path=out_dir / f"{prefix}ica_subject_time_heatmap_{label}.png",
     )
 
-    # Plot 9 — (h) Frequency × Channel heatmap of ICA scores per IC
+    # Plot 9 — (h) Frequency × Channel heatmap of ICA components per IC
     _plot_freq_channel_heatmap(
-        scores_2d,
+        freq_chan_view,
         freqs,
         n_ica,
         label=label,
@@ -1132,7 +1146,7 @@ def _run_subject_time(
 
     # Plot 10 — (i) Mean LOO-ISC across participants per IC (bar plot)
     _plot_loo_isc_bar(
-        components_2d,
+        subj_time_view,
         n_ica,
         label=label,
         save_path=out_dir / f"{prefix}ica_loo_isc_bar_{label}.png",
@@ -1140,7 +1154,7 @@ def _run_subject_time(
 
     n_plots = 11 if not skip_pca else 10
     _logger.info(
-        f"[{label}] Subject-Time: {n_plots} plots + cluster CSV saved to {out_dir}"
+        f"[{label}] Frequency-Channel: {n_plots} plots + cluster CSV saved to {out_dir}"
     )
 
 
@@ -1175,7 +1189,7 @@ if __name__ == "__main__":
     band_name = args.band  # None or e.g. "alpha"
 
     _logger.info(
-        f"Subject-Time ICA: condition={condition.value}, "
+        f"Frequency-Channel ICA: condition={condition.value}, "
         f"music_types={[mt.value for mt in music_types]}, "
         f"n_pca={args.n_pca}, n_ica={args.n_ica}, "
         f"band={band_name or 'broadband'}"
@@ -1206,7 +1220,6 @@ if __name__ == "__main__":
             f"Dataset [{dataset_key}]: shape={ad.data.shape}  sfreq={ad.sfreq} Hz"
         )
 
-        # Compute / load 4D wavelet power (broadband cache; band slice is in-memory)
         wd = _broadband_wavelet_4d(
             ad,
             dataset_key,
@@ -1236,7 +1249,7 @@ if __name__ == "__main__":
             )
 
         save_dir = save_root / _STAGE_DIR / dataset_key
-        _run_subject_time(
+        _run_frequency_channel(
             data_4d,
             wd.sfreq,
             ica_freqs,
@@ -1251,4 +1264,4 @@ if __name__ == "__main__":
             skip_pca=args.skip_pca,
         )
 
-    _logger.info("Subject-Time ICA analysis complete.")
+    _logger.info("Frequency-Channel ICA analysis complete.")
