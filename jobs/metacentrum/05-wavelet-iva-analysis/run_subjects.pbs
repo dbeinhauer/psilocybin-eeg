@@ -1,0 +1,85 @@
+#!/bin/bash
+#PBS -N PSILO_IVA_SUB_05
+#PBS -l walltime=4:00:00
+#PBS -l select=1:ncpus=8:mem=350gb:scratch_local=80gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-05 IVA — subjects-as-datasets variant (broadband).
+#
+# Runs the same pipeline as
+# notebooks/05-wavelet-iva-analysis/wavelet_iva_subjects.ipynb
+# on full data (no subject/channel/time subset). IVA decomposes K = S
+# datasets jointly with per-subject PCA → IVA-G. The downstream plots
+# (PCA scree, source ISC, pattern ISC, LOO-ISC bar, mean/var topomap,
+# time-frequency map, source timecourse mean ± √variance) are saved for
+# the first --n_show components on Placebo × {CLASSIC, PSYTRANCE}.
+#
+# Output:
+#   plots/05-wavelet-iva-analysis/Placebo_CLASSIC/broadband/iva/*.png
+#   plots/05-wavelet-iva-analysis/Placebo_PSYTRANCE/broadband/iva/*.png
+#
+# Reuses cached wavelet tensors from Stage-03 (run_wavelet_power.pbs).
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music.sif"
+
+export TMPDIR=$SCRATCHDIR
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+
+WAVELET_DIR="/mnt/data/processed/psilo_music/wavelets"
+
+python /mnt/scripts/run_wavelet_iva_subjects.py \
+    --condition Placebo \
+    --music_type CLASSIC PSYTRANCE \
+    --n_pca 50 \
+    --n_show 10 \
+    --random_state 42 \
+    --iva_opt_approach newton \
+    --iva_max_iter 1024 \
+    --wavelet_data_dir "$WAVELET_DIR" \
+    --reuse_wavelets \
+    --n_jobs -1
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch
