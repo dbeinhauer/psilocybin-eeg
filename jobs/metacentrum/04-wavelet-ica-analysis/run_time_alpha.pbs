@@ -34,7 +34,7 @@ echo "Task started at $(date)"
 PROJECT_NAME="psilocybin-eeg"
 SERVER_LOCATION="praha1"
 DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
-SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music.sif"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
 
 export TMPDIR=$SCRATCHDIR
 

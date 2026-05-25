@@ -661,6 +661,42 @@ def _plot_topomap_mean_variance(
     plt.close(fig)
 
 
+def _plot_score_timecourses(
+    ica_scores: np.ndarray,
+    time: np.ndarray,
+    n_ica: int,
+    *,
+    label: str,
+    save_path: Path,
+) -> None:
+    """Analysis (g) — Per-component ICA score time courses (raw values).
+
+    ``ica_scores`` has shape ``(T, K)``; each component's column is plotted
+    directly against time — no averaging, because time is already the
+    observation axis here.
+    """
+    n_show = n_ica
+    fig, axes = plt.subplots(n_show, 1, figsize=(14, 2.2 * n_show), sharex=True)
+    if n_show == 1:
+        axes = [axes]
+
+    for i, ax in enumerate(axes):
+        ax.plot(time, ica_scores[:, i], lw=0.8, color="darkorange")
+        ax.axhline(0.0, color="gray", lw=0.5, ls="--")
+        ax.set_ylabel(f"IC {i + 1}")
+        ax.set_title(f"Component {i + 1} — Score Time Course", fontsize=10)
+
+    axes[-1].set_xlabel("Time (s)")
+    fig.suptitle(
+        f"ICA Component Score Time Courses — {label}",
+        fontsize=13,
+        y=1.01,
+    )
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def _plot_pairwise_heatmap(
     maps: np.ndarray,
     n_ica: int,
@@ -898,7 +934,16 @@ def _run_subject_frequency_channel(
         save_path=out_dir / f"{prefix}ica_pairwise_frequency_channel_{label}.png",
     )
 
-    n_plots = 10 if not skip_pca else 9
+    # Plot 10 — (g) Per-component ICA score time courses (raw values)
+    _plot_score_timecourses(
+        ica_scores,
+        time,
+        n_ica,
+        label=label,
+        save_path=out_dir / f"{prefix}ica_component_timecourses_{label}.png",
+    )
+
+    n_plots = 11 if not skip_pca else 10
     _logger.info(
         f"[{label}] Subject-Frequency-Channel: {n_plots} plots + "
         f"cluster CSV saved to {out_dir}"
