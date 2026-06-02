@@ -31,8 +31,16 @@
 # music type starts. Peak memory stays bounded to one music type.
 #
 # Output:
-#   plots/05-wavelet-iva-analysis/Placebo_CLASSIC/broadband/iva_time/*.png
-#   plots/05-wavelet-iva-analysis/Placebo_PSYTRANCE/broadband/iva_time/*.png
+#   plots/05-time-wavelet-iva-analysis/Placebo_CLASSIC/broadband/iva_time/*_top.png
+#   plots/05-time-wavelet-iva-analysis/Placebo_CLASSIC/broadband/iva_time/*_bottom.png
+#   plots/05-time-wavelet-iva-analysis/Placebo_PSYTRANCE/broadband/iva_time/*_top.png
+#   plots/05-time-wavelet-iva-analysis/Placebo_PSYTRANCE/broadband/iva_time/*_bottom.png
+#
+# Components are ranked by the mean off-diagonal value of the per-component
+# Sigma_N correlation matrix returned by iva_g (the IVA model's own
+# estimate of how strongly the kth SCV couples across subjects); the top
+# N_TOP and bottom N_BOTTOM are then visualised separately so the bottom
+# set serves as a noise / no-alignment contrast.
 #
 # Reuses cached wavelet tensors from Stage-03 (run_wavelet_power.pbs).
 # ---------------------------------------------------------------------------
@@ -74,8 +82,9 @@ WAVELET_DIR="/mnt/data/processed/psilo_music/wavelets"
 
 COMMON_ARGS=(
     --condition Placebo
-    --n_pca 50
-    --n_show 10
+    --n_pca 100
+    --n_top 10
+    --n_bottom 5
     --random_state 42
     --iva_opt_approach newton
     --iva_max_iter 1024

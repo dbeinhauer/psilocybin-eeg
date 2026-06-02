@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N PSILO_IVA_FC_05_ALPHA
-#PBS -l walltime=4:00:00
+#PBS -l walltime=1:00:00
 #PBS -l select=1:ncpus=8:mem=499gb:scratch_local=80gb
 #PBS -m ae
 #PBS -j oe
@@ -23,8 +23,16 @@
 # OS before the next music type starts.
 #
 # Output:
-#   plots/05-wavelet-iva-analysis/Placebo_CLASSIC/bands/iva_frequency_channel/alpha_*.png
-#   plots/05-wavelet-iva-analysis/Placebo_PSYTRANCE/bands/iva_frequency_channel/alpha_*.png
+#   plots/05-frequency-channel-wavelet-iva-analysis/Placebo_CLASSIC/
+#       bands/iva_frequency_channel/alpha_*_top.png and alpha_*_bottom.png
+#   plots/05-frequency-channel-wavelet-iva-analysis/Placebo_PSYTRANCE/
+#       bands/iva_frequency_channel/alpha_*_top.png and alpha_*_bottom.png
+#
+# Components are ranked by the mean off-diagonal value of the per-component
+# Sigma_N correlation matrix returned by iva_g (the IVA model's own
+# estimate of how strongly the kth SCV couples across subjects); the top
+# N_TOP and bottom N_BOTTOM are then visualised separately so the bottom
+# set serves as a noise / no-alignment contrast.
 # ---------------------------------------------------------------------------
 
 set -e
@@ -65,8 +73,9 @@ WAVELET_DIR="/mnt/data/processed/psilo_music/wavelets"
 COMMON_ARGS=(
     --condition Placebo
     --band alpha
-    --n_pca 10
-    --n_show 10
+    --n_pca 30
+    --n_top 10
+    --n_bottom 5
     --random_state 42
     --iva_opt_approach newton
     --iva_max_iter 1024

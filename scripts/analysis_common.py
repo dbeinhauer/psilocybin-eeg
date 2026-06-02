@@ -222,8 +222,9 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--wavelet_n_freqs",
         type=int,
-        default=20,
-        help="Number of frequency steps for wavelet analysis (default: 20).",
+        default=40,
+        help="Number of frequency steps for wavelet analysis "
+        "(default: 40, ≈ 1 Hz resolution over 1-40 Hz).",
     )
     parser.add_argument(
         "--wavelet_bands",

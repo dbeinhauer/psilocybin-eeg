@@ -225,8 +225,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--wavelet_n_freqs",
         type=int,
-        default=20,
-        help="Number of Morlet frequency steps.",
+        default=40,
+        help="Number of Morlet frequency steps (≈ 1 Hz resolution by default).",
     )
     parser.add_argument(
         "--wavelet_data_dir",

@@ -24,6 +24,7 @@ from src.analysis.wavelet_ica import (
     decompose_inverted_superbrain,
     decompose_subject_frequency,
     zscore_by_time,
+    align_iva_component_signs,
 )
 
 # ---------------------------------------------------------------------------
@@ -344,6 +345,107 @@ class TestInputNotMutated:
         original = synthetic_data.copy()
         decompose_fn(synthetic_data, n_pca=N_PCA, n_ica=N_ICA)
         np.testing.assert_array_equal(synthetic_data, original)
+
+
+# ---------------------------------------------------------------------------
+# IVA sign-alignment tests
+# ---------------------------------------------------------------------------
+
+
+def _make_iva_inputs(true_signs: np.ndarray, n_comp: int = 3):
+    """Build synthetic (sigma_n, W) where component 0 has known sign flips.
+
+    Component 0's correlation matrix is a rank-1-plus-identity structure with a
+    strictly positive consensus eigenvector, then corrupted by ``true_signs``
+    (so mismatched subjects show negative cross-correlations). Remaining
+    components are clean (all-positive) so they should incur no flips.
+    """
+    n_subjects = true_signs.shape[0]
+    sigma_n = np.zeros((n_subjects, n_subjects, n_comp))
+    # Distinct positive loadings → a unique largest-magnitude eigenvector entry.
+    a = np.linspace(0.9, 0.3, n_subjects)
+    base = np.outer(a, a) + np.eye(n_subjects) * 0.1
+    d = np.sqrt(np.diag(base))
+    clean_corr = base / np.outer(d, d)
+    sigma_n[:, :, 0] = clean_corr * np.outer(true_signs, true_signs)
+    for k in range(1, n_comp):
+        sigma_n[:, :, k] = clean_corr
+    rng = np.random.default_rng(0)
+    W = rng.standard_normal((n_comp, n_comp, n_subjects))
+    return sigma_n, W, clean_corr
+
+
+class TestAlignIvaComponentSigns:
+    """align_iva_component_signs must undo per-subject sign ambiguity."""
+
+    def test_output_shapes(self) -> None:
+        true_signs = np.array([1.0, -1.0, 1.0, -1.0, 1.0])
+        sigma_n, W, _ = _make_iva_inputs(true_signs)
+        n_subjects, _, n_comp = sigma_n.shape
+        sigma_corr, W_aligned, signs = align_iva_component_signs(sigma_n, W)
+        assert sigma_corr.shape == (n_comp, n_subjects, n_subjects)
+        assert W_aligned.shape == W.shape
+        assert signs.shape == (n_comp, n_subjects)
+
+    def test_recovers_known_flips(self) -> None:
+        # First entry positive so there is no global-sign ambiguity to chase.
+        true_signs = np.array([1.0, -1.0, 1.0, -1.0, 1.0])
+        sigma_n, W, _ = _make_iva_inputs(true_signs)
+        _sigma_corr, _W_aligned, signs = align_iva_component_signs(sigma_n, W)
+        np.testing.assert_array_equal(signs[0], true_signs)
+
+    def test_aligned_correlation_is_all_positive(self) -> None:
+        true_signs = np.array([1.0, -1.0, 1.0, -1.0, 1.0])
+        sigma_n, W, clean_corr = _make_iva_inputs(true_signs)
+        sigma_corr, _W_aligned, _signs = align_iva_component_signs(sigma_n, W)
+        # The flips should restore the original all-positive correlations.
+        np.testing.assert_allclose(sigma_corr[0], clean_corr, atol=1e-10)
+        assert (sigma_corr[0] > 0).all()
+
+    def test_clean_components_unchanged(self) -> None:
+        true_signs = np.array([1.0, -1.0, 1.0, -1.0, 1.0])
+        sigma_n, W, _ = _make_iva_inputs(true_signs)
+        _sigma_corr, _W_aligned, signs = align_iva_component_signs(sigma_n, W)
+        # Components 1..K already aligned → no subject flipped.
+        np.testing.assert_array_equal(signs[1:], np.ones_like(signs[1:]))
+
+    def test_w_rows_flipped_by_signs(self) -> None:
+        true_signs = np.array([1.0, -1.0, 1.0, -1.0, 1.0])
+        sigma_n, W, _ = _make_iva_inputs(true_signs)
+        _sigma_corr, W_aligned, signs = align_iva_component_signs(sigma_n, W)
+        for k in range(W.shape[0]):
+            expected = W[k] * signs[k][np.newaxis, :]
+            np.testing.assert_allclose(W_aligned[k], expected)
+
+    def test_source_recovery_consistency(self) -> None:
+        # Recovering sources with W_aligned == flipping recovered sources by sign.
+        true_signs = np.array([1.0, -1.0, 1.0, -1.0])
+        sigma_n, W, _ = _make_iva_inputs(true_signs, n_comp=2)
+        n_subjects, _, n_comp = sigma_n.shape
+        rng = np.random.default_rng(7)
+        X = rng.standard_normal((n_comp, 50, n_subjects))  # (K, T, S)
+        _sigma_corr, W_aligned, signs = align_iva_component_signs(sigma_n, W)
+        for subj in range(n_subjects):
+            orig = W[:, :, subj] @ X[:, :, subj]
+            aligned = W_aligned[:, :, subj] @ X[:, :, subj]
+            np.testing.assert_allclose(
+                aligned, orig * signs[:, subj][:, np.newaxis], atol=1e-10
+            )
+
+    def test_input_not_mutated(self) -> None:
+        true_signs = np.array([1.0, -1.0, 1.0])
+        sigma_n, W, _ = _make_iva_inputs(true_signs)
+        sigma_n_copy, W_copy = sigma_n.copy(), W.copy()
+        align_iva_component_signs(sigma_n, W)
+        np.testing.assert_array_equal(sigma_n, sigma_n_copy)
+        np.testing.assert_array_equal(W, W_copy)
+
+    def test_rejects_bad_shapes(self) -> None:
+        with pytest.raises(ValueError):
+            align_iva_component_signs(np.zeros((3, 4, 2)), np.zeros((2, 2, 3)))
+        with pytest.raises(ValueError):
+            # W shape inconsistent with sigma_n.
+            align_iva_component_signs(np.zeros((4, 4, 3)), np.zeros((3, 3, 5)))
 
 
 # ---------------------------------------------------------------------------

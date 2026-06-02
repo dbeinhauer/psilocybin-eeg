@@ -474,3 +474,81 @@ def decompose_subject_frequency(
         n_freqs=F,
         n_times=T,
     )
+
+
+# ---------------------------------------------------------------------------
+# IVA per-subject sign alignment
+# ---------------------------------------------------------------------------
+
+
+def align_iva_component_signs(
+    sigma_n: np.ndarray, W: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Resolve per-subject sign ambiguity of IVA components.
+
+    Independent Vector Analysis (e.g. ``iva_g``) recovers each source-component
+    vector (SCV) only up to a per-subject sign: subject *i*'s copy of component
+    *k* may be the negative of subject *j*'s. Left unresolved, this corrupts any
+    cross-subject comparison (correlations between mismatched subjects come out
+    negative even when the underlying activity is shared).
+
+    For each component ``k`` this routine normalises ``Sigma_N[:, :, k]`` to a
+    subject × subject correlation matrix, takes its leading eigenvector (largest
+    eigenvalue) as the dominant cross-subject direction, orients that
+    eigenvector so its largest-magnitude entry is positive (eigenvectors are
+    only defined up to sign), and flips every subject whose loading on it is
+    negative. Flipping subject *i* on component *k* means negating row ``i`` and
+    column ``i`` of that component's correlation matrix and negating component
+    ``k``'s row of subject *i*'s unmixing matrix.
+
+    The returned ``signs`` array lets callers propagate the same flips to
+    already-recovered sources / component patterns; equivalently, recovering
+    sources with the returned ``W_aligned`` yields sign-aligned sources directly.
+
+    :param sigma_n: ``(S, S, K)`` source covariance from the IVA model (``S``
+        subjects/datasets, ``K`` components), as returned by ``iva_g``.
+    :param W: ``(K, K, S)`` per-subject IVA unmixing matrices.
+    :return: ``(sigma_corr, W_aligned, signs)`` where ``sigma_corr`` is the
+        sign-aligned ``(K, S, S)`` correlation stack, ``W_aligned`` is a
+        sign-aligned copy of ``W`` (``(K, K, S)``), and ``signs`` is the
+        ``(K, S)`` array of ``+1`` / ``-1`` flips applied per component &
+        subject.
+    """
+    if sigma_n.ndim != 3 or sigma_n.shape[0] != sigma_n.shape[1]:
+        raise ValueError(
+            f"sigma_n must be (S, S, K) with a square subject axis; "
+            f"got shape {sigma_n.shape}."
+        )
+    n_subjects, _, n_comp = sigma_n.shape
+    if W.shape != (n_comp, n_comp, n_subjects):
+        raise ValueError(
+            f"W must be (K, K, S) = ({n_comp}, {n_comp}, {n_subjects}) to match "
+            f"sigma_n; got shape {W.shape}."
+        )
+
+    sigma_corr = np.zeros((n_comp, n_subjects, n_subjects))
+    signs = np.ones((n_comp, n_subjects))
+    W_aligned = W.copy()
+
+    for k in range(n_comp):
+        cov = sigma_n[:, :, k]
+        d = np.sqrt(np.clip(np.diag(cov), 1e-12, None))
+        corr = cov / np.outer(d, d)
+
+        # Leading eigenvector = dominant cross-subject mode. ``eigh`` returns
+        # eigenvalues in ascending order, so the last column is the largest.
+        _eigvals, eigvecs = np.linalg.eigh(corr)
+        v = eigvecs[:, -1]
+        # Eigenvectors are defined up to sign; orient so the largest-magnitude
+        # entry is positive (robust, matches sklearn's svd_flip convention).
+        if v[np.argmax(np.abs(v))] < 0.0:
+            v = -v
+
+        s = np.where(v < 0.0, -1.0, 1.0)
+        signs[k] = s
+        # Flip mismatched subjects: corr[i, j] *= s_i * s_j (diagonal unchanged).
+        sigma_corr[k] = corr * np.outer(s, s)
+        # Negate component k's unmixing row for each flipped subject.
+        W_aligned[k, :, :] *= s[np.newaxis, :]
+
+    return sigma_corr, W_aligned, signs
