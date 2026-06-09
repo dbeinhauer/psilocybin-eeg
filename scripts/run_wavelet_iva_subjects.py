@@ -63,7 +63,10 @@ from scripts.analysis_common import (  # noqa: E402
     analyzers_to_datasets,
     load_analyzers,
 )
-from src.analysis.wavelet_ica import zscore_by_time  # noqa: E402
+from src.analysis.wavelet_ica import (  # noqa: E402
+    align_iva_component_signs,
+    zscore_by_time,
+)
 from src.definitions.constants import ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
     ConditionVariants,
@@ -207,13 +210,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--wavelet_freq_max",
         type=float,
-        default=70.0,
-        help="Maximum Morlet frequency (Hz).",
+        default=40.0,
+        help="Maximum Morlet frequency (Hz). Capped at 40 Hz to match the "
+        "Stage-04 ICA upper bound (higher frequencies are not computationally "
+        "feasible here).",
     )
     parser.add_argument(
         "--wavelet_n_freqs",
         type=int,
-        default=70,
+        default=40,
         help="Number of Morlet frequency steps (≈ 1 Hz resolution by default).",
     )
     parser.add_argument(
@@ -649,7 +654,7 @@ def _run_iva_subjects(
     # Step 3 — Run IVA-G.
     rng = np.random.default_rng(random_state)
     W_init = rng.standard_normal((n_pca, n_pca, n_subjects))
-    W, cost, _Sigma_N, _isi = iva_g(
+    W, cost, Sigma_N, _isi = iva_g(
         X_pca,
         opt_approach=iva_opt_approach,
         whiten=True,
@@ -660,6 +665,17 @@ def _run_iva_subjects(
     )
     _logger.info(
         f"[{label}] IVA-G: iterations={len(cost)}  final cost={cost[-1]:.6f}"
+    )
+
+    # Step 3b — Resolve per-subject sign ambiguity. IVA recovers each component
+    # only up to a per-subject sign; flip mismatched subjects (using the leading
+    # eigenvector of each component's Sigma_N correlation matrix) so that W — and
+    # everything recovered from it below — is sign-aligned across subjects.
+    _sigma_corr, W, sign_flips = align_iva_component_signs(Sigma_N, W)
+    n_flipped = int((sign_flips < 0).sum())
+    _logger.info(
+        f"[{label}] Sign alignment: flipped {n_flipped} (component, subject) "
+        f"pairs across {n_pca} components."
     )
 
     # Step 4 — Recover sources (PCA space) and components in the (F, C) feature space.
