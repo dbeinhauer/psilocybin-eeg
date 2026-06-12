@@ -168,6 +168,7 @@ class DatasetHandler(LoggerMixin):
         :param experiment_name: Which experiment dataset to use (e.g. ExperimentNames.PSILO_MUSIC).
         :param coordinate_system: Electrode coordinate system for montage loading.
         """
+        self.experiment_name = experiment_name
         (
             self.raw_data_dir,  # Raw data directory
             self.participant_map_path,  # Path to CSV mapping for each experiment (Placebo/Psilocybin)
@@ -178,7 +179,9 @@ class DatasetHandler(LoggerMixin):
             self.excluded_participants_path,  # Path to CSV list of excluded participants.
         ) = self._init_dataset_paths(experiment_name, coordinate_system)
 
-        self.dataset_parser = DatasetParser(self.participant_map_path)
+        self.dataset_parser = DatasetParser(
+            experiment_name, self.participant_map_path
+        )
         self.dataset_metadata = self.dataset_parser.parse_dataset_filenames(
             self.raw_data_dir
         )
@@ -510,6 +513,7 @@ class DatasetHandler(LoggerMixin):
                         save_fig=original_filename.split(".")[0],
                         plot_variant=plot_variant,
                         variant_name=data_variant,
+                        experiment_name=self.experiment_name.value,
                     )
                 else:
                     if plot_variant == "power_spectrum":
@@ -542,6 +546,7 @@ class DatasetHandler(LoggerMixin):
                             plot_variant=plot_variant,
                             variant_name=data_variant,
                             title=f"IC - {excluded_row[ExcludedICsMetadata.IC_ID.value]}, {excluded_row[ExcludedICsMetadata.IC_CATEGORY.value]}, p: {excluded_row[ExcludedICsMetadata.MAIN_PROBABILITY.value]:.2f}",
+                            experiment_name=self.experiment_name.value,
                         )
 
         self.logger.info("Plotting successfully finished")

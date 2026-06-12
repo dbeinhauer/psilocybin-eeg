@@ -12,6 +12,8 @@ class ExperimentNames(Enum):
 
     # Experiment with placebo and psilocybin, with music listening.
     PSILO_MUSIC = "psilo_music"
+    # Auditory steady-state response experiment (no music, Placebo only).
+    ASSR = "assr"
 
 
 class CoordinateSystems(Enum):
@@ -85,6 +87,8 @@ class MusicTypeVariants(Enum):
 
     CLASSICAL = "CLASSIC"
     PSYTRANCE = "PSYTRANCE"
+    # Placeholder "music type" for the ASSR experiment, which has no music dimension.
+    ASSR = "ASSR"
 
 
 # All data types of the SingleDataMetadata values.
@@ -129,6 +133,7 @@ class ExclusionCategories(Enum):
         "missing_trials"  # Some of the trials are missing for the participant
     )
     ARTIFACTS = "artifacts"  # Too many artifacts in the data (also after preprocessing)
+    WRONG_CONDITION = "wrong_condition"  # Recorded under the wrong measurement condition.
 
 
 class FrequencyBandNames(Enum):

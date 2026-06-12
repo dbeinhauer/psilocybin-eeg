@@ -12,6 +12,7 @@ import pandas as pd
 
 from src.utils.logging_config import LoggerMixin
 from src.definitions.fields import (
+    ExperimentNames,
     SingleDataMetadata,
     ConditionVariants,
     MusicTypeVariants,
@@ -39,13 +40,50 @@ class DatasetParser(LoggerMixin):
     """
     A class to parse dataset filenames and extract metadata from it. The filenames are expected to follow a specific format.
 
-    Format: PSI{participant_id}_EEG{condition_id}_MUSIC_{music_type}_EC_{rest_of_filename_date}.edf
+    The exact format depends on the experiment (see ``_FILENAME_PATTERNS``):
+
+    - PSILO_MUSIC: PSI{participant_id}_EEG{condition_id}_MUSIC_{music_type}_EC_{rest}.edf
+    - ASSR:        PSI{participant_id}_EEG{condition_id}_ASSR_{rest}.edf
+
+    The experimental condition (Placebo/Psilocybin) is always derived from the
+    participant mapping. Experiments without a music dimension (e.g. ASSR) use a
+    fixed default music type instead of parsing it from the filename (see
+    ``_DEFAULT_MUSIC_TYPE``).
     """
 
-    def __init__(self, participant_map_path: Path):
+    # Per-experiment filename regex. Group 1 = participant id, group 2 = EEG
+    # condition id ('A'/'B'). Experiments with a music dimension capture the music
+    # type in group 3.
+    _FILENAME_PATTERNS = {
+        ExperimentNames.PSILO_MUSIC: r"PSI(\d{3})_EEG([A-Za-z])_MUSIC_(\w+)_EC_(.+)\.edf",
+        ExperimentNames.ASSR: r"PSI(\d{3})_EEG([A-Za-z])_ASSR_(.+)\.edf",
+    }
+
+    # Music type assigned for experiments that have no music dimension encoded in
+    # their filenames. Experiments not listed here parse the music type from the
+    # filename instead.
+    _DEFAULT_MUSIC_TYPE = {
+        ExperimentNames.ASSR: MusicTypeVariants.ASSR,
+    }
+
+    def __init__(
+        self,
+        experiment_name: ExperimentNames,
+        participant_map_path: Path,
+    ):
         """
-        :param participant_map_path: Path to CSV file containing participant mapping information.
+        :param experiment_name: Which experiment dataset is being parsed. Determines
+            the expected filename pattern and how the music type is assigned.
+        :param participant_map_path: Path to CSV file containing participant mapping
+            information (used to derive the Placebo/Psilocybin condition). Required:
+            parsing a dataset without the condition mapping is not supported.
+        :raises FileNotFoundError: If the participant mapping file does not exist.
         """
+        if participant_map_path is None or not participant_map_path.exists():
+            raise FileNotFoundError(
+                f"Participant mapping file is required but was not found: {participant_map_path}"
+            )
+        self.experiment_name = experiment_name
         self.participant_map = pd.read_csv(participant_map_path, sep=";")
 
     def _assign_condition_variant(
@@ -81,19 +119,35 @@ class DatasetParser(LoggerMixin):
 
         return check_enum_value_in_variants(ConditionVariants, condition_string)
 
+    def _assign_music_type(self, match: re.Match) -> MusicTypeVariants | None:
+        """
+        Assigns the music type for the current experiment.
+
+        For experiments without a music dimension (see ``_DEFAULT_MUSIC_TYPE``) a
+        fixed default is returned. Otherwise the music type is parsed from the
+        third regex group of the filename.
+
+        :param match: Regex match of the filename against the experiment pattern.
+        :return: Corresponding MusicTypeVariants enum if valid, None otherwise.
+        """
+        if self.experiment_name in self._DEFAULT_MUSIC_TYPE:
+            return self._DEFAULT_MUSIC_TYPE[self.experiment_name]
+        return check_enum_value_in_variants(MusicTypeVariants, match.group(3).upper())
+
     def parse_filename(
         self, filename: str
     ) -> dict[SingleDataMetadata, SingleDataMetadataTypes] | None:
         """
         Parse EDF filename to extract metadata.
 
-        Format: PSI{participant_id}_EEG{condition_id}_MUSIC_{music_type}_EC_{rest_of_filename_date}.edf
+        The expected filename format depends on ``self.experiment_name`` (see
+        ``_FILENAME_PATTERNS``).
 
         :param filename: Name of the EDF file to parse
         :return: Dictionary with keys corresponding to SingleDataMetadata.
                  Returns None if filename doesn't match expected pattern or contains invalid metadata.
         """
-        pattern = r"PSI(\d{3})_EEG([A-Za-z])_MUSIC_(\w+)_EC_(.+)\.edf"
+        pattern = self._FILENAME_PATTERNS[self.experiment_name]
 
         match = re.match(pattern, filename)
 
@@ -104,7 +158,6 @@ class DatasetParser(LoggerMixin):
         # Extract groups
         participant_id = match.group(1)
         condition_value = match.group(2)
-        music_type_value = match.group(3)
 
         results = {
             SingleDataMetadata.PARTICIPANT_ID: participant_id,
@@ -121,12 +174,10 @@ class DatasetParser(LoggerMixin):
         results[SingleDataMetadata.EEG_CONDITION_ID] = eeg_condition_id
 
         # Parse music type.
-        music_type_value = check_enum_value_in_variants(
-            MusicTypeVariants, music_type_value.upper()
-        )
+        music_type_value = self._assign_music_type(match)
         if music_type_value is None:
             self.logger.error(
-                f"Invalid music type value: '{music_type_value}' in filename: {filename}"
+                f"Invalid music type value in filename: {filename}"
             )
             return None
         results[SingleDataMetadata.MUSIC_TYPE] = music_type_value
