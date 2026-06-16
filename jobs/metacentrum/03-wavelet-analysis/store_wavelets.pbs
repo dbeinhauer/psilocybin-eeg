@@ -56,18 +56,22 @@ WAVELET_DIR="/mnt/data/processed/psilo_music/wavelets"
 # ===== WAVELET POWER =====
 
 # ----- Placebo -----
+# To restrict to specific music types, add:  --music_type CLASSIC PSYTRANCE
+# (omitted -> defaults to all music types for the experiment)
 python /mnt/scripts/run_analysis.py \
     --analysis wavelet_power \
+    --experiment psilo_music \
     --condition Placebo \
-    --music_type CLASSIC PSYTRANCE \
     --wavelet_bands delta theta alpha \
     --wavelet_data_dir "$WAVELET_DIR" \
     --n_jobs -1
 
+# To restrict to specific music types, add:  --music_type CLASSIC PSYTRANCE
+# (omitted -> defaults to all music types for the experiment)
 python /mnt/scripts/run_analysis.py \
     --analysis wavelet_power \
+    --experiment psilo_music \
     --condition Placebo \
-    --music_type CLASSIC PSYTRANCE \
     --wavelet_bands beta gamma \
     --skip_wavelet_broadband \
     --wavelet_data_dir "$WAVELET_DIR" \
@@ -77,6 +81,7 @@ python /mnt/scripts/run_analysis.py \
 # ----- Psilocybin (uncomment to enable) -----
 # python /mnt/scripts/run_analysis.py \
 #     --analysis wavelet_power \
+#     --experiment psilo_music \
 #     --condition Psilocybin \
 #     --music_type CLASSIC PSYTRANCE \
 #     --wavelet_bands delta theta alpha \
@@ -85,6 +90,7 @@ python /mnt/scripts/run_analysis.py \
 #
 # python /mnt/scripts/run_analysis.py \
 #     --analysis wavelet_power \
+#     --experiment psilo_music \
 #     --condition Psilocybin \
 #     --music_type CLASSIC PSYTRANCE \
 #     --wavelet_bands beta gamma \
@@ -94,18 +100,22 @@ python /mnt/scripts/run_analysis.py \
 #     --n_jobs -1
 
 # ----- Placebo -----
+# To restrict to specific music types, add:  --music_type CLASSIC PSYTRANCE
+# (omitted -> defaults to all music types for the experiment)
 python /mnt/scripts/run_analysis.py \
     --analysis wavelet_phase \
+    --experiment psilo_music \
     --condition Placebo \
-    --music_type CLASSIC PSYTRANCE \
     --wavelet_bands delta theta alpha \
     --wavelet_data_dir "$WAVELET_DIR" \
     --n_jobs -1
 
+# To restrict to specific music types, add:  --music_type CLASSIC PSYTRANCE
+# (omitted -> defaults to all music types for the experiment)
 python /mnt/scripts/run_analysis.py \
     --analysis wavelet_phase \
+    --experiment psilo_music \
     --condition Placebo \
-    --music_type CLASSIC PSYTRANCE \
     --wavelet_bands beta gamma \
     --skip_wavelet_broadband \
     --wavelet_data_dir "$WAVELET_DIR" \
@@ -115,6 +125,7 @@ python /mnt/scripts/run_analysis.py \
 # ----- Psilocybin (uncomment to enable) -----
 # python /mnt/scripts/run_analysis.py \
 #     --analysis wavelet_phase \
+#     --experiment psilo_music \
 #     --condition Psilocybin \
 #     --music_type CLASSIC PSYTRANCE \
 #     --wavelet_bands delta theta alpha \
@@ -123,6 +134,7 @@ python /mnt/scripts/run_analysis.py \
 #
 # python /mnt/scripts/run_analysis.py \
 #     --analysis wavelet_phase \
+#     --experiment psilo_music \
 #     --condition Psilocybin \
 #     --music_type CLASSIC PSYTRANCE \
 #     --wavelet_bands beta gamma \

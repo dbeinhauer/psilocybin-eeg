@@ -82,7 +82,8 @@ WAVELET_DIR="/mnt/data/processed/psilo_music/wavelets"
 
 COMMON_ARGS=(
     --condition Placebo
-    --n_pca 100
+    --experiment psilo_music
+    --n_pca 30
     --n_top 10
     --n_bottom 5
     --random_state 42

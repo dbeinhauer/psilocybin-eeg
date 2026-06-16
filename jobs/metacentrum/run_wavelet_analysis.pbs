@@ -40,18 +40,22 @@ cd "$SCRATCHDIR"
 cat << 'EOF' > run_inside.sh
 #!/bin/bash
 source /opt/myproject/.venv/bin/activate
+# To restrict to specific music types, add:  --music_type CLASSIC PSYTRANCE
+# (omitted -> defaults to all music types for the experiment)
 python /mnt/scripts/run_analysis.py \
 --analysis wavelet_power \
+--experiment psilo_music \
 --condition Placebo \
---music_type CLASSIC PSYTRANCE \
 --wavelet_bands delta theta alpha \
 --wavelet_data_dir /mnt/data/processed/psilo_music/wavelets \
 --n_jobs -1
 
+# To restrict to specific music types, add:  --music_type CLASSIC PSYTRANCE
+# (omitted -> defaults to all music types for the experiment)
 python /mnt/scripts/run_analysis.py \
 --analysis wavelet_power \
+--experiment psilo_music \
 --condition Placebo \
---music_type CLASSIC PSYTRANCE \
 --wavelet_bands beta gamma \
 --skip_wavelet_broadband \
 --wavelet_data_dir /mnt/data/processed/psilo_music/wavelets \

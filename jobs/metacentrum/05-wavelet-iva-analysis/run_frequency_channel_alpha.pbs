@@ -72,6 +72,7 @@ WAVELET_DIR="/mnt/data/processed/psilo_music/wavelets"
 
 COMMON_ARGS=(
     --condition Placebo
+    --experiment psilo_music
     --band alpha
     --n_pca 30
     --n_top 10
