@@ -151,6 +151,70 @@ class TestFilterByExclusionCategories:
         assert len(result) == 0
 
 
+class TestFilterByAllCategoriesExclusionWildcards:
+    """Blank condition / music type in exclusion metadata acts as a wildcard."""
+
+    def test_blank_music_type_excludes_all_music_types(self, dataset_metadata):
+        # Participant 001 excluded with no music type -> dropped from every music
+        # type of the selected (Placebo) condition.
+        excluded = pd.DataFrame(
+            {
+                SingleDataMetadata.PARTICIPANT_ID.value: ["001"],
+                SingleDataMetadata.CONDITION.value: ["Placebo"],
+                SingleDataMetadata.MUSIC_TYPE.value: [""],
+                SingleDataMetadata.EXCLUSION_EXPLANATION.value: ["artifacts"],
+            }
+        )
+        result = DatasetFilter.filter_dataset_by_all_categories(
+            dataset_metadata,
+            excluded,
+            [MusicTypeVariants.CLASSICAL, MusicTypeVariants.PSYTRANCE],
+            [ConditionVariants.PLACEBO],
+            [ExclusionCategories.ARTIFACTS],
+        )
+        assert "001" not in result[SingleDataMetadata.PARTICIPANT_ID].tolist()
+        assert "003" in result[SingleDataMetadata.PARTICIPANT_ID].tolist()
+
+    def test_blank_condition_excludes_all_conditions(self, dataset_metadata):
+        # Participant 002 excluded with no condition -> dropped regardless of the
+        # requested condition.
+        excluded = pd.DataFrame(
+            {
+                SingleDataMetadata.PARTICIPANT_ID.value: ["002"],
+                SingleDataMetadata.CONDITION.value: [""],
+                SingleDataMetadata.MUSIC_TYPE.value: [""],
+                SingleDataMetadata.EXCLUSION_EXPLANATION.value: ["missing_trials"],
+            }
+        )
+        result = DatasetFilter.filter_dataset_by_all_categories(
+            dataset_metadata,
+            excluded,
+            [MusicTypeVariants.CLASSICAL, MusicTypeVariants.PSYTRANCE],
+            [ConditionVariants.PSILOCYBIN],
+            [ExclusionCategories.MISSING_TRIALS],
+        )
+        assert "002" not in result[SingleDataMetadata.PARTICIPANT_ID].tolist()
+
+    def test_exclusion_respects_specified_condition(self, dataset_metadata):
+        # Exclusion specified for Psilocybin only must not drop the Placebo rows.
+        excluded = pd.DataFrame(
+            {
+                SingleDataMetadata.PARTICIPANT_ID.value: ["001"],
+                SingleDataMetadata.CONDITION.value: ["Psilocybin"],
+                SingleDataMetadata.MUSIC_TYPE.value: [""],
+                SingleDataMetadata.EXCLUSION_EXPLANATION.value: ["artifacts"],
+            }
+        )
+        result = DatasetFilter.filter_dataset_by_all_categories(
+            dataset_metadata,
+            excluded,
+            [MusicTypeVariants.CLASSICAL, MusicTypeVariants.PSYTRANCE],
+            [ConditionVariants.PLACEBO],
+            [ExclusionCategories.ARTIFACTS],
+        )
+        assert "001" in result[SingleDataMetadata.PARTICIPANT_ID].tolist()
+
+
 class TestGetUniqueValues:
     def test_get_unique_participant_ids(self, dataset_metadata):
         result = DatasetFilter.get_unique_values(

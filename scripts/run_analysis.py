@@ -40,6 +40,7 @@ from src.definitions.fields import (
     ConditionVariants,
     ExclusionCategories,
     AnalysisVariants,
+    ExperimentNames,
 )
 from src.definitions.constants import ProjectPaths
 
@@ -65,8 +66,15 @@ if __name__ == "__main__":
         )
 
     # ── Configuration ─────────────────────────────────────────────
+    experiment_name = ExperimentNames(args.experiment)
     condition = ConditionVariants(args.condition)
-    music_types = [MusicTypeVariants(mt) for mt in args.music_type]
+    if args.music_type is not None:
+        music_types = [MusicTypeVariants(mt) for mt in args.music_type]
+    elif experiment_name == ExperimentNames.ASSR:
+        # ASSR has no music dimension; uses a single placeholder "music type".
+        music_types = [MusicTypeVariants.ASSR]
+    else:
+        music_types = [MusicTypeVariants.CLASSICAL, MusicTypeVariants.PSYTRANCE]
     exclusion_categories = [
         ExclusionCategories.BAD_MUSIC,
         ExclusionCategories.ARTIFACTS,
@@ -94,6 +102,7 @@ if __name__ == "__main__":
         args.process_and_save,
         n_jobs=args.n_jobs,
         normalize_data=False,
+        experiment_name=experiment_name,
     )
     raw_datasets = analyzers_to_datasets(analyzers) if run_wavelet else None
 
@@ -105,7 +114,11 @@ if __name__ == "__main__":
     # the representation is encoded in the cached filename. This lets the
     # power workflow reuse a pre-computed phase cache for the power-vs-phase
     # joint plot.
-    wavelet_cache_root = Path(args.wavelet_data_dir)
+    wavelet_cache_root = (
+        Path(args.wavelet_data_dir)
+        if args.wavelet_data_dir is not None
+        else ProjectPaths.PROCESSED_DATA_DIR / experiment_name.value / "wavelets"
+    )
 
     # ── Wavelet power analysis ────────────────────────────────────
     if run_wavelet_power:

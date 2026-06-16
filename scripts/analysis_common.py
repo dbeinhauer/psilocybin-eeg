@@ -136,6 +136,13 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--experiment",
+        type=str,
+        default=ExperimentNames.PSILO_MUSIC.value,
+        choices=[e.value for e in ExperimentNames],
+        help="Which experiment dataset to analyse.",
+    )
+    parser.add_argument(
         "--condition",
         type=str,
         default=ConditionVariants.PLACEBO.value,
@@ -149,9 +156,13 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--music_type",
         type=str,
         nargs="+",
-        default=[mt.value for mt in MusicTypeVariants],
+        default=None,
         choices=[mt.value for mt in MusicTypeVariants],
-        help="One or more music types to analyse. Defaults to all available types.",
+        help=(
+            "One or more music types to analyse. When omitted, defaults to "
+            "all music types for the psilo_music experiment and ASSR for the "
+            "assr experiment."
+        ),
     )
     parser.add_argument(
         "--process_and_save",
@@ -249,14 +260,10 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--wavelet_data_dir",
         type=str,
-        default=str(
-            ProjectPaths.PROCESSED_DATA_DIR
-            / ExperimentNames.PSILO_MUSIC.value
-            / "wavelets"
-        ),
+        default=None,
         help=(
-            "Directory for storing wavelet-transformed datasets for future use "
-            "(default: data/processed/psilo_music/wavelets)."
+            "Directory for storing wavelet-transformed datasets for future use. "
+            "When omitted, defaults to data/processed/<experiment>/wavelets."
         ),
     )
     parser.add_argument(
@@ -310,12 +317,18 @@ def load_analyzers(
     process_and_save: bool,
     n_jobs: int = -1,
     normalize_data: bool = True,
+    experiment_name: ExperimentNames = ExperimentNames.PSILO_MUSIC,
 ) -> dict[str, EEGSummarizedAnalyzer]:
     """Load (or process & save) and normalise analysers for each music type.
 
     Returns a dict keyed by ``"{condition}_{music_type}"``
     (e.g. ``"Placebo_CLASSIC"``), matching the on-disk data file naming
     convention used by :meth:`~src.analysis.summary.EEGSummarizedAnalyzer.save_data`.
+
+    :param experiment_name: Which experiment dataset to load. Defaults to the
+        psilocybin music-listening experiment; pass
+        :attr:`~src.definitions.fields.ExperimentNames.ASSR` for the
+        auditory steady-state response experiment.
     """
     from src.analysis.summary import EEGSummarizedAnalyzer
 
@@ -323,7 +336,7 @@ def load_analyzers(
     for mt in music_types:
         label = f"{condition.value}_{mt.value}"
         analyzer = EEGSummarizedAnalyzer(
-            experiment_name=ExperimentNames.PSILO_MUSIC,
+            experiment_name=experiment_name,
             coordinate_system=CoordinateSystems.HYDROGEL_257_NO_FIDUCIALS,
             music_types=[mt],
             conditions=[condition],

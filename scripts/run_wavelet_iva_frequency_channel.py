@@ -159,6 +159,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
+        "--experiment",
+        choices=[e.value for e in ExperimentNames],
+        default=ExperimentNames.PSILO_MUSIC.value,
+        help="Which experiment dataset to analyse.",
+    )
+    parser.add_argument(
         "--condition",
         choices=[c.value for c in ConditionVariants],
         default=ConditionVariants.PLACEBO.value,
@@ -168,11 +174,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--music_type",
         nargs="+",
         choices=[mt.value for mt in MusicTypeVariants],
-        default=[
-            MusicTypeVariants.CLASSICAL.value,
-            MusicTypeVariants.PSYTRANCE.value,
-        ],
-        help="One or more music types to analyse.",
+        default=None,
+        help=(
+            "One or more music types to analyse. When omitted, defaults to "
+            "CLASSIC + PSYTRANCE for the psilo_music experiment and ASSR for "
+            "the assr experiment."
+        ),
     )
     parser.add_argument(
         "--n_pca",
@@ -245,11 +252,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--wavelet_data_dir",
         type=Path,
-        default=(
-            ProjectPaths.PROCESSED_DATA_DIR
-            / ExperimentNames.PSILO_MUSIC.value
-            / "wavelets"
-        ),
+        default=None,
         help="Directory for cached wavelet tensors.",
     )
     parser.add_argument(
@@ -1194,14 +1197,25 @@ if __name__ == "__main__":
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
+    experiment_name = ExperimentNames(args.experiment)
     condition = ConditionVariants(args.condition)
-    music_types = [MusicTypeVariants(mt) for mt in args.music_type]
+    if args.music_type is not None:
+        music_types = [MusicTypeVariants(mt) for mt in args.music_type]
+    elif experiment_name == ExperimentNames.ASSR:
+        # ASSR has no music dimension; uses a single placeholder "music type".
+        music_types = [MusicTypeVariants.ASSR]
+    else:
+        music_types = [MusicTypeVariants.CLASSICAL, MusicTypeVariants.PSYTRANCE]
     exclusion_categories = [
         ExclusionCategories.BAD_MUSIC,
         ExclusionCategories.ARTIFACTS,
     ]
     save_root = args.save_dir if args.save_dir is not None else ProjectPaths.PLOTS_PATH
-    wavelet_dir = Path(args.wavelet_data_dir)
+    wavelet_dir = (
+        Path(args.wavelet_data_dir)
+        if args.wavelet_data_dir is not None
+        else ProjectPaths.PROCESSED_DATA_DIR / experiment_name.value / "wavelets"
+    )
     freqs_full = np.linspace(
         args.wavelet_freq_min,
         args.wavelet_freq_max,
@@ -1224,6 +1238,7 @@ if __name__ == "__main__":
         args.process_and_save,
         n_jobs=args.n_jobs,
         normalize_data=False,
+        experiment_name=experiment_name,
     )
     datasets = analyzers_to_datasets(analyzers)
 
