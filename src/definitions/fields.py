@@ -134,6 +134,7 @@ class ExclusionCategories(Enum):
     )
     ARTIFACTS = "artifacts"  # Too many artifacts in the data (also after preprocessing)
     WRONG_CONDITION = "wrong_condition"  # Recorded under the wrong measurement condition.
+    ORPHAN_BGIN = "orphan_bgin"  # `bgin` annotation label without corresponding stimulus label (fam+ in ASSR).
 
 
 class FrequencyBandNames(Enum):

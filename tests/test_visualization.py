@@ -70,9 +70,16 @@ class TestGetPlotPath:
 
     def test_default_path_construction(self):
         path = DatasetPlotter.get_plot_path(
-            "test.png", "power_spectrum", "after_ica", ""
+            "test.png", "power_spectrum", "after_ica", "", experiment_name="assr"
         )
-        expected = ProjectPaths.PLOTS_PATH / "power_spectrum" / "after_ica" / "test.png"
+        expected = (
+            ProjectPaths.PLOTS_PATH
+            / "00-preprocessing"
+            / "assr"
+            / "power_spectrum"
+            / "after_ica"
+            / "test.png"
+        )
         assert path == expected
 
 

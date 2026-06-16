@@ -45,6 +45,13 @@ from src.preprocessing.ica import (
     apply_ica_component_filtering,
 )
 from src.preprocessing.time_alignment import TimeAligner, TAGObject
+from src.preprocessing.stimulus_alignment import (
+    StimulusAligner,
+    align_raws,
+    coarse_crop_to_stimulus_span,
+    DEFAULT_STIMULUS_LABEL,
+    EXPERIMENT_STIMULUS_LABELS,
+)
 from src.filtering.dataset_filter import DatasetFilter
 from src.visualization.preprocessing_plots import DatasetPlotter
 from src.utils.logging_config import LoggerMixin
@@ -58,12 +65,27 @@ class DatasetPreprocessor(LoggerMixin):
     Delegates to focused modules in src.preprocessing (channel_prep, filtering, ica).
     """
 
-    def __init__(self, coordinates_file_path: Path, excluded_coordinates_path: Path):
+    def __init__(
+        self,
+        coordinates_file_path: Path,
+        excluded_coordinates_path: Path,
+        stimulus_label: str | None = None,
+        coarse_crop_trim_sec: float = 10.0,
+        coarse_crop_min_keep_sec: float = 0.5,
+    ):
         """
         Initialize the preprocessor with electrode coordinate and exclusion information.
 
         :param coordinates_file_path: Path to the SFP montage file with electrode positions.
         :param excluded_coordinates_path: Path to CSV listing electrodes to exclude (e.g. boundary electrodes).
+        :param stimulus_label: If set, the recording is coarsely cropped around the
+            span of these stimulus annotations instead of using the fixed start/end
+            crop. Keeps the data continuous for filtering/ICA while never dropping a
+            stimulus.
+        :param coarse_crop_trim_sec: Maximum amount trimmed from each end of the
+            recording during the stimulus-aware coarse crop.
+        :param coarse_crop_min_keep_sec: Minimum data kept before the first and after
+            the last onset during the stimulus-aware coarse crop.
         """
         self.montage = load_coordinates_file(coordinates_file_path)
         # List of all electrodes that we want to exclude.
@@ -72,6 +94,9 @@ class DatasetPreprocessor(LoggerMixin):
             .str.strip()
             .tolist()
         )
+        self.stimulus_label = stimulus_label
+        self.coarse_crop_trim_sec = coarse_crop_trim_sec
+        self.coarse_crop_min_keep_sec = coarse_crop_min_keep_sec
 
     def _data_preparation(self, data: mne.io.Raw) -> tuple[mne.io.Raw, mne.io.Raw]:
         """
@@ -84,19 +109,39 @@ class DatasetPreprocessor(LoggerMixin):
         :param data: Data to be processed.
         :return: Returns tuple of prepared data splitted on EEG and rest of channels.
         """
-        prepared_data = crop_start_and_end_of_dataseries(
+        prepared_data = self._coarse_crop(
             exclude_selected_channels(
                 add_coordinates_montage(data, self.montage, logger=self.logger),
                 self.electrodes_to_exclude,
                 logger=self.logger,
-            ),
-            logger=self.logger,
+            )
         )
 
         eeg_data = prepared_data.copy().pick_types(eeg=True)
         aux_data = prepared_data.copy().pick_types(eeg=False, ecg=True, stim=True)
 
         return eeg_data, aux_data
+
+    def _coarse_crop(self, data: mne.io.Raw) -> mne.io.Raw:
+        """
+        Coarsely trim the noisy recording lead-in/lead-out.
+
+        For experiments with stimulus annotations (``self.stimulus_label`` set) the
+        recording is cropped to the stimulus span plus a margin, so no stimulus is
+        lost to a blind fixed crop. Otherwise the fixed start/end crop is used.
+
+        :param data: Data to trim.
+        :return: Coarsely cropped data (still continuous, no splicing).
+        """
+        if self.stimulus_label is not None:
+            return coarse_crop_to_stimulus_span(
+                data,
+                stimulus_label=self.stimulus_label,
+                trim_sec=self.coarse_crop_trim_sec,
+                min_keep_sec=self.coarse_crop_min_keep_sec,
+                logger=self.logger,
+            )
+        return crop_start_and_end_of_dataseries(data, logger=self.logger)
 
     def _filter_data(self, eeg_data: mne.io.Raw) -> mne.io.Raw:
         """
@@ -186,7 +231,9 @@ class DatasetHandler(LoggerMixin):
             self.raw_data_dir
         )
         self.dataset_preprocessor = DatasetPreprocessor(
-            self.coordinates_path, self.excluded_electrodes_path
+            self.coordinates_path,
+            self.excluded_electrodes_path,
+            stimulus_label=EXPERIMENT_STIMULUS_LABELS.get(experiment_name),
         )
         self.dataset_excluded_ics_metadata = self._init_excluded_ics_metadata()
         self.excluded_participants_metadata = pd.read_csv(
@@ -681,3 +728,64 @@ class DatasetHandler(LoggerMixin):
             self.save_data_file(
                 cropped, filename.split(".")[0], PreprocessedDataVariants.RAW_CROPPED
             )
+
+    def align_stimuli_by_annotations(
+        self,
+        music_type: MusicTypeVariants,
+        condition_type: ConditionVariants,
+        exclusion_categories: list[ExclusionCategories],
+        stimulus_label: str = DEFAULT_STIMULUS_LABEL,
+        keep_tail_sec: float = 0.1,
+        pre_window_sec: float | None = None,
+        post_window_sec: float | None = None,
+        data_type_to_load: PreprocessedDataVariants = PreprocessedDataVariants.RAW_AFTER_ICA,
+    ) -> tuple[pd.DataFrame, list[mne.io.Raw], StimulusAligner]:
+        """
+        Aligns stimulus onsets across the participants of one group by trimming the
+        inter-stimulus intervals and splicing the EEG (see
+        :mod:`src.preprocessing.stimulus_alignment`).
+
+        Each over-long interval is trimmed from the front to the group-wide minimum
+        for that interval, preserving ``keep_tail_sec`` of continuous data before
+        every onset. The resulting recordings have equal length with stimulus onsets
+        at identical sample positions.
+
+        :param music_type: Music type to include.
+        :param condition_type: Condition type to include (ConditionVariants.PLACEBO or ConditionVariants.PSILOCYBIN).
+        :param exclusion_categories: Which categories of participants to exclude.
+        :param stimulus_label: Annotation description marking a stimulus onset.
+        :param keep_tail_sec: Continuous data preserved immediately before each onset.
+        :param pre_window_sec: Optional cap on the window kept before the first onset.
+            Defaults to ``None`` (keep the per-subject shortest available lead-in),
+            which finishes the cross-subject alignment begun by the coarse crop during
+            preprocessing. Pass a value to cap it.
+        :param post_window_sec: Optional cap on the window kept after the last onset.
+            Defaults to ``None`` (keep the shortest available lead-out).
+        :param data_type_to_load: The type of processed data to load and align.
+        :return: Tuple of (filtered metadata DataFrame, aligned recordings in the
+            same row order, fitted StimulusAligner).
+        """
+        filtered_df = DatasetFilter.filter_dataset_by_all_categories(
+            self.dataset_metadata,
+            self.excluded_participants_metadata,
+            [music_type],
+            [condition_type],
+            exclusion_categories,
+        )
+        raws = [
+            self.load_data_file(
+                row[SingleDataMetadata.FILENAME],
+                is_processed=True,
+                processed_data_type=data_type_to_load,
+                preload=True,
+            )
+            for _, row in filtered_df.iterrows()
+        ]
+        aligned, aligner = align_raws(
+            raws,
+            stimulus_label=stimulus_label,
+            keep_tail_sec=keep_tail_sec,
+            pre_window_sec=pre_window_sec,
+            post_window_sec=post_window_sec,
+        )
+        return filtered_df, aligned, aligner

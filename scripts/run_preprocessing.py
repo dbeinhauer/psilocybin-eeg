@@ -19,7 +19,6 @@ if __name__ == "__main__":
         "--experiment",
         type=str,
         default=ExperimentNames.PSILO_MUSIC.value,
-        # default=ExperimentNames.ASSR.value,
         choices=[experiment.value for experiment in ExperimentNames],
         help="Which experiment dataset to preprocess.",
     )
