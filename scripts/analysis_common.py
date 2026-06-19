@@ -116,6 +116,44 @@ BAND_ISC_THRESHOLDS: dict[str, float] = {
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Path resolution
+# ──────────────────────────────────────────────────────────────────────
+
+
+def resolve_wavelet_dir(
+    base: str | Path | None,
+    experiment_name: ExperimentNames,
+) -> Path:
+    """Resolve the wavelet cache directory for a given experiment.
+
+    The ``<experiment>/wavelets`` suffix is *always* part of the returned
+    path, so the wavelets of one experiment can never be written into another
+    experiment's directory — even when an explicit base directory is supplied.
+
+    :param base: Optional base *data* directory. When ``None``, defaults to
+        :attr:`ProjectPaths.PROCESSED_DATA_DIR`. It must point at a data root,
+        not at an experiment-specific or ``wavelets`` directory; the
+        ``<experiment>/wavelets`` suffix is appended automatically.
+    :param experiment_name: Experiment whose wavelets are being stored/loaded.
+    :returns: ``<base>/<experiment>/wavelets``.
+    :raises ValueError: If ``base`` already contains an experiment-name
+        segment (e.g. a stale ``.../psilo_music/wavelets`` path), which would
+        nest or mis-route the cache across experiments.
+    """
+    root = Path(base) if base is not None else ProjectPaths.PROCESSED_DATA_DIR
+    experiment_values = {e.value for e in ExperimentNames}
+    offending = experiment_values.intersection(root.parts)
+    if offending:
+        raise ValueError(
+            "--wavelet_data_dir must be a base data directory, not an "
+            f"experiment-specific path (found experiment segment(s) "
+            f"{sorted(offending)} in '{root}'). The '<experiment>/wavelets' "
+            "suffix is added automatically — pass e.g. 'data/processed'."
+        )
+    return root / experiment_name.value / "wavelets"
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Argument parsing
 # ──────────────────────────────────────────────────────────────────────
 
@@ -275,8 +313,11 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         type=str,
         default=None,
         help=(
-            "Directory for storing wavelet-transformed datasets for future use. "
-            "When omitted, defaults to data/processed/<experiment>/wavelets."
+            "Base data directory under which wavelet-transformed datasets are "
+            "stored. The '<experiment>/wavelets' suffix is appended "
+            "automatically, so pass a data root (e.g. data/processed), NOT an "
+            "experiment-specific path. When omitted, defaults to "
+            "data/processed. Resolves to <base>/<experiment>/wavelets."
         ),
     )
     parser.add_argument(

@@ -12,12 +12,15 @@ Usage examples::
 
     # Wavelet power analysis (Placebo condition)
     python scripts/run_analysis.py --analysis wavelet_power \\
-        --wavelet_data_dir data/processed/psilo_music/wavelets
+        --wavelet_data_dir data/processed
 
     # Wavelet phase analysis, single music type (Placebo condition)
     python scripts/run_analysis.py --analysis wavelet_phase \\
         --music_type CLASSIC \\
-        --wavelet_data_dir data/processed/psilo_music/wavelets
+        --wavelet_data_dir data/processed
+
+Note: --wavelet_data_dir is a base data directory; the
+``<experiment>/wavelets`` suffix is appended automatically.
 """
 
 import argparse
@@ -33,6 +36,7 @@ from scripts.analysis_common import (
     add_common_arguments,
     load_analyzers,
     analyzers_to_datasets,
+    resolve_wavelet_dir,
     run_wavelet_workflow,
 )
 from src.definitions.fields import (
@@ -123,11 +127,7 @@ if __name__ == "__main__":
     # the representation is encoded in the cached filename. This lets the
     # power workflow reuse a pre-computed phase cache for the power-vs-phase
     # joint plot.
-    wavelet_cache_root = (
-        Path(args.wavelet_data_dir)
-        if args.wavelet_data_dir is not None
-        else ProjectPaths.PROCESSED_DATA_DIR / experiment_name.value / "wavelets"
-    )
+    wavelet_cache_root = resolve_wavelet_dir(args.wavelet_data_dir, experiment_name)
 
     # ── Wavelet power analysis ────────────────────────────────────
     if run_wavelet_power:

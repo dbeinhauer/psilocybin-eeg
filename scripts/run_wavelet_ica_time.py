@@ -62,6 +62,7 @@ from scripts.analysis_common import (  # noqa: E402
     add_wavelet_grid_args,
     analyzers_to_datasets,
     load_analyzers,
+    resolve_wavelet_dir,
 )
 from src.analysis.wavelet_ica import zscore_by_time  # noqa: E402
 from src.definitions.constants import ProjectPaths  # noqa: E402
@@ -1090,11 +1091,7 @@ if __name__ == "__main__":
         ExclusionCategories.ARTIFACTS,
     ]
     save_root = args.save_dir if args.save_dir is not None else ProjectPaths.PLOTS_PATH
-    wavelet_dir = (
-        Path(args.wavelet_data_dir)
-        if args.wavelet_data_dir is not None
-        else ProjectPaths.PROCESSED_DATA_DIR / experiment_name.value / "wavelets"
-    )
+    wavelet_dir = resolve_wavelet_dir(args.wavelet_data_dir, experiment_name)
     freqs = np.linspace(
         args.wavelet_freq_min,
         args.wavelet_freq_max,

@@ -1,7 +1,4 @@
-data/raw
-data/processed
-data/interim
-data/excluded_participants
+data/*/
 config/participant_mappings/
 plots/
 results/

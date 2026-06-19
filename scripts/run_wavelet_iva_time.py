@@ -76,6 +76,7 @@ from scripts.analysis_common import (  # noqa: E402
     add_wavelet_grid_args,
     analyzers_to_datasets,
     load_analyzers,
+    resolve_wavelet_dir,
 )
 from src.analysis.wavelet_ica import (  # noqa: E402
     align_iva_component_signs,
@@ -1128,7 +1129,7 @@ def _run_iva(
             subj_freq,
             freqs,
             y_label="Frequency (Hz)",
-            variant_name=f"Subject × Frequency (channel-avg scores)",
+            variant_name="Subject × Frequency (channel-avg scores)",
             labels=labels_grp,
             label=label,
             save_path=out_dir / f"{prefix}iva_pairmap_subject_frequency_{label}_{suffix}.png",
@@ -1139,7 +1140,7 @@ def _run_iva(
             subj_chan,
             np.arange(n_channels),
             y_label="Channel",
-            variant_name=f"Subject × Channel (frequency-avg scores)",
+            variant_name="Subject × Channel (frequency-avg scores)",
             labels=labels_grp,
             label=label,
             save_path=out_dir / f"{prefix}iva_pairmap_subject_channel_{label}_{suffix}.png",
@@ -1200,11 +1201,7 @@ if __name__ == "__main__":
         ExclusionCategories.ARTIFACTS,
     ]
     save_root = args.save_dir if args.save_dir is not None else ProjectPaths.PLOTS_PATH
-    wavelet_dir = (
-        Path(args.wavelet_data_dir)
-        if args.wavelet_data_dir is not None
-        else ProjectPaths.PROCESSED_DATA_DIR / experiment_name.value / "wavelets"
-    )
+    wavelet_dir = resolve_wavelet_dir(args.wavelet_data_dir, experiment_name)
     freqs_full = np.linspace(
         args.wavelet_freq_min,
         args.wavelet_freq_max,
