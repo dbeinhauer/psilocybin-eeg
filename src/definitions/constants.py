@@ -28,6 +28,7 @@ class ProjectPaths:
         CONFIG_DIR / "excluded_electrodes"
     )  # Directory where excluded electrodes from processing are stored (we want to typically omit the boundary electrodes).
     EXCLUDED_ICS_FILENAME_MAPPING = "excluded_ics_mapping.csv"  # Filename where the mapping of all ICs selected for exclusion are stored alongside with their category.
+    STIMULUS_ONSETS_SUFFIX = ".stimulus_onsets.npy"  # Filename suffix for the stimulus-onset sample positions saved next to a concatenated data array (same prefix as the array).
     PLOTS_PATH = PROJECT_ROOT / "plots"  # Path to all project plots.
     RESULTS_DB_PATH = (
         PROJECT_ROOT / "results_db"

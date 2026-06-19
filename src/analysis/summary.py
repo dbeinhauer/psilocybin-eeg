@@ -22,6 +22,10 @@ import pandas as pd
 from scipy.stats import zscore
 
 from src.preprocessing.pipeline import DatasetHandler
+from src.preprocessing.stimulus_alignment import (
+    EXPERIMENT_STIMULUS_LABELS,
+    get_stimulus_onset_samples,
+)
 from src.filtering.dataset_filter import DatasetFilter
 from src.definitions.constants import ProjectPaths
 from src.definitions.fields import (
@@ -108,6 +112,15 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         self.info: Optional[mne.Info] = None
         self.resample_freq: Optional[float] = None
 
+        # Stimulus-onset annotation label for this experiment (e.g. ``fam+`` for
+        # ASSR), or ``None`` for experiments without stimulus annotations. When set,
+        # the onset sample positions (identical across subjects by construction) are
+        # extracted during loading and saved next to the concatenated data.
+        self._stimulus_label: Optional[str] = EXPERIMENT_STIMULUS_LABELS.get(
+            experiment_name
+        )
+        self.stimulus_onsets: Optional[np.ndarray] = None
+
     # ------------------------------------------------------------------ #
     #  Data loading                                                         #
     # ------------------------------------------------------------------ #
@@ -153,10 +166,40 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         self._refresh_info(raws[0].info)
         self.resample_freq = resample_freq
 
+        # Stimulus onsets, on the same sample grid as the concatenated data. The
+        # alignment makes them identical across subjects, so the first recording is
+        # representative.
+        self.stimulus_onsets = self._extract_stimulus_onsets(raws[0])
+
         self.data = np.array([r.get_data() for r in raws])  # (n_subj, n_ch, n_times)
         self.logger.info(f"Data array shape: {self.data.shape}")
 
         return self.data, self.info
+
+    def _extract_stimulus_onsets(self, raw: mne.io.Raw) -> Optional[np.ndarray]:
+        """
+        Extract the stimulus-onset sample positions mapping onto the time axis of
+        :attr:`data`.
+
+        The stimulus alignment splices every recording so that each onset lands at
+        the same sample index in all participants, so a single (here resampled)
+        recording is representative of the whole group.
+
+        :param raw: A loaded (resampled) recording of the current group.
+        :return: Sorted array of onset sample indices, or ``None`` when the
+            experiment has no stimulus annotations / none are present.
+        """
+        if self._stimulus_label is None:
+            return None
+
+        onsets = get_stimulus_onset_samples(raw, self._stimulus_label)
+        if len(onsets) == 0:
+            self.logger.warning(
+                f"No '{self._stimulus_label}' annotations found in the loaded "
+                "recordings; skipping stimulus-onset extraction."
+            )
+            return None
+        return onsets
 
     def _refresh_info(self, info: mne.Info) -> None:
         """Store an mne.Info copy taken from the first loaded raw object."""
@@ -209,6 +252,14 @@ class EEGSummarizedAnalyzer(LoggerMixin):
 
         np.save(save_path, self.data)
 
+        if self.stimulus_onsets is not None:
+            onsets_path = self._stimulus_onsets_path(save_path)
+            np.save(onsets_path, self.stimulus_onsets)
+            self.logger.info(
+                f"Stimulus onsets saved to {onsets_path} "
+                f"({len(self.stimulus_onsets)} onsets)."
+            )
+
         if self.filtered_df is not None:
             resolved_metadata_path = (
                 Path(metadata_path)
@@ -259,6 +310,14 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         self.data = np.load(load_path)
         self.logger.info(f"Data loaded from {load_path}  (shape={self.data.shape})")
 
+        onsets_path = self._stimulus_onsets_path(load_path)
+        if onsets_path.exists():
+            self.stimulus_onsets = np.load(onsets_path)
+            self.logger.info(
+                f"Stimulus onsets loaded from {onsets_path} "
+                f"({len(self.stimulus_onsets)} onsets)."
+            )
+
         if metadata_path is not None:
             resolved_metadata_path = Path(metadata_path)
         else:
@@ -284,6 +343,17 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         self.resample_freq = resample_freq
 
         return self.data, self.info
+
+    @staticmethod
+    def _stimulus_onsets_path(data_path: Path) -> Path:
+        """
+        Build the stimulus-onsets file path for a concatenated data array.
+
+        Same prefix as the data array, with the
+        :attr:`~src.definitions.constants.ProjectPaths.STIMULUS_ONSETS_SUFFIX` suffix
+        (e.g. ``Placebo_ASSR.npy`` -> ``Placebo_ASSR.stimulus_onsets.npy``).
+        """
+        return data_path.parent / (data_path.stem + ProjectPaths.STIMULUS_ONSETS_SUFFIX)
 
     def _default_metadata_save_path(self) -> Path:
         """
