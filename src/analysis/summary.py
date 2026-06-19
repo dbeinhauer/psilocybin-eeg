@@ -29,11 +29,11 @@ from src.definitions.fields import (
     ConditionVariants,
     ExclusionCategories,
     ExperimentNames,
-    FrequencyBandNames,
     MusicTypeVariants,
     PreprocessedDataVariants,
     SingleDataMetadata,
 )
+from src.definitions.frequency import FREQUENCY_BANDS
 from src.analysis.isc import (
     compute_loo_isc as _compute_loo_isc,
     compute_pairwise_isc as _compute_pairwise_isc,
@@ -41,20 +41,6 @@ from src.analysis.isc import (
     compute_sliding_window_isc as _compute_sliding_window_isc,
 )
 from src.utils.logging_config import LoggerMixin
-
-# ---------------------------------------------------------------------------
-# Module-level constants
-# ---------------------------------------------------------------------------
-
-#: Standard EEG frequency bands used for band-specific ISC analysis.
-#: Each entry maps a :class:`FrequencyBandNames` value to ``(l_freq, h_freq)`` in Hz.
-FREQUENCY_BANDS: dict[str, tuple[float, float]] = {
-    FrequencyBandNames.DELTA.value: (1.0, 4.0),
-    FrequencyBandNames.THETA.value: (4.0, 8.0),
-    FrequencyBandNames.ALPHA.value: (8.0, 13.0),
-    FrequencyBandNames.BETA.value: (13.0, 30.0),
-    FrequencyBandNames.GAMMA.value: (30.0, 70.0),
-}
 
 
 class EEGSummarizedAnalyzer(LoggerMixin):

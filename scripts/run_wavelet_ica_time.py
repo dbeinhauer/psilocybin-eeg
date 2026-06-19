@@ -59,6 +59,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from scripts.analysis_common import (  # noqa: E402
     FREQUENCY_BANDS,
     _broadband_wavelet_4d,
+    add_wavelet_grid_args,
     analyzers_to_datasets,
     load_analyzers,
 )
@@ -217,24 +218,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=42,
         help="Seed shared by PCA and FastICA.",
     )
-    parser.add_argument(
-        "--wavelet_freq_min",
-        type=float,
-        default=1.0,
-        help="Minimum Morlet frequency (Hz).",
-    )
-    parser.add_argument(
-        "--wavelet_freq_max",
-        type=float,
-        default=40.0,
-        help="Maximum Morlet frequency (Hz).",
-    )
-    parser.add_argument(
-        "--wavelet_n_freqs",
-        type=int,
-        default=40,
-        help="Number of Morlet frequency steps (≈ 1 Hz resolution by default).",
-    )
+    add_wavelet_grid_args(parser)
     parser.add_argument(
         "--wavelet_data_dir",
         type=Path,

@@ -33,6 +33,11 @@ from src.definitions.fields import (
     AnalysisVariants,
 )
 from src.definitions.constants import ProjectPaths
+from src.definitions.frequency import (
+    WAVELET_FREQ_MAX,
+    WAVELET_FREQ_MIN,
+    WAVELET_N_FREQS,
+)
 import numpy as np
 from scipy.stats import circmean
 
@@ -113,6 +118,32 @@ BAND_ISC_THRESHOLDS: dict[str, float] = {
 # ──────────────────────────────────────────────────────────────────────
 # Argument parsing
 # ──────────────────────────────────────────────────────────────────────
+
+
+def add_wavelet_grid_args(parser: argparse.ArgumentParser) -> None:
+    """Add the three wavelet-grid CLI arguments shared across wavelet scripts."""
+    parser.add_argument(
+        "--wavelet_freq_min",
+        type=float,
+        default=WAVELET_FREQ_MIN,
+        help="Minimum Morlet frequency (Hz). Defaults to the project-wide "
+        "wavelet grid minimum (src.definitions.frequency.WAVELET_FREQ_MIN).",
+    )
+    parser.add_argument(
+        "--wavelet_freq_max",
+        type=float,
+        default=WAVELET_FREQ_MAX,
+        help="Maximum Morlet frequency (Hz). Defaults to the project-wide "
+        "wavelet grid maximum (src.definitions.frequency.WAVELET_FREQ_MAX).",
+    )
+    parser.add_argument(
+        "--wavelet_n_freqs",
+        type=int,
+        default=WAVELET_N_FREQS,
+        help="Number of Morlet frequency steps. Defaults to the project-wide "
+        "wavelet grid size (src.definitions.frequency.WAVELET_N_FREQS), giving "
+        "≈ 1 Hz resolution over the default range.",
+    )
 
 
 def add_common_arguments(parser: argparse.ArgumentParser) -> None:
@@ -218,25 +249,7 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
             "Use -1 to use all available CPUs (default: 1)."
         ),
     )
-    parser.add_argument(
-        "--wavelet_freq_min",
-        type=float,
-        default=1.0,
-        help="Minimum frequency (Hz) for wavelet analysis (default: 1.0).",
-    )
-    parser.add_argument(
-        "--wavelet_freq_max",
-        type=float,
-        default=40.0,
-        help="Maximum frequency (Hz) for wavelet analysis (default: 40.0).",
-    )
-    parser.add_argument(
-        "--wavelet_n_freqs",
-        type=int,
-        default=40,
-        help="Number of frequency steps for wavelet analysis "
-        "(default: 40, ≈ 1 Hz resolution over 1-40 Hz).",
-    )
+    add_wavelet_grid_args(parser)
     parser.add_argument(
         "--wavelet_bands",
         type=str,
@@ -509,12 +522,6 @@ def run_isc_workflow(
 # ──────────────────────────────────────────────────────────────────────
 # Wavelet workflow helpers
 # ──────────────────────────────────────────────────────────────────────
-
-#: Frequency resolution (Hz) used when building per-band Morlet frequencies.
-WAVELET_BAND_FREQ_RESOLUTION_HZ: float = 1.0
-#: Alias retained for backward compatibility with older call-sites.
-_WAVELET_BAND_FREQ_RESOLUTION_HZ: float = WAVELET_BAND_FREQ_RESOLUTION_HZ
-
 
 def wavelet_transform(
     datasets: dict[str, AnalysisData],
@@ -863,55 +870,44 @@ def _try_load_phase_band_iscs(
     label: str,
     *,
     wavelet_dir: Path | None,
+    freqs: np.ndarray,
     bands: dict[str, tuple[float, float]],
 ) -> dict[str, np.ndarray]:
-    """Load cached per-band phase wavelets and compute LOO-ISC(cos φ).
+    """Compute per-band phase LOO-ISC(cos φ) from the broadband phase cache.
 
     Used by the wavelet-power workflow to render the optional power vs.
-    phase joint plot. Returns ``{}`` (and logs a warning) when no per-band
-    phase cache exists.
+    phase joint plot. Slices the cached *broadband* phase wavelet tensor per
+    band (matching the broadband-only caching scheme) rather than reading
+    separate per-band caches. Returns ``{}`` (and logs) when no broadband
+    phase cache is present.
     """
     if wavelet_dir is None:
         return {}
-    out: dict[str, np.ndarray] = {}
+    bb_phase_dir = wavelet_dir / "broadband"
     safe_label = re.sub(r"[^A-Za-z0-9_-]", "_", label).strip("_")
     if not safe_label:
         safe_label = f"dataset_{hashlib.sha256(label.encode()).hexdigest()[:8]}"
-    for band, (lo, hi) in bands.items():
-        band_dir = wavelet_dir / f"band_{band}"
-        n_freqs_band = max(
-            2,
-            int(round((hi - lo) / _WAVELET_BAND_FREQ_RESOLUTION_HZ)) + 1,
+    freq_sig = f"{freqs[0]:.3f}_{freqs[-1]:.3f}_{len(freqs)}"
+    cache_file = bb_phase_dir / f"{safe_label}__wavelet_phase__{freq_sig}__freqdim1.npz"
+    if not cache_file.exists():
+        _logger.info(
+            f"[{label}] No broadband phase wavelet cache "
+            f"(expected {cache_file.name}); skipping power_phase_joint plot."
         )
-        band_freqs = np.linspace(lo, hi, n_freqs_band)
-        freq_sig = f"{band_freqs[0]:.3f}_{band_freqs[-1]:.3f}_{len(band_freqs)}"
-        cache_file = band_dir / f"{safe_label}__wavelet_phase__{freq_sig}__freqdim1.npz"
-        if not cache_file.exists():
-            _logger.info(
-                f"[{label}] No phase wavelet cache for band {band!r} "
-                f"(expected {cache_file.name}); "
-                "skipping power_phase_joint contribution for this band."
-            )
-            continue
-        try:
-            phase_band = wavelet_transform(
-                {label: ad},
-                band_freqs,
-                representation="phase",
-                keep_frequency_dim=False,
-                reshape_frequency_dim=False,
-                wavelet_dir=band_dir,
-                reuse_wavelets=True,
-            )
-        except Exception as exc:  # pragma: no cover - defensive
-            _logger.warning(
-                f"[{label}] Failed to load phase cache for band {band!r}: {exc}"
-            )
-            continue
-        cos_phase = np.cos(phase_band[label].data)
-        _, mean_loo = compute_loo_isc(cos_phase)
-        out[band] = mean_loo
-    return out
+        return {}
+    try:
+        phase_4d = _broadband_wavelet_4d(
+            ad,
+            label,
+            representation="phase",
+            freqs=freqs,
+            wavelet_dir=bb_phase_dir,
+            reuse_wavelets=True,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        _logger.warning(f"[{label}] Failed to load broadband phase cache: {exc}")
+        return {}
+    return compute_phase_band_loo_iscs(phase_4d.data, freqs, bands=bands)
 
 
 def _run_wavelet_workflow_for_label(
@@ -953,18 +949,21 @@ def _run_wavelet_workflow_for_label(
     bb_sw_for_overlap: tuple[np.ndarray, np.ndarray] | None = None
     band_mean_iscs_from_bb: dict[str, np.ndarray] = {}
 
-    if include_broadband:
-        wd_4d = _broadband_wavelet_4d(
-            ad,
-            label,
-            representation=representation,
-            freqs=freqs,
-            wavelet_dir=(wavelet_dir / "broadband") if wavelet_dir else None,
-            reuse_wavelets=reuse_wavelets,
-        )
-        bb_4d_data = wd_4d.data  # (n_subj, n_ch, n_freqs, n_times)
-        _logger.info(f"[{label}] broadband 4D shape: {bb_4d_data.shape}")
+    # Compute (or load) the broadband 4D wavelet tensor once. Both the
+    # broadband stage and the per-band stage slice this same tensor along the
+    # frequency axis — no separate per-band wavelet is computed or cached.
+    wd_4d = _broadband_wavelet_4d(
+        ad,
+        label,
+        representation=representation,
+        freqs=freqs,
+        wavelet_dir=(wavelet_dir / "broadband") if wavelet_dir else None,
+        reuse_wavelets=reuse_wavelets,
+    )
+    bb_4d_data = wd_4d.data  # (n_subj, n_ch, n_freqs, n_times)
+    _logger.info(f"[{label}] broadband 4D shape: {bb_4d_data.shape}")
 
+    if include_broadband:
         # Reduce to 3D for mean-variance and ISC plots.
         wd_3d = _wavelet_4d_to_3d(
             wd_4d,
@@ -1203,6 +1202,7 @@ def _run_wavelet_workflow_for_label(
                 ad,
                 label,
                 wavelet_dir=cross_representation_wavelet_dir,
+                freqs=freqs,
                 bands=selected_bands,
             )
             if phase_band_iscs:
@@ -1290,7 +1290,8 @@ def _run_wavelet_workflow_for_label(
                 save_path=bb_dir / "itpc_vs_isc" / f"itpc_vs_isc_{label}.png",
             )
 
-        del wd_4d, wd_3d, bb_4d_data, data_sub_bb
+        # Keep wd_4d / bb_4d_data — the per-band stage slices them below.
+        del wd_3d, data_sub_bb
 
     # ── Per-band wavelet mean-variance and ISC ───────────────────
     band_loo_iscs: dict[str, tuple[np.ndarray, np.ndarray]] = {}
@@ -1310,25 +1311,34 @@ def _run_wavelet_workflow_for_label(
     band_loo_dir.mkdir(parents=True, exist_ok=True)
 
     for band, (l_freq, h_freq) in selected_bands.items():
-        n_freqs_band = max(
-            2,
-            int(round((h_freq - l_freq) / _WAVELET_BAND_FREQ_RESOLUTION_HZ)) + 1,
-        )
+        band_mask = (freqs >= l_freq) & (freqs <= h_freq)
+        if not band_mask.any():
+            _logger.warning(
+                f"  [{label}] No broadband frequencies fall in {band} range "
+                f"[{l_freq:.1f}, {h_freq:.1f}] Hz; skipping band."
+            )
+            continue
         _logger.info(
             f"  [{label}] band {band} ({l_freq:.1f}–{h_freq:.1f} Hz, "
-            f"{n_freqs_band} steps)"
+            f"{int(band_mask.sum())} bins sliced from broadband)"
         )
-        band_freqs = np.linspace(l_freq, h_freq, n_freqs_band)
-        band_ds = wavelet_transform(
-            {label: ad},
-            band_freqs,
-            representation,
-            keep_frequency_dim=False,
-            reshape_frequency_dim=False,
-            wavelet_dir=(wavelet_dir / f"band_{band}") if wavelet_dir else None,
-            reuse_wavelets=reuse_wavelets,
+        # Slice the broadband 4D tensor to this band, then reduce over the
+        # frequency axis (mean for power, circular mean for phase). No separate
+        # per-band wavelet is computed or cached.
+        band_4d = AnalysisData(
+            data=bb_4d_data[:, :, band_mask, :],
+            sfreq=wd_4d.sfreq,
+            representation=wd_4d.representation,
+            label=wd_4d.label,
+            feature_names=wd_4d.feature_names,
+            info=wd_4d.info,
+            metadata={**wd_4d.metadata, "freqs": freqs[band_mask]},
         )
-        wd = band_ds[label]
+        wd = _wavelet_4d_to_3d(
+            band_4d,
+            representation=representation,
+            base_feature_names=ad.feature_names,
+        )
         if feature_axis_label is None:
             feature_axis_label = wd.feature_axis_label
 
@@ -1424,7 +1434,9 @@ def _run_wavelet_workflow_for_label(
             band_sw_large[band] = (tc_large, t_large)
             band_sw_spearman_med[band] = (tc_sp, t_med)
 
-        del band_ds, wd
+        del band_4d, wd
+
+    del wd_4d, bb_4d_data
 
     if not band_loo_iscs:
         raise ValueError(

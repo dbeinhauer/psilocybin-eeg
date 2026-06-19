@@ -46,6 +46,8 @@ from src.definitions.constants import ProjectPaths
 
 _logger = logging.getLogger(__name__)
 
+_STAGE_DIR = "03-wavelet-analysis"
+
 # ──────────────────────────────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────────────────────────────
@@ -56,6 +58,12 @@ if __name__ == "__main__":
         description=("Run EEG wavelet analysis on preprocessed data."),
     )
     add_common_arguments(parser)
+    parser.add_argument(
+        "--save_dir",
+        type=Path,
+        default=None,
+        help="Base directory for output plots. Defaults to project plots/ root.",
+    )
 
     args = parser.parse_args()
 
@@ -109,7 +117,8 @@ if __name__ == "__main__":
     # Canonical plot root shared by both power and phase workflows. Each
     # analysis writes under the same ``03-wavelet-analysis`` tree so the
     # Results Browser picks them up using the same notebook-based ID.
-    wavelet_plots_root = ProjectPaths.PLOTS_PATH / "03-wavelet-analysis"
+    save_root = args.save_dir if args.save_dir is not None else ProjectPaths.PLOTS_PATH
+    wavelet_plots_root = save_root / _STAGE_DIR
     # Shared wavelet cache directory — power and phase outputs coexist since
     # the representation is encoded in the cached filename. This lets the
     # power workflow reuse a pre-computed phase cache for the power-vs-phase
