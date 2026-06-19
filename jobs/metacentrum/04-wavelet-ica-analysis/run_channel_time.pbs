@@ -55,12 +55,12 @@ cat << 'EOF' > run_inside.sh
 #!/bin/bash
 source /opt/myproject/.venv/bin/activate
 
-WAVELET_DIR="/mnt/data/processed/psilo_music/wavelets"
+WAVELET_DIR="/mnt/data/processed"
 
 python /mnt/scripts/run_wavelet_ica_channel_time.py \
     --condition Placebo \
     --experiment psilo_music \
-    --n_pca 80 \
+    --n_pca 150 \
     --n_ica 10 \
     --random_state 42 \
     --wavelet_data_dir "$WAVELET_DIR" \

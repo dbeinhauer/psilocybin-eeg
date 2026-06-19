@@ -45,7 +45,7 @@ cat << 'EOF' > run_inside.sh
 #!/bin/bash
 source /opt/myproject/.venv/bin/activate
 
-WAVELET_DIR="/mnt/data/processed/psilo_music/wavelets"
+WAVELET_DIR="/mnt/data/processed"
 
 # --- Pass 1: low-freq bands + broadband ---
 # Use --reuse_wavelets so that a restart of pass 1 (e.g. after a transient
