@@ -78,12 +78,12 @@ cat << 'EOF' > run_inside.sh
 #!/bin/bash
 source /opt/myproject/.venv/bin/activate
 
-WAVELET_DIR="/mnt/data/processed/psilo_music/wavelets"
+WAVELET_DIR="/mnt/data/processed"
 
 COMMON_ARGS=(
     --condition Placebo
     --experiment psilo_music
-    --n_pca 30
+    --n_pca 100
     --n_top 10
     --n_bottom 5
     --random_state 42
@@ -94,6 +94,9 @@ COMMON_ARGS=(
     --n_jobs -1
 )
 
+# python /mnt/scripts/run_wavelet_iva_time.py \
+#     "${COMMON_ARGS[@]}"
+
 echo "=== CLASSIC at $(date) ==="
 python /mnt/scripts/run_wavelet_iva_time.py \
     --music_type CLASSIC \
@@ -101,8 +104,8 @@ python /mnt/scripts/run_wavelet_iva_time.py \
 
 echo "=== PSYTRANCE at $(date) ==="
 python /mnt/scripts/run_wavelet_iva_time.py \
-    --music_type PSYTRANCE \
-    "${COMMON_ARGS[@]}"
+     --music_type PSYTRANCE \
+     "${COMMON_ARGS[@]}"
 EOF
 
 chmod +x run_inside.sh

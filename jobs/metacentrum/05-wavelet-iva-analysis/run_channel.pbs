@@ -83,12 +83,12 @@ cat << 'EOF' > run_inside.sh
 #!/bin/bash
 source /opt/myproject/.venv/bin/activate
 
-WAVELET_DIR="/mnt/data/processed/psilo_music/wavelets"
+WAVELET_DIR="/mnt/data/processed"
 
 COMMON_ARGS=(
     --condition Placebo
     --experiment psilo_music
-    --n_pca 15
+    --n_pca 50
     --n_top 10
     --n_bottom 5
     --random_state 42
@@ -98,6 +98,9 @@ COMMON_ARGS=(
     --reuse_wavelets
     --n_jobs -1
 )
+
+# python /mnt/scripts/run_wavelet_iva_channel.py \
+#     "${COMMON_ARGS[@]}"
 
 echo "=== CLASSIC at $(date) ==="
 python /mnt/scripts/run_wavelet_iva_channel.py \
