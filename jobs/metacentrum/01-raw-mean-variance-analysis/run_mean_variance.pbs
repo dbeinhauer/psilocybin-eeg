@@ -41,13 +41,12 @@ cat << 'EOF' > run_inside.sh
 #!/bin/bash
 source /opt/myproject/.venv/bin/activate
 python /mnt/scripts/run_mean_variance.py \
---experiment assr \
+--experiment psilo_music \
 --condition Placebo \
 --window_sec 2.0 \
 --step_sec 1.0 \
 --sync_percentile 10 \
 --n_jobs -1 
-# --music_type CLASSIC PSYTRANCE \
 EOF
 
 chmod +x run_inside.sh
