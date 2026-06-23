@@ -330,9 +330,7 @@ class StimulusAligner(LoggerMixin):
         return segments
 
 
-def apply_keep_segments(
-    raw: mne.io.Raw, segments: list[tuple[int, int]]
-) -> mne.io.Raw:
+def apply_keep_segments(raw: mne.io.Raw, segments: list[tuple[int, int]]) -> mne.io.Raw:
     """
     Crop a recording to the given sample segments and splice them together.
 
@@ -359,6 +357,38 @@ def apply_keep_segments(
 
     spliced = mne.concatenate_raws(pieces)
     return spliced
+
+
+def apply_keep_segments_to_array(
+    data: np.ndarray,
+    segments: list[tuple[int, int]],
+) -> np.ndarray:
+    """
+    Trim an array along its last axis to the given sample segments and concatenate.
+
+    Numpy counterpart to :func:`apply_keep_segments`: applies the same
+    keep-segments plan produced by :class:`StimulusAligner` to an arbitrary
+    array rather than an MNE ``Raw`` object.  Use this when wavelet transforms
+    should be computed on the full continuous recording (to avoid edge artifacts
+    at splice points) and the trimming is applied afterwards.
+
+    :param data: Array whose *last* axis is the time axis (e.g.
+        ``(n_channels, n_times)`` or ``(n_channels, n_freqs, n_times)``).
+    :param segments: Half-open ``(start, end)`` sample ranges to keep, in order.
+        Produced by :attr:`StimulusAligner.keep_segments` for one recording.
+    :return: Concatenated array containing only the kept time ranges.
+    :raises ValueError: If no valid segments remain after clamping to array bounds.
+    """
+    n_times = data.shape[-1]
+    pieces = []
+    for start, end in segments:
+        start = max(0, start)
+        end = min(n_times, end)
+        if end > start:
+            pieces.append(data[..., start:end])
+    if not pieces:
+        raise ValueError("No valid segments to keep after clamping to array bounds.")
+    return np.concatenate(pieces, axis=-1)
 
 
 def align_raws(

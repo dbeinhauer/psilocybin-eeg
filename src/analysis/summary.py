@@ -24,7 +24,9 @@ from scipy.stats import zscore
 from src.preprocessing.pipeline import DatasetHandler
 from src.preprocessing.stimulus_alignment import (
     EXPERIMENT_STIMULUS_LABELS,
+    StimulusAligner,
     get_stimulus_onset_samples,
+    apply_keep_segments_to_array,  # noqa: F401 — re-exported for caller convenience
 )
 from src.filtering.dataset_filter import DatasetFilter
 from src.definitions.constants import ProjectPaths
@@ -200,6 +202,119 @@ class EEGSummarizedAnalyzer(LoggerMixin):
             )
             return None
         return onsets
+
+    def load_pre_alignment_data(
+        self,
+        resample_freq: float = 250.0,
+        n_jobs: int = -1,
+        stimulus_label: Optional[str] = None,
+        keep_tail_sec: float = 0.1,
+        pre_window_sec: Optional[float] = None,
+        post_window_sec: Optional[float] = None,
+    ) -> tuple[list[np.ndarray], StimulusAligner, Optional[mne.Info]]:
+        """
+        Load per-subject ``RAW_AFTER_ICA`` data for pre-wavelet stimulus alignment.
+
+        For stimulus-based experiments (e.g. ASSR), wavelets computed on
+        stimulus-trimmed data suffer from edge artifacts at every splice point.
+        This method returns the full continuous recording per subject so that
+        the wavelet transform can be applied *before* trimming.  After wavelet
+        computation, pass each subject's wavelet array and the corresponding
+        entry in :attr:`~src.preprocessing.stimulus_alignment.StimulusAligner.keep_segments`
+        to :func:`~src.preprocessing.stimulus_alignment.apply_keep_segments_to_array`
+        to reproduce the stimulus alignment on the wavelet output.
+
+        Typical usage::
+
+            arrays, aligner, info = analyzer.load_pre_alignment_data(resample_freq=250)
+            # arrays[i]: (n_channels, n_times_i)  — variable lengths
+            wavelet_aligned = []
+            for arr, segments in zip(arrays, aligner.keep_segments):
+                ad = from_array(arr[np.newaxis], sfreq=250, ...)
+                wd = to_wavelet_power(ad, freqs, keep_frequency_dim=True)
+                # wd.data: (1, n_ch, n_freqs, n_times_i)
+                trimmed = apply_keep_segments_to_array(wd.data[0], segments)
+                # trimmed: (n_ch, n_freqs, aligner.total_length)
+                wavelet_aligned.append(trimmed)
+            data_4d = np.stack(wavelet_aligned)  # (n_subj, n_ch, n_freqs, n_times_aligned)
+
+        :param resample_freq: Target sampling frequency in Hz (default 250).
+            Resampling is applied before constructing the aligner so that the
+            keep-segments are expressed on the same sample grid as the returned
+            arrays.
+        :param n_jobs: Parallel jobs for resampling (``-1`` = all CPUs).
+        :param stimulus_label: Annotation label marking stimulus onsets.
+            Defaults to the experiment's registered label (e.g. ``"fam+"`` for
+            ASSR).
+        :param keep_tail_sec: Continuous data preserved before each onset.
+            Forwarded to :class:`~src.preprocessing.stimulus_alignment.StimulusAligner`.
+        :param pre_window_sec: Cap on the window kept before the first onset.
+            ``None`` keeps the per-subject shortest available lead-in.
+        :param post_window_sec: Cap on the window kept after the last onset.
+            ``None`` keeps the per-subject shortest available lead-out.
+        :return: Tuple ``(arrays, aligner, info)`` where
+
+            * ``arrays`` is a list of ``(n_channels, n_times_i)`` numpy arrays
+              — one per subject, variable length before trimming.
+            * ``aligner`` is the fitted :class:`~src.preprocessing.stimulus_alignment.StimulusAligner`;
+              use ``aligner.keep_segments[i]`` with
+              :func:`~src.preprocessing.stimulus_alignment.apply_keep_segments_to_array`
+              to trim subject *i*'s wavelet output.
+            * ``info`` is the MNE Info object from the first loaded recording.
+
+        :raises ValueError: If the experiment has no registered stimulus label
+            and none is supplied via *stimulus_label*.
+        """
+        label = stimulus_label if stimulus_label is not None else self._stimulus_label
+        if label is None:
+            raise ValueError(
+                f"Experiment '{self._experiment_name.value}' has no registered "
+                "stimulus label. Pass stimulus_label explicitly."
+            )
+
+        self.logger.info(
+            f"Loading {len(self.filtered_df)} RAW_AFTER_ICA recording(s) for "
+            f"pre-alignment wavelet computation (resample → {resample_freq} Hz)."
+        )
+
+        raws: list[mne.io.Raw] = []
+        for _, row in self.filtered_df.iterrows():
+            raw = (
+                self.dataset_handler.load_data_file(
+                    row[SingleDataMetadata.FILENAME],
+                    is_processed=True,
+                    processed_data_type=PreprocessedDataVariants.RAW_AFTER_ICA,
+                    preload=True,
+                )
+                .pick(["eeg"])
+                .resample(resample_freq, n_jobs=n_jobs)
+            )
+            raws.append(raw)
+
+        # Build the alignment plan from the resampled recordings so that the
+        # keep-segments are expressed on the resampled sample grid.
+        onset_samples = [get_stimulus_onset_samples(raw, label) for raw in raws]
+        recording_lengths = [raw.n_times for raw in raws]
+        aligner = StimulusAligner(
+            onset_samples,
+            recording_lengths,
+            sfreq=resample_freq,
+            keep_tail_sec=keep_tail_sec,
+            pre_window_sec=pre_window_sec,
+            post_window_sec=post_window_sec,
+        )
+
+        arrays = [raw.get_data() for raw in raws]
+
+        self._refresh_info(raws[0].info)
+        self.resample_freq = resample_freq
+
+        self.logger.info(
+            f"Pre-alignment load complete: {len(arrays)} subject(s), "
+            f"lengths {[a.shape[-1] for a in arrays]}, "
+            f"aligned total_length={aligner.total_length} samples."
+        )
+        return arrays, aligner, self.info
 
     def _refresh_info(self, info: mne.Info) -> None:
         """Store an mne.Info copy taken from the first loaded raw object."""

@@ -1,0 +1,110 @@
+#!/bin/bash
+#PBS -N ASSR_STORE_WAVELETS_03
+#PBS -l walltime=4:00:00
+#PBS -l select=1:ncpus=8:mem=80gb:scratch_local=50gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-03 wavelet cache generation for the ASSR experiment.
+#
+# Run this job explicitly to COMPUTE AND STORE the ASSR wavelet cache once.
+# Downstream Stage-04 wavelet-ICA and Stage-05 wavelet-IVA jobs then REUSE it
+# by passing --reuse_wavelets, so the (expensive) Morlet transform is done
+# exactly once, here.
+#
+# The invocation is intentionally consistent with the psilo_music
+# store_wavelets.pbs: NO --process_and_save and NO --reuse_wavelets.
+#   * Omitting --reuse_wavelets is what triggers wavelet computation/storage.
+#     For stimulus-based experiments (ASSR) this automatically runs the
+#     pre-alignment precompute: wavelets are computed on the full continuous
+#     RAW_AFTER_ICA recordings *before* the stimulus splice, then trimmed to
+#     the aligned segments. This avoids the Morlet edge artifacts that would
+#     appear at every splice point if wavelets were computed on the already
+#     spliced RAW_CROPPED signal. The cache lands in
+#     data/processed/assr/wavelets/broadband/ — the canonical location every
+#     downstream stage reads from.
+#   * Omitting --process_and_save is fine: the concatenated time-domain array
+#     is loaded if present and built (from RAW_CROPPED) + saved automatically
+#     on first use. Pass --process_and_save only to force a rebuild.
+#
+# Caveat: although the ASSR wavelets are computed from RAW_AFTER_ICA and do
+# NOT conceptually need the concatenated/RAW_CROPPED time-domain data, the
+# surrounding workflow still requires that scaffolding (MNE Info / array
+# shapes). So this job will still fail if neither the saved concatenated array
+# nor the RAW_CROPPED data exists — run Stage-02 stimulus alignment first.
+#
+# Memory is much lower than psilo_music because subjects are processed
+# one at a time (peak ≈ one subject's wavelet tensor) rather than all at
+# once.
+#
+# Output:
+#   data/processed/assr/wavelets/broadband/
+#       Placebo_ASSR__wavelet_power__1.000_50.000_50__freqdim1.npz
+#       Placebo_ASSR__wavelet_phase__1.000_50.000_50__freqdim1.npz
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+
+WAVELET_DIR="/mnt/data/processed"
+
+echo "=== Wavelet power at $(date) ==="
+python /mnt/scripts/run_analysis.py \
+    --analysis wavelet_power \
+    --experiment assr \
+    --condition Placebo \
+    --wavelet_data_dir "$WAVELET_DIR" \
+    --n_jobs -1
+
+# echo "=== Wavelet phase at $(date) ==="
+# python /mnt/scripts/run_analysis.py \
+#     --analysis wavelet_phase \
+#     --experiment assr \
+#     --condition Placebo \
+#     --wavelet_data_dir "$WAVELET_DIR" \
+#     --n_jobs -1
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch

@@ -23,6 +23,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 from src.definitions.fields import (
+    SpectrumTypeVariants,
     MusicTypeVariants,
     ConditionVariants,
     ExclusionCategories,
@@ -94,6 +95,8 @@ from src.visualization.wavelet_plots import (
     plot_wavelet_loo_isc_distributions,
     plot_wavelet_topomap_isc,
 )
+
+from src.preprocessing.stimulus_alignment import apply_keep_segments_to_array
 
 if TYPE_CHECKING:
     from src.analysis.summary import EEGSummarizedAnalyzer
@@ -237,7 +240,12 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--process_and_save",
         action="store_true",
         default=False,
-        help="When set, load raw files, resample, stack and save before analysis.",
+        help=(
+            "Force a rebuild of the concatenated time-domain array from "
+            "RAW_CROPPED (load, resample, stack, save), overwriting any cached "
+            "copy. Normally unnecessary: when omitted, the saved array is "
+            "loaded if present and built automatically on first use."
+        ),
     )
     parser.add_argument(
         "--isc_threshold",
@@ -398,14 +406,44 @@ def load_analyzers(
         )
 
         if process_and_save:
+            # Forced (re)build of the concatenated time-domain array from
+            # RAW_CROPPED — use to refresh a stale cache or change resampling.
             analyzer.load_and_prepare_data(resample_freq=250.0, n_jobs=n_jobs)
             _logger.info(f"[{label}] data shape: {analyzer.data.shape}")
             analyzer.save_data()
         else:
-            analyzer.load_data(
-                info_filename=analyzer.filtered_df[SingleDataMetadata.FILENAME].iloc[0],
-            )
-            _logger.info(f"[{label}] Loaded data shape: {analyzer.data.shape}")
+            # Default: load the previously-saved concatenated array. If none
+            # exists yet, build it from RAW_CROPPED and save it once, so no
+            # explicit --process_and_save flag is ever needed on a first run.
+            # This keeps invocations consistent across every experiment: the
+            # time-domain scaffolding is managed automatically and the only
+            # wavelet-cache control the caller needs is --reuse_wavelets.
+            #
+            # Caveat for stimulus-aligned experiments (e.g. ASSR): the wavelet
+            # cache itself is computed from the continuous RAW_AFTER_ICA
+            # recordings (see precompute_pre_alignment_wavelet_cache) and does
+            # NOT conceptually depend on this concatenated time-domain array.
+            # The surrounding workflow still needs it for MNE Info / array-shape
+            # scaffolding, so this load — or the RAW_CROPPED-based rebuild it
+            # falls back to — must succeed. In other words, storing the
+            # stimulus-aligned wavelets will still fail if neither the saved
+            # concatenated array nor the RAW_CROPPED data is available, even
+            # though that data is not used to compute the wavelets themselves.
+            try:
+                analyzer.load_data(
+                    info_filename=analyzer.filtered_df[
+                        SingleDataMetadata.FILENAME
+                    ].iloc[0],
+                )
+                _logger.info(f"[{label}] Loaded data shape: {analyzer.data.shape}")
+            except FileNotFoundError:
+                _logger.info(
+                    f"[{label}] No saved concatenated array found; building it "
+                    "from RAW_CROPPED and saving it for reuse."
+                )
+                analyzer.load_and_prepare_data(resample_freq=250.0, n_jobs=n_jobs)
+                _logger.info(f"[{label}] data shape: {analyzer.data.shape}")
+                analyzer.save_data()
 
         if normalize_data:
             analyzer.normalize()
@@ -799,50 +837,135 @@ def wavelet_transform(
 _wavelet_transform = wavelet_transform
 
 
-def _wavelet_isc_for_label(
-    wd: AnalysisData,
-    label: str,
-    *,
-    loo_save_path: Path,
-    sw_save_path: Path,
-    isc_threshold: float,
-    window_sec: float,
-    step_sec: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Compute & plot LOO-ISC and sliding-window ISC for a single label.
+def precompute_pre_alignment_wavelet_cache(
+    analyzers: dict[str, "EEGSummarizedAnalyzer"],
+    freqs: np.ndarray,
+    representations: list[str],
+    wavelet_dir: Path,
+    resample_freq: float = 250.0,
+    n_jobs: int = -1,
+) -> None:
+    """Compute per-subject wavelet caches from continuous ``RAW_AFTER_ICA`` data.
 
-    Unlike :func:`run_isc_workflow`, this helper does **not** attempt
-    per-band splitting via :meth:`~AnalysisData.filter_to_band`, which
-    would be semantically incorrect on frequency-decomposed data.
+    For stimulus-based experiments (ASSR), computing wavelets on the
+    stimulus-spliced ``RAW_CROPPED`` signal introduces edge artifacts at every
+    splice point.  This function loads each subject's full, unspliced
+    ``RAW_AFTER_ICA`` recording, computes the wavelet transform on the
+    continuous signal, then trims the wavelet time axis to the aligned segments
+    using :func:`~src.preprocessing.stimulus_alignment.apply_keep_segments_to_array`
+    — reproducing the same splice that ``align_raws`` would apply, but after
+    the transform instead of before.
 
-    :returns: ``(loo_isc, mean_loo_isc, sw_isc, sw_times)``
+    Saves the result to the same ``.npz`` cache format that
+    :func:`wavelet_transform` produces, so downstream steps (Stage-04 ICA,
+    Stage-05 IVA) transparently reuse it via ``--reuse_wavelets``.
+
+    Skips any label whose cache file already exists (idempotent).
+
+    :param analyzers: Loaded :class:`~src.analysis.summary.EEGSummarizedAnalyzer`
+        instances keyed by label (e.g. ``"Placebo_ASSR"``). Each must have a
+        registered stimulus label (e.g. ASSR).
+    :param freqs: Morlet wavelet frequencies (Hz).
+    :param representations: Wavelet representations to compute and cache;
+        ``"power"`` and/or ``"phase"``.
+    :param wavelet_dir: Directory where cache files are written (the same
+        directory passed as ``wavelet_dir`` to :func:`wavelet_transform`).
+    :param resample_freq: Target sampling frequency in Hz (default 250).
+    :param n_jobs: Parallel jobs for resampling (``-1`` = all CPUs).
     """
-    loo_save_path.parent.mkdir(parents=True, exist_ok=True)
-    sw_save_path.parent.mkdir(parents=True, exist_ok=True)
+    wavelet_dir = Path(wavelet_dir)
+    freq_sig = f"{freqs[0]:.3f}_{freqs[-1]:.3f}_{len(freqs)}"
+    n_cycles = freqs / 2.0
 
-    loo, mean_loo = compute_loo_isc(wd.data)
-    _logger.info(f"[{label}]  loo_isc={loo.shape}  mean_loo_isc={mean_loo.shape}")
-    plot_loo_isc_distribution(
-        {label: mean_loo},
-        ylabel=f"Number of {wd.feature_axis_label.lower()}s",
-        save_path=loo_save_path,
-    )
+    for label, analyzer in analyzers.items():
+        safe_label = re.sub(r"[^A-Za-z0-9_-]", "_", label).strip("_")
+        if not safe_label:
+            safe_label = f"dataset_{hashlib.sha256(label.encode()).hexdigest()[:8]}"
 
-    sw_isc, sw_times = compute_sliding_window_isc(
-        wd.data, window_sec=window_sec, step_sec=step_sec, sfreq=wd.sfreq
-    )
-    _logger.info(f"[{label}]  sw_isc={sw_isc.shape}  sw_times={sw_times.shape}")
-    plot_sliding_window_isc(
-        {label: (sw_isc, sw_times)},
-        isc_threshold=isc_threshold,
-        feature_axis_label=f"{wd.feature_axis_label} index",
-        save_path=sw_save_path,
-    )
-    print_significant_intervals(
-        {label: (sw_isc, sw_times)}, isc_threshold=isc_threshold
-    )
+        for representation in representations:
+            cache_file = wavelet_dir / (
+                f"{safe_label}__wavelet_{representation}__{freq_sig}__freqdim1.npz"
+            )
+            if cache_file.exists():
+                _logger.info(
+                    f"[{label}] Pre-alignment wavelet cache already exists, "
+                    f"skipping: {cache_file.name}"
+                )
+                continue
 
-    return loo, mean_loo, sw_isc, sw_times
+            _logger.info(
+                f"[{label}] Pre-alignment wavelet ({representation}): "
+                "loading RAW_AFTER_ICA per subject …"
+            )
+
+            arrays, aligner, info = analyzer.load_pre_alignment_data(
+                resample_freq=resample_freq,
+                n_jobs=n_jobs,
+            )
+            ch_names = list(info["ch_names"]) if info is not None else None
+
+            wavelet_aligned: list[np.ndarray] = []
+            cache_label: str | None = None
+            cache_feature_names: list[str] | None = None
+
+            for subj_idx, (subj_arr, segments) in enumerate(
+                zip(arrays, aligner.keep_segments)
+            ):
+                _logger.info(
+                    f"  [{label}] subject {subj_idx + 1}/{len(arrays)} "
+                    f"({subj_arr.shape[-1]} samples) …"
+                )
+                ad_subj = AnalysisData(
+                    data=subj_arr[np.newaxis].astype(float),
+                    sfreq=resample_freq,
+                    representation=DataRepresentation.TIME_DOMAIN,
+                    label=label,
+                    feature_names=ch_names,
+                    info=info,
+                )
+                if representation == "power":
+                    wd = to_wavelet_power(ad_subj, freqs, keep_frequency_dim=True)
+                else:
+                    wd = to_wavelet_phase(ad_subj, freqs, keep_frequency_dim=True)
+
+                # wd.data: (1, n_ch*n_freqs, n_times_full) — trim the time axis.
+                trimmed = apply_keep_segments_to_array(wd.data[0], segments)
+                # trimmed: (n_ch*n_freqs, n_times_aligned)
+                wavelet_aligned.append(trimmed)
+
+                if cache_label is None:
+                    cache_label = wd.label
+                    cache_feature_names = wd.feature_names
+
+            stacked = np.stack(
+                wavelet_aligned
+            )  # (n_subj, n_ch*n_freqs, n_times_aligned)
+            _logger.info(
+                f"[{label}] stacked pre-alignment wavelet shape: {stacked.shape}"
+            )
+
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            np.savez_compressed(
+                cache_file,
+                data=stacked,
+                sfreq=np.float64(resample_freq),
+                label=cache_label if cache_label is not None else label,
+                feature_names=np.asarray(
+                    cache_feature_names if cache_feature_names is not None else [],
+                    dtype=str,
+                ),
+                has_feature_names=np.asarray(
+                    int(cache_feature_names is not None),
+                    dtype=np.int8,
+                ),
+                freqs=freqs,
+                n_cycles=np.asarray(n_cycles),
+                keep_frequency_dim=np.asarray(1, dtype=np.int8),
+            )
+            _logger.info(
+                f"[{label}] saved pre-alignment wavelet cache "
+                f"({representation}): {cache_file.name}"
+            )
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -924,7 +1047,7 @@ def _try_load_phase_band_iscs(
     """
     if wavelet_dir is None:
         return {}
-    bb_phase_dir = wavelet_dir / "broadband"
+    bb_phase_dir = wavelet_dir / SpectrumTypeVariants.BROADBAND.value
     safe_label = re.sub(r"[^A-Za-z0-9_-]", "_", label).strip("_")
     if not safe_label:
         safe_label = f"dataset_{hashlib.sha256(label.encode()).hexdigest()[:8]}"
@@ -983,8 +1106,8 @@ def _run_wavelet_workflow_for_label(
     save_dir.mkdir(parents=True, exist_ok=True)
     _logger.info(f"=== Processing {label} → {save_dir} (rep={representation}) ===")
 
-    bb_dir = save_dir / "broadband"
-    bands_dir = save_dir / "bands"
+    bb_dir = save_dir / SpectrumTypeVariants.BROADBAND.value
+    bands_dir = save_dir / SpectrumTypeVariants.BANDS.value
 
     # ── Broadband ────────────────────────────────────────────────
     bb_sw_for_overlap: tuple[np.ndarray, np.ndarray] | None = None
@@ -998,7 +1121,9 @@ def _run_wavelet_workflow_for_label(
         label,
         representation=representation,
         freqs=freqs,
-        wavelet_dir=(wavelet_dir / "broadband") if wavelet_dir else None,
+        wavelet_dir=(wavelet_dir / SpectrumTypeVariants.BROADBAND.value)
+        if wavelet_dir
+        else None,
         reuse_wavelets=reuse_wavelets,
     )
     bb_4d_data = wd_4d.data  # (n_subj, n_ch, n_freqs, n_times)

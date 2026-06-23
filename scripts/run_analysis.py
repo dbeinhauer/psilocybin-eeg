@@ -36,16 +36,19 @@ from scripts.analysis_common import (
     add_common_arguments,
     load_analyzers,
     analyzers_to_datasets,
+    precompute_pre_alignment_wavelet_cache,
     resolve_wavelet_dir,
     run_wavelet_workflow,
 )
 from src.definitions.fields import (
+    SpectrumTypeVariants,
     MusicTypeVariants,
     ConditionVariants,
     ExclusionCategories,
     AnalysisVariants,
     ExperimentNames,
 )
+from src.preprocessing.stimulus_alignment import EXPERIMENT_STIMULUS_LABELS
 from src.definitions.constants import ProjectPaths
 
 _logger = logging.getLogger(__name__)
@@ -129,6 +132,38 @@ if __name__ == "__main__":
     # joint plot.
     wavelet_cache_root = resolve_wavelet_dir(args.wavelet_data_dir, experiment_name)
 
+    # ── Pre-alignment wavelet cache (stimulus-based experiments) ──
+    # For experiments that use stimulus-based alignment (e.g. ASSR), wavelets
+    # computed on the spliced RAW_CROPPED signal suffer from edge artifacts at
+    # every splice point.  When the cache is not being reused, pre-compute the
+    # wavelet transform on the continuous RAW_AFTER_ICA data and trim
+    # afterwards, then tell the workflow to reuse the just-saved cache.
+    reuse_wavelets_for_workflow = args.reuse_wavelets
+    if (
+        run_wavelet
+        and experiment_name in EXPERIMENT_STIMULUS_LABELS
+        and not args.reuse_wavelets
+    ):
+        representations = (["power"] if run_wavelet_power else []) + (
+            ["phase"] if run_wavelet_phase else []
+        )
+        # The workflow (and all Stage-04/05 consumers) read the broadband
+        # wavelet cache from ``<wavelet_dir>/broadband`` (see
+        # ``_broadband_wavelet_4d``). Write the pre-aligned cache to that same
+        # subdirectory so it is actually reused downstream — otherwise the
+        # workflow would silently recompute wavelets from the stimulus-spliced
+        # RAW_CROPPED signal, reintroducing the splice-edge artifacts this
+        # pre-alignment step exists to avoid.
+        precompute_pre_alignment_wavelet_cache(
+            analyzers,
+            freqs=wavelet_freqs,
+            representations=representations,
+            wavelet_dir=wavelet_cache_root / SpectrumTypeVariants.BROADBAND.value,
+            resample_freq=250.0,
+            n_jobs=args.n_jobs,
+        )
+        reuse_wavelets_for_workflow = True
+
     # ── Wavelet power analysis ────────────────────────────────────
     if run_wavelet_power:
         if raw_datasets is None:
@@ -142,7 +177,7 @@ if __name__ == "__main__":
             bands=args.wavelet_bands,
             include_broadband=not args.skip_wavelet_broadband,
             wavelet_dir=wavelet_cache_root,
-            reuse_wavelets=args.reuse_wavelets,
+            reuse_wavelets=reuse_wavelets_for_workflow,
             keep_frequency_dim=args.wavelet_keep_frequency_dim,
             reshape_frequency_dim=args.wavelet_reshape_frequency_dim,
             isc_threshold=args.isc_threshold,
@@ -167,7 +202,7 @@ if __name__ == "__main__":
             bands=args.wavelet_bands,
             include_broadband=not args.skip_wavelet_broadband,
             wavelet_dir=wavelet_cache_root,
-            reuse_wavelets=args.reuse_wavelets,
+            reuse_wavelets=reuse_wavelets_for_workflow,
             keep_frequency_dim=args.wavelet_keep_frequency_dim,
             reshape_frequency_dim=args.wavelet_reshape_frequency_dim,
             isc_threshold=args.isc_threshold,

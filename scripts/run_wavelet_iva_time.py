@@ -84,6 +84,7 @@ from src.analysis.wavelet_ica import (  # noqa: E402
 )
 from src.definitions.constants import ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
+    SpectrumTypeVariants,
     ConditionVariants,
     ExclusionCategories,
     ExperimentNames,
@@ -377,12 +378,8 @@ def _plot_isc_grid(
         im_corr = ax_top.imshow(corr_mat, vmin=-1, vmax=1, cmap="RdBu_r")
         ax_top.set_xticks(range(n_subjects))
         ax_top.set_yticks(range(n_subjects))
-        ax_top.set_xticklabels(
-            [f"S{s + 1}" for s in range(n_subjects)], fontsize=7
-        )
-        ax_top.set_yticklabels(
-            [f"S{s + 1}" for s in range(n_subjects)], fontsize=7
-        )
+        ax_top.set_xticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=7)
+        ax_top.set_yticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=7)
         ax_top.set_title(labels[i], fontsize=8)
 
         ax_bot = axes[1, i]
@@ -390,9 +387,7 @@ def _plot_isc_grid(
         ax_bot.imshow(grid, cmap=_CLUSTER_CMAP, norm=_CLUSTER_NORM, aspect="auto")
         _annotate_cluster_grid(ax_bot, grid)
         ax_bot.set_xticks(range(n_subjects))
-        ax_bot.set_xticklabels(
-            [f"S{s + 1}" for s in range(n_subjects)], fontsize=7
-        )
+        ax_bot.set_xticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=7)
         ax_bot.set_yticks(range(len(ISC_CLUSTER_THRESHOLDS)))
         ax_bot.set_yticklabels(
             [f"r≥{thr}" for thr in ISC_CLUSTER_THRESHOLDS], fontsize=8
@@ -519,12 +514,22 @@ def _plot_topomap_mean_var(
         fig.colorbar(im_v, ax=axes[1, i], fraction=0.046, pad=0.04)
 
     fig.text(
-        0.01, 0.75, "Mean across subjects", rotation=90, va="center",
-        fontsize=11, fontweight="bold",
+        0.01,
+        0.75,
+        "Mean across subjects",
+        rotation=90,
+        va="center",
+        fontsize=11,
+        fontweight="bold",
     )
     fig.text(
-        0.01, 0.25, "Variance across subjects", rotation=90, va="center",
-        fontsize=11, fontweight="bold",
+        0.01,
+        0.25,
+        "Variance across subjects",
+        rotation=90,
+        va="center",
+        fontsize=11,
+        fontweight="bold",
     )
     fig.suptitle(
         f"Mean and Variance Topomaps Across Subjects — {label}",
@@ -561,12 +566,18 @@ def _plot_tf_map(
         data_i = ft_maps[i]
         vlim_i = max(float(np.percentile(np.abs(data_i), 99)), 1e-12)
         mesh = ax.pcolormesh(
-            time, freqs, data_i, cmap="RdBu_r",
-            vmin=-vlim_i, vmax=vlim_i, shading="auto",
+            time,
+            freqs,
+            data_i,
+            cmap="RdBu_r",
+            vmin=-vlim_i,
+            vmax=vlim_i,
+            shading="auto",
         )
         ax.set_ylabel("Freq (Hz)")
         ax.set_title(
-            f"{labels[i]} — Time × Frequency (outer product)", fontsize=10,
+            f"{labels[i]} — Time × Frequency (outer product)",
+            fontsize=10,
         )
         fig.colorbar(mesh, ax=ax, pad=0.01, fraction=0.025)
 
@@ -660,7 +671,11 @@ def _plot_loo_isc_bar_fc(
     ax.axhline(0.0, ls="--", lw=0.6, color="gray")
     if 0 < n_top < n_show:
         ax.axvline(
-            n_top - 0.5, ls="--", lw=0.9, color="black", alpha=0.5,
+            n_top - 0.5,
+            ls="--",
+            lw=0.9,
+            color="black",
+            alpha=0.5,
             label=f"top {n_top} | bottom {n_show - n_top}",
         )
         ax.legend(loc="upper right", fontsize=8)
@@ -700,8 +715,13 @@ def _plot_pairmap_time_subject(
         axes = [axes]
     for i, ax in enumerate(axes):
         mesh = ax.pcolormesh(
-            time, np.arange(n_subjects), time_subj[i],
-            cmap="RdBu_r", vmin=-vlim, vmax=vlim, shading="auto",
+            time,
+            np.arange(n_subjects),
+            time_subj[i],
+            cmap="RdBu_r",
+            vmin=-vlim,
+            vmax=vlim,
+            shading="auto",
         )
         ax.set_yticks(range(n_subjects))
         ax.set_yticklabels(subject_labels, fontsize=8)
@@ -711,7 +731,8 @@ def _plot_pairmap_time_subject(
     axes[-1].set_xlabel("Time (s)")
     fig.suptitle(
         f"Time × Subject per IC (from components) — {label}",
-        fontsize=13, y=1.01,
+        fontsize=13,
+        y=1.01,
     )
     fig.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
@@ -739,8 +760,13 @@ def _plot_pairmap_subject_x(
         axes = [axes]
     for i, ax in enumerate(axes):
         mesh = ax.pcolormesh(
-            subjects_idx, y_values, data_per_comp[i],
-            cmap="RdBu_r", vmin=-vlim, vmax=vlim, shading="auto",
+            subjects_idx,
+            y_values,
+            data_per_comp[i],
+            cmap="RdBu_r",
+            vmin=-vlim,
+            vmax=vlim,
+            shading="auto",
         )
         ax.set_xticks(subjects_idx)
         ax.set_xticklabels(subject_labels, fontsize=8)
@@ -773,8 +799,13 @@ def _plot_pairmap_frequency_channel(
         data_i = freq_chan[i].T
         vlim_i = _safe_vlim(data_i)
         mesh = ax.pcolormesh(
-            freqs, channels, data_i, cmap="RdBu_r",
-            vmin=-vlim_i, vmax=vlim_i, shading="auto",
+            freqs,
+            channels,
+            data_i,
+            cmap="RdBu_r",
+            vmin=-vlim_i,
+            vmax=vlim_i,
+            shading="auto",
         )
         ax.set_xlabel("Frequency (Hz)")
         ax.set_title(labels[i], fontsize=8)
@@ -782,7 +813,8 @@ def _plot_pairmap_frequency_channel(
     axes[0].set_ylabel("Channel")
     fig.suptitle(
         f"Frequency × Channel per IC (subject-avg scores) — {label}",
-        fontsize=13, y=1.02,
+        fontsize=13,
+        y=1.02,
     )
     fig.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
@@ -804,15 +836,14 @@ def _plot_subject_loadings(
     for i, ax in enumerate(axes):
         ax.barh(range(n_subjects), subject_loadings[:, i], color="darkorange")
         ax.set_yticks(range(n_subjects))
-        ax.set_yticklabels(
-            [f"S{s + 1}" for s in range(n_subjects)], fontsize=8
-        )
+        ax.set_yticklabels([f"S{s + 1}" for s in range(n_subjects)], fontsize=8)
         ax.set_xlabel("|component|")
         ax.set_title(labels[i], fontsize=8)
     axes[0].set_ylabel("Subject")
     fig.suptitle(
         f"Per-Subject Mean Loading per Component — {label}",
-        fontsize=13, y=1.02,
+        fontsize=13,
+        y=1.02,
     )
     fig.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
@@ -844,10 +875,12 @@ def _run_iva(
     """Run the subjects-as-datasets IVA pipeline and save all plots."""
     pca_subdir = f"pca_{n_pca}"
     if band is None:
-        out_dir = save_dir / "broadband" / "iva_time" / pca_subdir
+        out_dir = (
+            save_dir / SpectrumTypeVariants.BROADBAND.value / "iva_time" / pca_subdir
+        )
         prefix = ""
     else:
-        out_dir = save_dir / "bands" / "iva_time" / pca_subdir
+        out_dir = save_dir / SpectrumTypeVariants.BANDS.value / "iva_time" / pca_subdir
         prefix = f"{band}_"
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -867,12 +900,8 @@ def _run_iva(
     # (S, T, C*F).
     bb_z = zscore_by_time(data_4d)
     n_samp = n_channels * n_freqs
-    X_subjects = bb_z.transpose(0, 3, 1, 2).reshape(
-        n_subjects, n_times, n_samp
-    )
-    _logger.info(
-        f"[{label}] Per-subject reshape: {X_subjects.shape}  (S, T, C*F)"
-    )
+    X_subjects = bb_z.transpose(0, 3, 1, 2).reshape(n_subjects, n_times, n_samp)
+    _logger.info(f"[{label}] Per-subject reshape: {X_subjects.shape}  (S, T, C*F)")
 
     # Step 2 — Per-subject PCA reduces the T (feature) axis → IVA input
     # (N_PCA, C*F, S).
@@ -904,9 +933,7 @@ def _run_iva(
         max_iter=iva_max_iter,
         W_diff_stop=iva_w_diff_stop,
     )
-    _logger.info(
-        f"[{label}] IVA-G: iterations={len(cost)}  final cost={cost[-1]:.6f}"
-    )
+    _logger.info(f"[{label}] IVA-G: iterations={len(cost)}  final cost={cost[-1]:.6f}")
 
     # Step 3b — Resolve per-subject sign ambiguity. IVA recovers each component
     # only up to a per-subject sign; flip mismatched subjects (using the leading
@@ -926,9 +953,9 @@ def _run_iva(
     for k in range(n_subjects):
         W_k = W[:, :, k]
         scores_flat = W_k @ X_pca[:, :, k]  # (n_pca, C*F)
-        iva_scores[k] = scores_flat.reshape(
-            n_pca, n_channels, n_freqs
-        ).transpose(0, 2, 1)
+        iva_scores[k] = scores_flat.reshape(n_pca, n_channels, n_freqs).transpose(
+            0, 2, 1
+        )
         iva_components[k] = W_k @ pcas[k].components_  # (n_pca, T)
     _logger.info(
         f"[{label}] Recover: iva_components={iva_components.shape}, "
@@ -940,9 +967,7 @@ def _run_iva(
     # the kth SCV couples across subjects), then select top + bottom. ``sigma_corr``
     # is the sign-aligned correlation stack from Step 3b.
     off_diag_mask = ~np.eye(n_subjects, dtype=bool)
-    rank_score = np.array(
-        [sigma_corr[k][off_diag_mask].mean() for k in range(n_pca)]
-    )
+    rank_score = np.array([sigma_corr[k][off_diag_mask].mean() for k in range(n_pca)])
 
     order = np.argsort(rank_score)[::-1]
     top_indices = order[:n_top].tolist()
@@ -970,7 +995,9 @@ def _run_iva(
 
     # (a) Component-ranking summary
     _plot_component_ranking(
-        rank_score, top_indices, bottom_indices,
+        rank_score,
+        top_indices,
+        bottom_indices,
         label=label,
         save_path=out_dir / f"{prefix}iva_component_ranking_{label}.png",
     )
@@ -987,9 +1014,7 @@ def _run_iva(
         (top_indices, top_labels, f"TOP {n_top}", "top"),
         (bottom_indices, bot_labels, f"BOTTOM {n_bottom}", "bottom"),
     ):
-        source_corr = np.stack(
-            [np.corrcoef(iva_components[:, k, :]) for k in indices]
-        )
+        source_corr = np.stack([np.corrcoef(iva_components[:, k, :]) for k in indices])
         _plot_isc_grid(
             source_corr,
             labels=labels_grp,
@@ -1016,7 +1041,8 @@ def _run_iva(
                 f"Intersubject Correlation of IVA Score (F × C) Patterns — "
                 f"{group_name} — {label}"
             ),
-            save_path=out_dir / f"{prefix}iva_score_isc_freq_channel_{label}_{suffix}.png",
+            save_path=out_dir
+            / f"{prefix}iva_score_isc_freq_channel_{label}_{suffix}.png",
         )
 
     # (d2) Sigma_N correlation matrix per component + cluster strip — TOP / BOTTOM.
@@ -1029,8 +1055,7 @@ def _run_iva(
             np.stack([sigma_corr[k] for k in indices]),
             labels=labels_grp,
             fig_title=(
-                f"Subject × Subject Correlation from Sigma_N — "
-                f"{group_name} — {label}"
+                f"Subject × Subject Correlation from Sigma_N — {group_name} — {label}"
             ),
             save_path=out_dir / f"{prefix}iva_sigma_n_corr_{label}_{suffix}.png",
         )
@@ -1058,7 +1083,8 @@ def _run_iva(
                 n_channels,
                 labels=labels_grp,
                 label=label,
-                save_path=out_dir / f"{prefix}iva_topomap_mean_var_{label}_{suffix}.png",
+                save_path=out_dir
+                / f"{prefix}iva_topomap_mean_var_{label}_{suffix}.png",
             )
     else:
         _logger.warning(f"[{label}] No info available; skipping topomap plot.")
@@ -1095,13 +1121,16 @@ def _run_iva(
             labels=labels_grp,
             title_suffix="Across Subjects",
             label=label,
-            save_path=out_dir / f"{prefix}iva_mean_variance_over_time_{label}_{suffix}.png",
+            save_path=out_dir
+            / f"{prefix}iva_mean_variance_over_time_{label}_{suffix}.png",
         )
 
     # (i) Mean LOO-ISC bar in the F × C dimension — single figure, top + bottom
-    flat_patterns = iva_scores[:, selected_indices, :, :].reshape(
-        n_subjects, n_show, -1
-    ).transpose(1, 0, 2)  # (n_show, S, F*C)
+    flat_patterns = (
+        iva_scores[:, selected_indices, :, :]
+        .reshape(n_subjects, n_show, -1)
+        .transpose(1, 0, 2)
+    )  # (n_show, S, F*C)
     _plot_loo_isc_bar_fc(
         flat_patterns,
         labels=selected_labels,
@@ -1121,7 +1150,8 @@ def _run_iva(
             time,
             labels=labels_grp,
             label=label,
-            save_path=out_dir / f"{prefix}iva_pairmap_time_subject_{label}_{suffix}.png",
+            save_path=out_dir
+            / f"{prefix}iva_pairmap_time_subject_{label}_{suffix}.png",
         )
 
         subj_freq = iva_scores.mean(axis=-1).transpose(1, 2, 0)[indices]
@@ -1132,7 +1162,8 @@ def _run_iva(
             variant_name="Subject × Frequency (channel-avg scores)",
             labels=labels_grp,
             label=label,
-            save_path=out_dir / f"{prefix}iva_pairmap_subject_frequency_{label}_{suffix}.png",
+            save_path=out_dir
+            / f"{prefix}iva_pairmap_subject_frequency_{label}_{suffix}.png",
         )
 
         subj_chan = iva_scores.mean(axis=-2).transpose(1, 2, 0)[indices]
@@ -1143,7 +1174,8 @@ def _run_iva(
             variant_name="Subject × Channel (frequency-avg scores)",
             labels=labels_grp,
             label=label,
-            save_path=out_dir / f"{prefix}iva_pairmap_subject_channel_{label}_{suffix}.png",
+            save_path=out_dir
+            / f"{prefix}iva_pairmap_subject_channel_{label}_{suffix}.png",
         )
 
         freq_chan = iva_scores.mean(axis=0)[indices]  # (K, F, C)
@@ -1152,11 +1184,14 @@ def _run_iva(
             freqs,
             labels=labels_grp,
             label=label,
-            save_path=out_dir / f"{prefix}iva_pairmap_frequency_channel_{label}_{suffix}.png",
+            save_path=out_dir
+            / f"{prefix}iva_pairmap_frequency_channel_{label}_{suffix}.png",
         )
 
     # (k) Mean subject loading per component: mean |value| over time per subject
-    subject_loadings_all = np.abs(iva_components).mean(axis=2)  # (S, N_PCA) — mean |component| over T
+    subject_loadings_all = np.abs(iva_components).mean(
+        axis=2
+    )  # (S, N_PCA) — mean |component| over T
     for indices, labels_grp, suffix in (
         (top_indices, top_labels, "top"),
         (bottom_indices, bot_labels, "bottom"),
@@ -1168,9 +1203,7 @@ def _run_iva(
             save_path=out_dir / f"{prefix}iva_subject_loadings_{label}_{suffix}.png",
         )
 
-    _logger.info(
-        f"[{label}] IVA-time: 20+ plot files saved to {out_dir}"
-    )
+    _logger.info(f"[{label}] IVA-time: 20+ plot files saved to {out_dir}")
 
 
 # ---------------------------------------------------------------------------
@@ -1213,7 +1246,7 @@ if __name__ == "__main__":
         f"IVA-time: condition={condition.value}, "
         f"music_types={[mt.value for mt in music_types]}, "
         f"n_pca={args.n_pca}, n_top={args.n_top}, n_bottom={args.n_bottom}, "
-        f"band={band_name or 'broadband'}, "
+        f"band={band_name or SpectrumTypeVariants.BROADBAND.value}, "
         f"iva_opt={args.iva_opt_approach}"
     )
 
@@ -1248,7 +1281,7 @@ if __name__ == "__main__":
             dataset_key,
             representation="power",
             freqs=freqs_full,
-            wavelet_dir=(wavelet_dir / "broadband"),
+            wavelet_dir=(wavelet_dir / SpectrumTypeVariants.BROADBAND.value),
             reuse_wavelets=args.reuse_wavelets,
         )
 

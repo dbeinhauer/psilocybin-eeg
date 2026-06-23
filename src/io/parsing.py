@@ -176,9 +176,7 @@ class DatasetParser(LoggerMixin):
         # Parse music type.
         music_type_value = self._assign_music_type(match)
         if music_type_value is None:
-            self.logger.error(
-                f"Invalid music type value in filename: {filename}"
-            )
+            self.logger.error(f"Invalid music type value in filename: {filename}")
             return None
         results[SingleDataMetadata.MUSIC_TYPE] = music_type_value
 

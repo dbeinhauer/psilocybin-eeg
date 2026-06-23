@@ -72,6 +72,7 @@ from src.visualization.mean_variance_plots import (
     plot_band_windowed_analysis,
 )
 from src.definitions.fields import (
+    SpectrumTypeVariants,
     MusicTypeVariants,
     ConditionVariants,
     ExclusionCategories,
@@ -175,11 +176,17 @@ def _run_raw_analysis(
     step_sec: float | None = None,
 ) -> None:
     """Run all raw (broadband) mean-variance sections for one dataset."""
-    broadband_timeseries_dir = save_dir / "broadband" / "timeseries"
+    broadband_timeseries_dir = (
+        save_dir / SpectrumTypeVariants.BROADBAND.value / "timeseries"
+    )
     broadband_timeseries_dir.mkdir(parents=True, exist_ok=True)
-    broadband_variance_dir = save_dir / "broadband" / "variance"
+    broadband_variance_dir = (
+        save_dir / SpectrumTypeVariants.BROADBAND.value / "variance"
+    )
     broadband_variance_dir.mkdir(parents=True, exist_ok=True)
-    broadband_windowed_dir = save_dir / "broadband" / "windowed"
+    broadband_windowed_dir = (
+        save_dir / SpectrumTypeVariants.BROADBAND.value / "windowed"
+    )
     broadband_windowed_dir.mkdir(parents=True, exist_ok=True)
 
     _logger.info(f"[{label}] Computing intersubject statistics …")
@@ -241,13 +248,13 @@ def _run_band_analysis(
     step_sec: float | None = None,
 ) -> None:
     """Run all per-band mean-variance sections for one dataset."""
-    bands_timeseries_dir = save_dir / "bands" / "timeseries"
+    bands_timeseries_dir = save_dir / SpectrumTypeVariants.BANDS.value / "timeseries"
     bands_timeseries_dir.mkdir(parents=True, exist_ok=True)
-    bands_variance_dir = save_dir / "bands" / "variance"
+    bands_variance_dir = save_dir / SpectrumTypeVariants.BANDS.value / "variance"
     bands_variance_dir.mkdir(parents=True, exist_ok=True)
-    bands_isc_dir = save_dir / "bands" / "isc_matrices"
+    bands_isc_dir = save_dir / SpectrumTypeVariants.BANDS.value / "isc_matrices"
     bands_isc_dir.mkdir(parents=True, exist_ok=True)
-    bands_windowed_dir = save_dir / "bands" / "windowed"
+    bands_windowed_dir = save_dir / SpectrumTypeVariants.BANDS.value / "windowed"
     bands_windowed_dir.mkdir(parents=True, exist_ok=True)
 
     sfreq = ad.sfreq

@@ -6,6 +6,9 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
+import pytest
+
+import mne
 
 from src.analysis.summary import EEGSummarizedAnalyzer
 from src.definitions.fields import (
@@ -13,8 +16,10 @@ from src.definitions.fields import (
     CoordinateSystems,
     ExperimentNames,
     MusicTypeVariants,
+    PreprocessedDataVariants,
     SingleDataMetadata,
 )
+from src.preprocessing.stimulus_alignment import StimulusAligner
 
 
 class TestLoadAndPrepareData:
@@ -121,3 +126,102 @@ class TestSaveLoadDataWithMetadata:
             "second_raw.fif",
         ]
         assert restored.filtered_df.index.tolist() == [10, 20]
+
+
+def _make_mock_raw(n_channels: int, n_times: int, sfreq: float, onset_sec: list[float]):
+    """Return a mock MNE Raw with fam+ annotations at the given onset seconds."""
+    raw = MagicMock()
+    raw.info = {"sfreq": sfreq, "ch_names": [f"ch{i}" for i in range(n_channels)]}
+    raw.n_times = n_times
+    raw.pick.return_value = raw
+    raw.resample.return_value = raw
+    raw.get_data.return_value = np.zeros((n_channels, n_times))
+    annotations = mne.Annotations(
+        onset=onset_sec,
+        duration=[0.0] * len(onset_sec),
+        description=["fam+"] * len(onset_sec),
+    )
+    raw.annotations = annotations
+    raw.first_time = 0.0
+    raw.time_as_index = lambda t, use_rounding=False: np.round(
+        np.asarray(t) * sfreq
+    ).astype(int)
+    return raw
+
+
+class TestLoadPreAlignmentData:
+    @patch("src.analysis.summary.DatasetFilter.filter_dataset_by_all_categories")
+    @patch("src.analysis.summary.DatasetHandler")
+    def test_returns_list_aligner_and_info(
+        self, mock_dataset_handler_cls, mock_filter
+    ):
+        sfreq = 250.0
+        filtered_df = pd.DataFrame(
+            {SingleDataMetadata.FILENAME: ["subj1.fif", "subj2.fif"]},
+            index=[0, 1],
+        )
+        mock_filter.return_value = filtered_df
+
+        mock_dataset_handler = MagicMock()
+        mock_dataset_handler.dataset_metadata = pd.DataFrame()
+        mock_dataset_handler.excluded_participants_metadata = pd.DataFrame()
+        mock_dataset_handler_cls.return_value = mock_dataset_handler
+
+        # Two subjects: 3 s and 4 s recordings, two fam+ onsets each.
+        raw1 = _make_mock_raw(2, int(3 * sfreq), sfreq, [0.5, 1.5])
+        raw2 = _make_mock_raw(2, int(4 * sfreq), sfreq, [0.5, 2.0])
+        mock_dataset_handler.load_data_file.side_effect = [raw1, raw2]
+
+        analyzer = EEGSummarizedAnalyzer(
+            experiment_name=ExperimentNames.ASSR,
+            coordinate_system=CoordinateSystems.HYDROGEL_257_NO_FIDUCIALS,
+            music_types=[MusicTypeVariants.ASSR],
+            conditions=[ConditionVariants.PLACEBO],
+            exclusion_categories=[],
+        )
+
+        arrays, aligner, info = analyzer.load_pre_alignment_data(
+            resample_freq=sfreq, n_jobs=1
+        )
+
+        # One array per subject.
+        assert len(arrays) == 2
+        assert arrays[0].shape == (2, int(3 * sfreq))
+        assert arrays[1].shape == (2, int(4 * sfreq))
+
+        # Aligner has one keep_segments list per subject.
+        assert isinstance(aligner, StimulusAligner)
+        assert len(aligner.keep_segments) == 2
+
+        # All subjects' segments sum to the same total_length.
+        for segs in aligner.keep_segments:
+            assert sum(e - s for s, e in segs) == aligner.total_length
+
+        # RAW_AFTER_ICA was loaded, not RAW_CROPPED.
+        for call in mock_dataset_handler.load_data_file.call_args_list:
+            assert (
+                call.kwargs.get("processed_data_type")
+                == PreprocessedDataVariants.RAW_AFTER_ICA
+            )
+
+    @patch("src.analysis.summary.DatasetFilter.filter_dataset_by_all_categories")
+    @patch("src.analysis.summary.DatasetHandler")
+    def test_no_stimulus_label_raises(self, mock_dataset_handler_cls, mock_filter):
+        mock_filter.return_value = pd.DataFrame(
+            {SingleDataMetadata.FILENAME: ["subj1.fif"]}, index=[0]
+        )
+        mock_dataset_handler = MagicMock()
+        mock_dataset_handler.dataset_metadata = pd.DataFrame()
+        mock_dataset_handler.excluded_participants_metadata = pd.DataFrame()
+        mock_dataset_handler_cls.return_value = mock_dataset_handler
+
+        analyzer = EEGSummarizedAnalyzer(
+            experiment_name=ExperimentNames.PSILO_MUSIC,  # no stimulus label
+            coordinate_system=CoordinateSystems.HYDROGEL_257,
+            music_types=[MusicTypeVariants.CLASSICAL],
+            conditions=[ConditionVariants.PLACEBO],
+            exclusion_categories=[],
+        )
+
+        with pytest.raises(ValueError, match="no registered stimulus label"):
+            analyzer.load_pre_alignment_data()

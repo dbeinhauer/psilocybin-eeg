@@ -52,7 +52,10 @@ if __name__ == "__main__":
     selected_condition = ConditionVariants(args.condition)
     # ASSR has a single (placeholder) music type and no music dimension.
     selected_music_type = MusicTypeVariants.ASSR
-    exclusion_categories = [ExclusionCategories.WRONG_CONDITION, ExclusionCategories.ARTIFACTS]
+    exclusion_categories = [
+        ExclusionCategories.WRONG_CONDITION,
+        ExclusionCategories.ARTIFACTS,
+    ]
 
     filtered_df, aligned, aligner = dataset_handler.align_stimuli_by_annotations(
         selected_music_type,

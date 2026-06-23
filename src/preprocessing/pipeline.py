@@ -224,9 +224,7 @@ class DatasetHandler(LoggerMixin):
             self.excluded_participants_path,  # Path to CSV list of excluded participants.
         ) = self._init_dataset_paths(experiment_name, coordinate_system)
 
-        self.dataset_parser = DatasetParser(
-            experiment_name, self.participant_map_path
-        )
+        self.dataset_parser = DatasetParser(experiment_name, self.participant_map_path)
         self.dataset_metadata = self.dataset_parser.parse_dataset_filenames(
             self.raw_data_dir
         )

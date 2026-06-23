@@ -10,6 +10,7 @@ from src.preprocessing.stimulus_alignment import (
     get_stimulus_onset_samples,
     coarse_crop_to_stimulus_span,
     align_raws,
+    apply_keep_segments_to_array,
 )
 
 SFREQ = 1000.0  # 1 ms per sample -> sample index == milliseconds
@@ -238,6 +239,72 @@ class TestCoarseCrop:
         raw = _make_raw_with_onsets([], 1000)
         cropped = coarse_crop_to_stimulus_span(raw, "fam+", trim_sec=10.0)
         assert cropped.n_times == raw.n_times
+
+
+class TestApplyKeepSegmentsToArray:
+    """apply_keep_segments_to_array — trim numpy arrays the same way Raw objects are trimmed."""
+
+    def test_single_segment_2d(self):
+        data = np.arange(20).reshape(2, 10)
+        result = apply_keep_segments_to_array(data, [(2, 7)])
+        np.testing.assert_array_equal(result, data[:, 2:7])
+
+    def test_two_segments_concatenated(self):
+        data = np.arange(30).reshape(3, 10)
+        result = apply_keep_segments_to_array(data, [(0, 3), (7, 10)])
+        expected = np.concatenate([data[:, 0:3], data[:, 7:10]], axis=1)
+        np.testing.assert_array_equal(result, expected)
+
+    def test_3d_array_time_on_last_axis(self):
+        # (n_channels, n_freqs, n_times)
+        data = np.random.default_rng(0).standard_normal((4, 5, 20))
+        result = apply_keep_segments_to_array(data, [(2, 8), (12, 18)])
+        expected = np.concatenate([data[..., 2:8], data[..., 12:18]], axis=-1)
+        np.testing.assert_array_equal(result, expected)
+
+    def test_output_length_matches_aligner_total_length(self):
+        # Use the 3-subject fixture: aligner.total_length == 700.
+        onsets = [np.array([0, 750]), np.array([0, 1000]), np.array([0, 700])]
+        lengths = [750, 1000, 700]
+        aligner = StimulusAligner(
+            onsets, lengths, SFREQ, keep_tail_sec=0.1,
+            pre_window_sec=0.0, post_window_sec=0.0,
+        )
+        for i, (n_times, segments) in enumerate(
+            zip(lengths, aligner.keep_segments)
+        ):
+            data = np.zeros((3, n_times))
+            result = apply_keep_segments_to_array(data, segments)
+            assert result.shape == (3, aligner.total_length), (
+                f"Subject {i}: expected ({3}, {aligner.total_length}), "
+                f"got {result.shape}"
+            )
+
+    def test_clamps_segments_to_array_bounds(self):
+        data = np.ones((2, 10))
+        # Segment extends past array end; should be clamped silently.
+        result = apply_keep_segments_to_array(data, [(0, 15)])
+        np.testing.assert_array_equal(result, data[:, 0:10])
+
+    def test_no_valid_segments_raises(self):
+        data = np.ones((2, 10))
+        with pytest.raises(ValueError):
+            apply_keep_segments_to_array(data, [(15, 20)])  # entirely out of range
+
+    def test_matches_raw_splice_content(self):
+        # Verify that trimming a numpy array gives the same sample values as
+        # the MNE Raw splice produced by apply_keep_segments.
+        raws = [
+            _make_raw_with_onsets([0, 750], 750),
+            _make_raw_with_onsets([0, 1000], 1000),
+        ]
+        aligned, aligner = align_raws(
+            raws, "fam+", keep_tail_sec=0.1, pre_window_sec=0.0, post_window_sec=0.0
+        )
+        for raw, aligned_raw, segments in zip(raws, aligned, aligner.keep_segments):
+            arr = raw.get_data()
+            trimmed = apply_keep_segments_to_array(arr, segments)
+            np.testing.assert_array_equal(trimmed, aligned_raw.get_data())
 
 
 class TestApplyToRaw:

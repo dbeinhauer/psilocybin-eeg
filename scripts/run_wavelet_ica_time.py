@@ -67,6 +67,7 @@ from scripts.analysis_common import (  # noqa: E402
 from src.analysis.wavelet_ica import zscore_by_time  # noqa: E402
 from src.definitions.constants import ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
+    SpectrumTypeVariants,
     ConditionVariants,
     ExclusionCategories,
     ExperimentNames,
@@ -893,10 +894,10 @@ def _run_time(
     prefixed by ``<band>_``. Otherwise the broadband layout is used.
     """
     if band is None:
-        out_dir = save_dir / "broadband" / "time"
+        out_dir = save_dir / SpectrumTypeVariants.BROADBAND.value / "time"
         prefix = ""
     else:
-        out_dir = save_dir / "bands" / "time"
+        out_dir = save_dir / SpectrumTypeVariants.BANDS.value / "time"
         prefix = f"{band}_"
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1103,7 +1104,7 @@ if __name__ == "__main__":
         f"Time ICA: condition={condition.value}, "
         f"music_types={[mt.value for mt in music_types]}, "
         f"n_pca={args.n_pca}, n_ica={args.n_ica}, "
-        f"band={band_name or 'broadband'}"
+        f"band={band_name or SpectrumTypeVariants.BROADBAND.value}"
     )
 
     analyzers = load_analyzers(
@@ -1138,7 +1139,7 @@ if __name__ == "__main__":
             dataset_key,
             representation="power",
             freqs=freqs,
-            wavelet_dir=(wavelet_dir / "broadband"),
+            wavelet_dir=(wavelet_dir / SpectrumTypeVariants.BROADBAND.value),
             reuse_wavelets=args.reuse_wavelets,
         )
 

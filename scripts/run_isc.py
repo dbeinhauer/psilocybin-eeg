@@ -81,6 +81,7 @@ from src.analysis.isc import (  # noqa: E402
 )
 from src.definitions.constants import ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
+    SpectrumTypeVariants,
     ConditionVariants,
     ExclusionCategories,
     ExperimentNames,
@@ -212,11 +213,13 @@ def _run_broadband_analysis(
     n_ch_subsample: int,
 ) -> None:
     """Run all broadband ISC sections for one dataset."""
-    loo_isc_dir = save_dir / "broadband" / "loo_isc"
+    loo_isc_dir = save_dir / SpectrumTypeVariants.BROADBAND.value / "loo_isc"
     loo_isc_dir.mkdir(parents=True, exist_ok=True)
-    pairwise_isc_dir = save_dir / "broadband" / "pairwise_isc"
+    pairwise_isc_dir = save_dir / SpectrumTypeVariants.BROADBAND.value / "pairwise_isc"
     pairwise_isc_dir.mkdir(parents=True, exist_ok=True)
-    sliding_window_dir = save_dir / "broadband" / "sliding_window"
+    sliding_window_dir = (
+        save_dir / SpectrumTypeVariants.BROADBAND.value / "sliding_window"
+    )
     sliding_window_dir.mkdir(parents=True, exist_ok=True)
 
     data = ad.data
@@ -328,13 +331,13 @@ def _run_band_analysis(
     n_ch_subsample: int,
 ) -> None:
     """Run all per-band ISC sections for one dataset."""
-    loo_isc_dir = save_dir / "bands" / "loo_isc"
+    loo_isc_dir = save_dir / SpectrumTypeVariants.BANDS.value / "loo_isc"
     loo_isc_dir.mkdir(parents=True, exist_ok=True)
-    pairwise_isc_dir = save_dir / "bands" / "pairwise_isc"
+    pairwise_isc_dir = save_dir / SpectrumTypeVariants.BANDS.value / "pairwise_isc"
     pairwise_isc_dir.mkdir(parents=True, exist_ok=True)
-    sliding_window_dir = save_dir / "bands" / "sliding_window"
+    sliding_window_dir = save_dir / SpectrumTypeVariants.BANDS.value / "sliding_window"
     sliding_window_dir.mkdir(parents=True, exist_ok=True)
-    band_overlap_dir = save_dir / "bands" / "band_overlap"
+    band_overlap_dir = save_dir / SpectrumTypeVariants.BANDS.value / "band_overlap"
     band_overlap_dir.mkdir(parents=True, exist_ok=True)
 
     data = ad.data
@@ -476,7 +479,7 @@ def _run_mean_field_analysis(
     step_sec: float,
 ) -> None:
     """Run mean-field ISC analysis for one dataset."""
-    mf_dir = save_dir / "broadband" / "mean_field"
+    mf_dir = save_dir / SpectrumTypeVariants.BROADBAND.value / "mean_field"
     mf_dir.mkdir(parents=True, exist_ok=True)
 
     # LOO-ISC

@@ -91,7 +91,11 @@ class DatasetFilter:
         """
 
         def matches(column_key, selected) -> pd.Series:
-            key = column_key if column_key in excluded_participants_metadata else column_key.value
+            key = (
+                column_key
+                if column_key in excluded_participants_metadata
+                else column_key.value
+            )
             column = excluded_participants_metadata[key]
             blank = column.isna() | (column.astype(str).str.strip() == "")
             allowed = {s if isinstance(s, str) else s.value for s in selected} | set(
