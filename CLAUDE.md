@@ -44,11 +44,6 @@ python scripts/run_mean_variance.py --music_type CLASSIC PSYTRANCE
 # scripts/analysis_common.py provides shared helpers (load_analyzers, analyzers_to_datasets)
 # used by both run_isc.py and run_mean_variance.py
 
-# Run visualization catalog (Streamlit app, independent of src/)
-uv run --with "streamlit>=1.32.0" --with "pyyaml>=6.0" --with "numpy>=1.24.0" --with "matplotlib>=3.7.0" \
-    streamlit run viz_catalog/app.py
-```
-
 ## Architecture
 
 ### Source Package (`src/`)
@@ -89,10 +84,6 @@ plots/
 ```
 
 Notebooks save to `notebooks/{NN}-{name}/plots/{broadband|bands}/{analysis_type}/`. Never place files directly in `broadband/` or `bands/` — always use an `{analysis_type}/` subdirectory.
-
-### Visualization Catalog (`viz_catalog/`)
-
-Self-contained Streamlit app — **no imports from `src/`**. Content defined in `catalog.yaml`. Three pages: Analysis Catalog, Results Browser, Interactive Explorer. Adding analyses requires only YAML changes; new sketch types go in `pages/1_📋_Catalog.py` registered in `SKETCH_FUNCTIONS`.
 
 ## Code Conventions
 
@@ -138,4 +129,3 @@ git branch -d claude/issue-N
 3. Create CLI script in `scripts/`
 4. Add HPC job template in `jobs/metacentrum/NN-<name>/`
 5. Write tests in `tests/test_<module>.py`
-6. Update `viz_catalog/catalog.yaml` for the catalog app

@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -N ASSR_STORE_WAVELETS_03
 #PBS -l walltime=4:00:00
-#PBS -l select=1:ncpus=8:mem=80gb:scratch_local=50gb
+#PBS -l select=1:ncpus=8:mem=400gb:scratch_local=100gb
 #PBS -m ae
 #PBS -j oe
 
