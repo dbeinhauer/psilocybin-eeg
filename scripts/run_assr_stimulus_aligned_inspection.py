@@ -7,8 +7,10 @@ concatenated signal and the precomputed wavelet power — averaged over every
 ``fam+`` stimulus onset, and writes the diagnostic plots used to spot
 per-participant outliers:
 
-* raw stimulus-locked z-scored mean signal (overlay + one panel per participant);
-* wavelet time-frequency power maps (per participant + group, z-scored per freq);
+* raw stimulus-locked broadband GFP (global field power of the evoked response;
+  overlay + one panel per participant);
+* wavelet time-frequency power maps (per participant + group, z-scored per freq
+  against the whole recording);
 * 40 Hz ASSR-band power time course (per participant + group);
 * stimulus-locked z-scored wavelet-power topomaps (per participant + group).
 
@@ -118,14 +120,16 @@ def stream_wavelet_reduce(
     immediately reduces it, so peak memory is a single block (~tens of MB) rather
     than the full multi-GB tensor.
 
-    For each subject it accumulates two reductions:
+    For each subject it accumulates two reductions, both built from the power
+    **z-scored per frequency against the whole recording** (``zscore(block,
+    axis=1)``) — which removes the 1/f tilt and references every frequency to the
+    most stable baseline available:
 
-    * the **channel-mean stimulus-locked power map** ``(n_freqs, win)`` — the raw
-      power epoch-averaged over onsets, then averaged across channels (for the
-      time-frequency plots);
-    * a **per-channel topomap scalar** — the power **z-scored in time**,
-      epoch-averaged, then mean-collapsed over ``topo_freq_mask`` and
-      ``topo_post_mask`` (signed; no powering / sqrt).
+    * the **channel-mean stimulus-locked TF map** ``(n_freqs, win)`` — the
+      z-scored power epoch-averaged over onsets, then averaged across channels
+      (for the time-frequency plots);
+    * a **per-channel topomap scalar** — the same z-scored, epoch-averaged map
+      mean-collapsed over ``topo_freq_mask`` and ``topo_post_mask`` (signed).
 
     Args:
         npz_path: Path to the ``*__wavelet_power__*__freqdim1.npz`` cache.
@@ -167,11 +171,12 @@ def stream_wavelet_reduce(
                     block = np.frombuffer(
                         buf, dtype=dtype, count=n_freqs * n_times
                     ).reshape(n_freqs, n_times)
-                    # Channel-mean TF map: epoch-average the raw power.
-                    ev_power, _ = epoch_average(block, onsets, pre, post)
-                    tf_sum += ev_power
-                    # Topomap scalar: z-score power in time, epoch-average, collapse.
+                    # Z-score each frequency against the whole recording, then
+                    # epoch-average: the per-channel stimulus-locked TF map in
+                    # units of SD relative to the recording baseline.
                     ev_z, _ = epoch_average(zscore(block, axis=1), onsets, pre, post)
+                    tf_sum += ev_z  # channel-mean TF map
+                    # Topomap scalar: collapse the same z-scored map over freq/time.
                     topo[subj, chan] = ev_z[topo_freq_mask][:, topo_post_mask].mean()
                 power_maps[subj] = tf_sum / n_channels
                 print(f"  reduced subject {subj + 1}/{n_subj}", flush=True)
@@ -214,39 +219,39 @@ def grid_shape(n_panels: int, max_cols: int = 5) -> tuple[int, int]:
 # --------------------------------------------------------------------------- #
 #  Plotting                                                                   #
 # --------------------------------------------------------------------------- #
-def plot_raw_signal(
-    raw_curves: dict[int, np.ndarray],
+def plot_gfp_overlay(
+    gfp_curves: dict[int, np.ndarray],
     group_curve: np.ndarray,
     epoch_times: np.ndarray,
     labels: dict[int, str],
     title_suffix: str,
     plots_dir: Path,
 ) -> None:
-    """Overlay of per-participant stimulus-locked mean signals + group average."""
+    """Overlay of per-participant stimulus-locked broadband GFP + group average."""
     fig, ax = plt.subplots(figsize=(12, 6))
-    for subj, curve in raw_curves.items():
+    for subj, curve in gfp_curves.items():
         ax.plot(epoch_times, curve, lw=1.0, alpha=0.7, label=labels[subj])
     ax.plot(epoch_times, group_curve, lw=2.8, color="black", label="group average")
     ax.axvline(0.0, color="red", ls="--", lw=1, label="onset")
-    ax.set_title(f"Stimulus-locked z-scored mean signal — {title_suffix}")
+    ax.set_title(f"Stimulus-locked broadband GFP (evoked) — {title_suffix}")
     ax.set_xlabel("Time relative to onset (s)")
-    ax.set_ylabel("z-scored amplitude (channel mean)")
+    ax.set_ylabel("Global field power (spatial SD across channels)")
     ax.legend(loc="upper right", fontsize=7, ncol=3)
     fig.tight_layout()
-    fig.savefig(plots_dir / "raw_stimulus_locked_mean_signal.png", dpi=150)
+    fig.savefig(plots_dir / "raw_stimulus_locked_gfp.png", dpi=150)
     plt.close(fig)
 
 
-def plot_raw_signal_per_participant(
-    raw_curves: dict[int, np.ndarray],
+def plot_gfp_per_participant(
+    gfp_curves: dict[int, np.ndarray],
     group_curve: np.ndarray,
     epoch_times: np.ndarray,
     labels: dict[int, str],
     title_suffix: str,
     plots_dir: Path,
 ) -> None:
-    """One panel per participant: its mean signal vs the group average."""
-    subjects = list(raw_curves)
+    """One panel per participant: its broadband GFP vs the group average."""
+    subjects = list(gfp_curves)
     nrows, ncols = grid_shape(len(subjects))
     fig, axes = plt.subplots(
         nrows, ncols, figsize=(3.4 * ncols, 2.8 * nrows), sharey=True, squeeze=False
@@ -254,19 +259,19 @@ def plot_raw_signal_per_participant(
     flat = axes.flatten()
     for ax, subj in zip(flat, subjects):
         ax.plot(epoch_times, group_curve, lw=1.0, color="0.6", ls="--")
-        ax.plot(epoch_times, raw_curves[subj], lw=1.6, color="C0")
+        ax.plot(epoch_times, gfp_curves[subj], lw=1.6, color="C0")
         ax.axvline(0.0, color="red", ls="--", lw=0.8)
         ax.set_title(labels[subj], fontsize=9)
     for ax in flat[len(subjects):]:
         ax.axis("off")
     fig.suptitle(
-        f"Per-participant stimulus-locked z-scored mean signal — {title_suffix}",
+        f"Per-participant stimulus-locked broadband GFP (evoked) — {title_suffix}",
         y=1.0,
     )
     fig.supxlabel("Time relative to onset (s)")
     fig.tight_layout()
     fig.savefig(
-        plots_dir / "raw_stimulus_locked_mean_signal_per_participant.png",
+        plots_dir / "raw_stimulus_locked_gfp_per_participant.png",
         dpi=150,
         bbox_inches="tight",
     )
@@ -282,10 +287,9 @@ def plot_tf_per_participant(
     title_suffix: str,
     plots_dir: Path,
 ) -> None:
-    """Grid of per-participant z-scored (per-frequency) time-frequency maps."""
+    """Grid of per-participant time-frequency maps (z-scored vs whole recording)."""
     n_subj = power_maps.shape[0]
-    tf_z = np.stack([zscore(power_maps[s], axis=1) for s in range(n_subj)])
-    vmax = float(np.abs(tf_z).max())
+    vmax = float(np.abs(power_maps).max())
     extent = [epoch_times[0], epoch_times[-1], freqs[0], freqs[-1]]
     nrows, ncols = grid_shape(n_subj)
     fig, axes = plt.subplots(
@@ -295,7 +299,7 @@ def plot_tf_per_participant(
     im = None
     for ax, subj in zip(flat, range(n_subj)):
         im = ax.imshow(
-            tf_z[subj], aspect="auto", origin="lower", extent=extent,
+            power_maps[subj], aspect="auto", origin="lower", extent=extent,
             cmap="RdBu_r", vmin=-vmax, vmax=vmax,
         )
         ax.axvline(0.0, color="k", ls="--", lw=0.7)
@@ -323,12 +327,14 @@ def plot_tf_group(
     title_suffix: str,
     plots_dir: Path,
 ) -> None:
-    """Group-average z-scored (per-frequency) time-frequency map."""
-    group_tf_z = zscore(power_maps.mean(axis=0), axis=1)
+    """Group-average time-frequency map (z-scored vs whole recording)."""
+    group_tf = power_maps.mean(axis=0)
+    vmax = float(np.abs(group_tf).max())
     extent = [epoch_times[0], epoch_times[-1], freqs[0], freqs[-1]]
     fig, ax = plt.subplots(figsize=(7, 4.6))
     im = ax.imshow(
-        group_tf_z, aspect="auto", origin="lower", extent=extent, cmap="RdBu_r"
+        group_tf, aspect="auto", origin="lower", extent=extent, cmap="RdBu_r",
+        vmin=-vmax, vmax=vmax,
     )
     ax.axvline(0.0, color="k", ls="--", lw=0.8, label="onset")
     ax.axhline(assr_freq, color="green", ls=":", lw=1.2, label=f"{assr_freq:.0f} Hz")
@@ -354,11 +360,12 @@ def plot_assr_band(
     title_suffix: str,
     plots_dir: Path,
 ) -> None:
-    """Per-participant + group ASSR-band power time course (z-scored in time)."""
+    """Per-participant + group ASSR-band power time course (z-scored vs recording)."""
     band = (freqs >= assr_freq - 2) & (freqs <= assr_freq + 2)
     n_subj = power_maps.shape[0]
+    # power_maps is already z-scored vs the whole recording; just average the band.
     curves = np.stack(
-        [zscore(power_maps[s, band].mean(axis=0)) for s in range(n_subj)]
+        [power_maps[s, band].mean(axis=0) for s in range(n_subj)]
     )
     fig, ax = plt.subplots(figsize=(12, 6))
     for subj in range(n_subj):
@@ -367,7 +374,7 @@ def plot_assr_band(
             label="group average")
     ax.axvline(0.0, color="red", ls="--", lw=1, label="onset")
     ax.set_title(
-        f"Stimulus-locked {assr_freq:.0f} Hz power (z-scored in time) — "
+        f"Stimulus-locked {assr_freq:.0f} Hz power (z-scored vs recording) — "
         f"{title_suffix}"
     )
     ax.set_xlabel("Time relative to onset (s)")
@@ -498,19 +505,24 @@ def run_inspection(args: argparse.Namespace) -> None:
         flush=True,
     )
 
-    # ---- Raw stimulus-locked mean signal (all channels) ---------------------
-    raw_curves: dict[int, np.ndarray] = {}
+    # ---- Raw stimulus-locked broadband GFP (all channels) -------------------
+    # ASSR is phase-locked, so average the signed epochs first (the evoked
+    # response), then collapse channels with the spatial std (GFP). GFP is
+    # sign-invariant; a signed channel mean would cancel under the average
+    # reference and is not informative here.
+    gfp_curves: dict[int, np.ndarray] = {}
     for subj in range(n_subj):
-        z = zscore(np.asarray(raw_mm[subj]), axis=1)  # (n_ch, n_times)
-        ev, n_used = epoch_average(z, onsets, pre, post)  # (n_ch, win)
-        raw_curves[subj] = ev.mean(axis=0)
-    group_curve = np.mean([raw_curves[s] for s in range(n_subj)], axis=0)
-    print(f"Raw: averaged {n_used} stimuli per participant.", flush=True)
+        evoked, n_used = epoch_average(
+            np.asarray(raw_mm[subj]), onsets, pre, post
+        )  # (n_ch, win)
+        gfp_curves[subj] = evoked.std(axis=0)  # (win,)
+    group_curve = np.mean([gfp_curves[s] for s in range(n_subj)], axis=0)
+    print(f"Raw GFP: averaged {n_used} stimuli per participant.", flush=True)
 
     title_suffix = f"{condition.value}/{music_type.value} (n={n_subj})"
-    plot_raw_signal(raw_curves, group_curve, epoch_times, labels, title_suffix, plots_dir)
-    plot_raw_signal_per_participant(
-        raw_curves, group_curve, epoch_times, labels, title_suffix, plots_dir
+    plot_gfp_overlay(gfp_curves, group_curve, epoch_times, labels, title_suffix, plots_dir)
+    plot_gfp_per_participant(
+        gfp_curves, group_curve, epoch_times, labels, title_suffix, plots_dir
     )
 
     # ---- Wavelet: single streaming pass over the whole cache ----------------
