@@ -1,0 +1,90 @@
+#!/bin/bash
+#PBS -N ASSR_STIMULUS_ALIGNED_INSPECTION_00
+#PBS -l walltime=4:00:00
+#PBS -l select=1:ncpus=8:mem=499gb:scratch_local=100gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-00 whole-dataset ASSR stimulus-aligned inspection.
+#
+# Replicates notebooks/00-preprocessing/assr_stimulus_aligned_inspection.ipynb
+# for ALL subjects and ALL channels: the stimulus-locked (per fam+ onset) raw
+# mean signal and wavelet power are summarised per participant and averaged
+# across participants, producing diagnostic plots for per-participant outlier
+# detection (raw mean signal, time-frequency maps, 40 Hz ASSR-band time course,
+# and z-scored wavelet-power topomaps).
+#
+# The wavelet cache (tens of GB, stored by jobs/metacentrum/03-wavelet-analysis/
+# store_assr_wavelets.pbs) is read lazily in one sequential streaming pass —
+# every channel block is decompressed once and immediately reduced — so memory
+# stays low; walltime is dominated by decompressing the cache once per condition.
+#
+# Requires (per condition), produced by the stimulus alignment + wavelet store:
+#   data/processed/assr/concatenated/<Condition>_ASSR.npy (+ .stimulus_onsets.npy,
+#       + .metadata.csv)
+#   data/processed/assr/wavelets/broadband/<Condition>_ASSR__wavelet_power__*.npz
+# A condition whose inputs are absent (e.g. Psilocybin not yet generated) is
+# skipped cleanly rather than failing the job.
+#
+# Output:
+#   plots/00-preprocessing/assr_stimulus_aligned_inspection/<Condition>_ASSR/*.png
+# ---------------------------------------------------------------------------
+
+set -e
+
+# Ensure clean_scratch runs on exit, even on error
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+# Create the runner script for inside the container
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+
+echo "=== Placebo at $(date) ==="
+python /mnt/scripts/run_assr_stimulus_aligned_inspection.py \
+    --condition Placebo
+
+# echo "=== Psilocybin at $(date) ==="
+# python /mnt/scripts/run_assr_stimulus_aligned_inspection.py \
+#     --condition Psilocybin
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+# Bind the project directory as /mnt inside the container
+singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch
