@@ -1,0 +1,98 @@
+#!/bin/bash
+#PBS -N ASSR_RAW_PCA_00
+#PBS -l walltime=0:30:00
+#PBS -l select=1:ncpus=8:mem=64gb:scratch_local=20gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-00 whole-dataset ASSR raw-voltage channel-PCA reduction.
+#
+# Replicates notebooks/00-preprocessing/assr_raw_pca_analysis.ipynb for ALL
+# subjects and ALL channels: the stimulus-locked (per fam+ onset) evoked voltage
+# is reduced to a single spatial component per participant by collapsing the
+# channel dimension with a PCA over channels. PC1's score is plotted as the
+# component's time course and PC1's loading as its scalp topography, per
+# participant and averaged across participants.
+#
+# Each channel is z-scored against the WHOLE recording before epoching (equal
+# electrode influence -> correlation-PCA), then trial-averaged; the post-onset
+# window length is the shortest inter-onset interval so no epoch overlaps the
+# next stimulus. PC1 polarity is aligned across participants (loadings matched to
+# a common template, orientation anchored to Cz) so the topographies and time
+# courses share one consistent sign.
+#
+# The concatenated raw array (~1 GB) is memory-mapped, so memory stays low; the
+# wavelet cache is opened only to read its small channel-name member (the canonical
+# channel order), never its multi-GB data stream. Runtime is dominated by the
+# per-subject PCA, not IO.
+#
+# Requires (per condition), produced by the stimulus alignment + wavelet store:
+#   data/processed/assr/concatenated/<Condition>_ASSR.npy
+#   data/processed/assr/concatenated/<Condition>_ASSR.stimulus_onsets.npy
+#   data/processed/assr/concatenated/<Condition>_ASSR.metadata.csv
+#   data/processed/assr/wavelets/broadband/<Condition>_ASSR__wavelet_power__*.npz
+# A condition whose inputs are absent (e.g. Psilocybin not yet generated) is
+# skipped cleanly rather than failing the job.
+#
+# Output:
+#   plots/00-preprocessing/assr_raw_pca/<Condition>_ASSR/*.png
+# ---------------------------------------------------------------------------
+
+set -e
+
+# Ensure clean_scratch runs on exit, even on error
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+# Create the runner script for inside the container
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+
+echo "=== Placebo at $(date) ==="
+python /mnt/scripts/run_assr_raw_pca.py \
+    --condition Placebo
+
+# echo "=== Psilocybin at $(date) ==="
+# python /mnt/scripts/run_assr_raw_pca.py \
+#     --condition Psilocybin
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+# Bind the project directory as /mnt inside the container
+singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch

@@ -8,7 +8,8 @@ concatenated signal and the precomputed wavelet power — averaged over every
 per-participant outliers:
 
 * raw stimulus-locked broadband GFP (global field power of the evoked response;
-  overlay + one panel per participant);
+  overlay + one panel per participant) and channel-mean evoked response (signed
+  mean across channels; overlay + one panel per participant);
 * wavelet time-frequency power maps (per participant + group, z-scored per freq
   against the whole recording);
 * 40 Hz ASSR-band power time course (per participant + group);
@@ -278,6 +279,66 @@ def plot_gfp_per_participant(
     plt.close(fig)
 
 
+def plot_butterfly_overlay(
+    evoked_curves: dict[int, np.ndarray],
+    group_evoked: np.ndarray,
+    epoch_times: np.ndarray,
+    labels: dict[int, str],
+    title_suffix: str,
+    plots_dir: Path,
+) -> None:
+    """Overlay of per-participant channel-mean signed evoked response + group mean."""
+    fig, ax = plt.subplots(figsize=(12, 6))
+    for subj, evoked in evoked_curves.items():
+        ax.plot(epoch_times, evoked.mean(axis=0), lw=1.0, alpha=0.7, label=labels[subj])
+    ax.plot(epoch_times, group_evoked.mean(axis=0), lw=2.8, color="black",
+            label="group mean")
+    ax.axvline(0.0, color="red", ls="--", lw=1, label="onset")
+    ax.set_title(f"Stimulus-locked channel-mean evoked response — {title_suffix}")
+    ax.set_xlabel("Time relative to onset (s)")
+    ax.set_ylabel("Amplitude (µV)")
+    ax.legend(loc="upper right", fontsize=7, ncol=3)
+    fig.tight_layout()
+    fig.savefig(plots_dir / "raw_stimulus_locked_evoked_mean.png", dpi=150)
+    plt.close(fig)
+
+
+def plot_butterfly_per_participant(
+    evoked_curves: dict[int, np.ndarray],
+    group_evoked: np.ndarray,
+    epoch_times: np.ndarray,
+    labels: dict[int, str],
+    title_suffix: str,
+    plots_dir: Path,
+) -> None:
+    """One panel per participant: channel-mean evoked vs group mean."""
+    subjects = list(evoked_curves)
+    nrows, ncols = grid_shape(len(subjects))
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(3.4 * ncols, 2.8 * nrows), sharey=True, squeeze=False
+    )
+    flat = axes.flatten()
+    for ax, subj in zip(flat, subjects):
+        ax.plot(epoch_times, group_evoked.mean(axis=0), lw=1.0, color="0.6", ls="--")
+        ax.plot(epoch_times, evoked_curves[subj].mean(axis=0), lw=1.6, color="C0")
+        ax.axvline(0.0, color="red", ls="--", lw=0.8)
+        ax.set_title(labels[subj], fontsize=9)
+    for ax in flat[len(subjects):]:
+        ax.axis("off")
+    fig.suptitle(
+        f"Per-participant channel-mean evoked response — {title_suffix}",
+        y=1.0,
+    )
+    fig.supxlabel("Time relative to onset (s)")
+    fig.tight_layout()
+    fig.savefig(
+        plots_dir / "raw_stimulus_locked_evoked_mean_per_participant.png",
+        dpi=150,
+        bbox_inches="tight",
+    )
+    plt.close(fig)
+
+
 def plot_tf_per_participant(
     power_maps: np.ndarray,
     epoch_times: np.ndarray,
@@ -511,18 +572,27 @@ def run_inspection(args: argparse.Namespace) -> None:
     # sign-invariant; a signed channel mean would cancel under the average
     # reference and is not informative here.
     gfp_curves: dict[int, np.ndarray] = {}
+    evoked_curves: dict[int, np.ndarray] = {}
     for subj in range(n_subj):
         evoked, n_used = epoch_average(
             np.asarray(raw_mm[subj]), onsets, pre, post
         )  # (n_ch, win)
         gfp_curves[subj] = evoked.std(axis=0)  # (win,)
+        evoked_curves[subj] = evoked
     group_curve = np.mean([gfp_curves[s] for s in range(n_subj)], axis=0)
+    group_evoked = np.mean([evoked_curves[s] for s in range(n_subj)], axis=0)
     print(f"Raw GFP: averaged {n_used} stimuli per participant.", flush=True)
 
     title_suffix = f"{condition.value}/{music_type.value} (n={n_subj})"
     plot_gfp_overlay(gfp_curves, group_curve, epoch_times, labels, title_suffix, plots_dir)
     plot_gfp_per_participant(
         gfp_curves, group_curve, epoch_times, labels, title_suffix, plots_dir
+    )
+    plot_butterfly_overlay(
+        evoked_curves, group_evoked, epoch_times, labels, title_suffix, plots_dir
+    )
+    plot_butterfly_per_participant(
+        evoked_curves, group_evoked, epoch_times, labels, title_suffix, plots_dir
     )
 
     # ---- Wavelet: single streaming pass over the whole cache ----------------
