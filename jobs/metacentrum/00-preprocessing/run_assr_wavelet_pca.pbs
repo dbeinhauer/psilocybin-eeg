@@ -10,31 +10,54 @@
 #
 # Replicates notebooks/00-preprocessing/assr_wavelet_pca_analysis.ipynb for ALL
 # subjects and ALL channels: the stimulus-locked (per fam+ onset) wavelet power
-# is reduced to a single time-frequency map per participant by collapsing the
-# channel dimension with a PCA over channels (first-component score map), and
+# is reduced to a few time-frequency maps per participant by collapsing the
+# channel dimension with a PCA over channels (one score map per component), and
 # plotted per participant and averaged across participants.
+#
+# N_COMPONENTS (below) sets how many leading components are kept — all treated
+# identically, so a later component can be compared against PC1 rather than
+# assumed uninformative: PCA ranks components by explained channel variance over
+# the whole TF plane, which is mostly low-frequency bins, so a broad onset
+# response can own PC1 while the narrow 40 Hz steady-state lands in PC2 or PC3.
+# The job prints a comparison table (explained variance, topography consistency,
+# driven-minus-baseline contrast in the ASSR band and broadband) scoring the
+# components against each other. Extra components add no IO — the single
+# streaming pass over the cache dominates the walltime. Override at submit time:
+#     qsub -v N_COMPONENTS=5 run_assr_wavelet_pca.pbs
 #
 # Each channel's per-frequency power is z-scored against the WHOLE recording
 # before epoching (removes the 1/f tilt), then epoch-averaged; the post-onset
 # window length is the shortest inter-onset interval so no epoch overlaps the
 # next stimulus.
 #
+# Each component's channel loading is also plotted as a scalp topomap (per
+# participant + group average), and the retained / discarded channel-variance
+# split is printed: the TF maps show when and at which frequency a component is
+# active, the topomap shows where it comes from, which is what tells you whether
+# the channel reduction kept signal or isolated an artefact — everything
+# orthogonal to those topographies is filtered out. Electrode positions come from
+# one RAW_CROPPED recording header (preload=False, no sample data read).
+#
 # The wavelet cache (tens of GB, stored by jobs/metacentrum/03-wavelet-analysis/
 # store_assr_wavelets.pbs) is read lazily in one sequential streaming pass — each
 # channel block is decompressed once and immediately reduced, and each subject's
-# channel stack is collapsed to one PC1 map before the next subject is read — so
-# memory stays low; walltime is dominated by decompressing the cache once per
-# condition.
+# channel stack is collapsed to its component maps before the next subject is
+# read — so memory stays low; walltime is dominated by decompressing the cache
+# once per condition.
 #
 # Requires (per condition), produced by the stimulus alignment + wavelet store:
 #   data/processed/assr/concatenated/<Condition>_ASSR.stimulus_onsets.npy
 #   data/processed/assr/concatenated/<Condition>_ASSR.metadata.csv
 #   data/processed/assr/wavelets/broadband/<Condition>_ASSR__wavelet_power__*.npz
+#   data/processed/assr/<RAW_CROPPED recording>  (header only, for the montage)
 # A condition whose inputs are absent (e.g. Psilocybin not yet generated) is
 # skipped cleanly rather than failing the job.
 #
-# Output:
-#   plots/00-preprocessing/assr_wavelet_pca/<Condition>_ASSR/*.png
+# Output (one TF figure and one topomap figure per component, plus the group TF
+# figure with one panel per component):
+#   plots/00-preprocessing/assr_wavelet_pca/<Condition>_ASSR/wavelet_pca_pc<N>_tf_per_participant.png
+#   plots/00-preprocessing/assr_wavelet_pca/<Condition>_ASSR/wavelet_pca_pc<N>_topomap_per_participant.png
+#   plots/00-preprocessing/assr_wavelet_pca/<Condition>_ASSR/wavelet_pca_tf_group_average.png
 # ---------------------------------------------------------------------------
 
 set -e
@@ -67,18 +90,32 @@ cd "$DATADIR" || {
 
 cd "$SCRATCHDIR"
 
+# How many leading channel-PCA components to extract, plot and compare.
+# Change here, or override per submission with: qsub -v N_COMPONENTS=5 ...
+N_COMPONENTS="${N_COMPONENTS:-3}"
+echo "Components: $N_COMPONENTS"
+
+# The runner heredoc below is quoted, so N_COMPONENTS is read from the container
+# environment at run time rather than substituted here.
+export SINGULARITYENV_N_COMPONENTS="$N_COMPONENTS"
+export APPTAINERENV_N_COMPONENTS="$N_COMPONENTS"
+
 # Create the runner script for inside the container
 cat << 'EOF' > run_inside.sh
 #!/bin/bash
 source /opt/myproject/.venv/bin/activate
 
+N_COMPONENTS="${N_COMPONENTS:-3}"
+
 echo "=== Placebo at $(date) ==="
 python /mnt/scripts/run_assr_wavelet_pca.py \
-    --condition Placebo
+    --condition Placebo \
+    --n_components "$N_COMPONENTS"
 
 # echo "=== Psilocybin at $(date) ==="
 # python /mnt/scripts/run_assr_wavelet_pca.py \
-#     --condition Psilocybin
+#     --condition Psilocybin \
+#     --n_components "$N_COMPONENTS"
 EOF
 
 chmod +x run_inside.sh

@@ -23,8 +23,9 @@ from scipy.stats import zscore
 
 from src.preprocessing.pipeline import DatasetHandler
 from src.preprocessing.stimulus_alignment import (
-    EXPERIMENT_STIMULUS_LABELS,
+    EXPERIMENT_STIMULUS_MARKERS,
     StimulusAligner,
+    StimulusMarker,
     get_stimulus_onset_samples,
     apply_keep_segments_to_array,  # noqa: F401 — re-exported for caller convenience
 )
@@ -114,12 +115,13 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         self.info: Optional[mne.Info] = None
         self.resample_freq: Optional[float] = None
 
-        # Stimulus-onset annotation label for this experiment (e.g. ``fam+`` for
-        # ASSR), or ``None`` for experiments without stimulus annotations. When set,
-        # the onset sample positions (identical across subjects by construction) are
-        # extracted during loading and saved next to the concatenated data.
-        self._stimulus_label: Optional[str] = EXPERIMENT_STIMULUS_LABELS.get(
-            experiment_name
+        # Stimulus marker for this experiment (label + marker→onset offset, e.g.
+        # ``fam+`` for ASSR), or ``None`` for experiments without stimulus
+        # annotations. When set, the onset sample positions (identical across
+        # subjects by construction) are extracted during loading and saved next to
+        # the concatenated data.
+        self._stimulus_marker: Optional[StimulusMarker] = (
+            EXPERIMENT_STIMULUS_MARKERS.get(experiment_name)
         )
         self.stimulus_onsets: Optional[np.ndarray] = None
 
@@ -191,14 +193,18 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         :return: Sorted array of onset sample indices, or ``None`` when the
             experiment has no stimulus annotations / none are present.
         """
-        if self._stimulus_label is None:
+        if self._stimulus_marker is None:
             return None
 
-        onsets = get_stimulus_onset_samples(raw, self._stimulus_label)
+        onsets = get_stimulus_onset_samples(
+            raw,
+            self._stimulus_marker.label,
+            self._stimulus_marker.onset_offset_s,
+        )
         if len(onsets) == 0:
             self.logger.warning(
-                f"No '{self._stimulus_label}' annotations found in the loaded "
-                "recordings; skipping stimulus-onset extraction."
+                f"No '{self._stimulus_marker.label}' annotations found in the "
+                "loaded recordings; skipping stimulus-onset extraction."
             )
             return None
         return onsets
@@ -265,12 +271,23 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         :raises ValueError: If the experiment has no registered stimulus label
             and none is supplied via *stimulus_label*.
         """
-        label = stimulus_label if stimulus_label is not None else self._stimulus_label
+        registered_label = (
+            self._stimulus_marker.label if self._stimulus_marker is not None else None
+        )
+        label = stimulus_label if stimulus_label is not None else registered_label
         if label is None:
             raise ValueError(
                 f"Experiment '{self._experiment_name.value}' has no registered "
                 "stimulus label. Pass stimulus_label explicitly."
             )
+        # The offset always comes from the experiment's registered marker: an
+        # explicit label override selects *which* annotation to read, not how it
+        # relates in time to the stimulus.
+        onset_offset_s = (
+            self._stimulus_marker.onset_offset_s
+            if self._stimulus_marker is not None
+            else 0.0
+        )
 
         self.logger.info(
             f"Loading {len(self.filtered_df)} RAW_AFTER_ICA recording(s) for "
@@ -293,7 +310,9 @@ class EEGSummarizedAnalyzer(LoggerMixin):
 
         # Build the alignment plan from the resampled recordings so that the
         # keep-segments are expressed on the resampled sample grid.
-        onset_samples = [get_stimulus_onset_samples(raw, label) for raw in raws]
+        onset_samples = [
+            get_stimulus_onset_samples(raw, label, onset_offset_s) for raw in raws
+        ]
         recording_lengths = [raw.n_times for raw in raws]
         aligner = StimulusAligner(
             onset_samples,
@@ -434,16 +453,33 @@ class EEGSummarizedAnalyzer(LoggerMixin):
             )
 
         if metadata_path is not None:
-            resolved_metadata_path = Path(metadata_path)
+            candidate_metadata_paths = [Path(metadata_path)]
         else:
-            # Derive metadata path from the resolved load_path (same directory and stem).
-            # This preserves behaviour for the default save path while correctly
-            # handling custom load locations.
-            resolved_metadata_path = load_path.with_suffix(".csv")
-        if resolved_metadata_path.exists():
+            # Derive metadata path from the resolved load_path (same directory and
+            # stem), mirroring :meth:`save_data`, which writes ``<stem>.metadata.csv``.
+            # The bare ``<stem>.csv`` is kept as a fallback for sidecars written
+            # before the suffixes were aligned.
+            candidate_metadata_paths = [
+                load_path.with_suffix(".metadata.csv"),
+                load_path.with_suffix(".csv"),
+            ]
+        resolved_metadata_path = next(
+            (p for p in candidate_metadata_paths if p.exists()), None
+        )
+        if resolved_metadata_path is not None:
             self.filtered_df = pd.read_csv(resolved_metadata_path, index_col=0)
             self._normalize_filtered_df_columns()
             self.logger.info(f"Metadata loaded from {resolved_metadata_path}")
+        else:
+            # Without the sidecar, ``filtered_df`` keeps the freshly-filtered rows
+            # from ``__init__``, which carry no CONCATENATED_PERSON_INDEX — any
+            # subject-index -> participant lookup would silently degrade.
+            self.logger.warning(
+                "No metadata sidecar found for "
+                f"{load_path.name} (looked for "
+                f"{', '.join(p.name for p in candidate_metadata_paths)}); "
+                "filtered_df has no CONCATENATED_PERSON_INDEX mapping."
+            )
 
         if info_filename is not None:
             raw = self.dataset_handler.load_data_file(

@@ -127,6 +127,98 @@ class TestSaveLoadDataWithMetadata:
         ]
         assert restored.filtered_df.index.tolist() == [10, 20]
 
+    @patch("src.analysis.summary.DatasetFilter.filter_dataset_by_all_categories")
+    @patch("src.analysis.summary.DatasetHandler")
+    def test_default_metadata_path_round_trips_without_explicit_path(
+        self, mock_dataset_handler_cls, mock_filter, tmp_path
+    ):
+        """save_data writes ``<stem>.metadata.csv``; load_data must find it.
+
+        Regression: load_data derived ``<stem>.csv``, so the sidecar was never
+        picked up and ``filtered_df`` silently kept the freshly-filtered rows
+        from ``__init__`` — which carry no CONCATENATED_PERSON_INDEX, breaking
+        every subject-index -> participant lookup.
+        """
+        filtered_df = pd.DataFrame(
+            {
+                SingleDataMetadata.FILENAME: ["first_raw.fif", "second_raw.fif"],
+                SingleDataMetadata.PARTICIPANT_ID: ["031", "019"],
+            },
+            index=[10, 20],
+        )
+        mock_filter.return_value = filtered_df
+
+        mock_dataset_handler = MagicMock()
+        mock_dataset_handler.dataset_metadata = pd.DataFrame()
+        mock_dataset_handler.excluded_participants_metadata = pd.DataFrame()
+        mock_dataset_handler_cls.return_value = mock_dataset_handler
+
+        def _make_analyzer():
+            return EEGSummarizedAnalyzer(
+                experiment_name=ExperimentNames.PSILO_MUSIC,
+                coordinate_system=CoordinateSystems.HYDROGEL_257,
+                music_types=[MusicTypeVariants.CLASSICAL],
+                conditions=[ConditionVariants.PLACEBO],
+                exclusion_categories=[],
+            )
+
+        analyzer = _make_analyzer()
+        analyzer.data = np.arange(12).reshape(2, 2, 3)
+        analyzer.filtered_df = filtered_df.copy()
+        analyzer.filtered_df[SingleDataMetadata.CONCATENATED_PERSON_INDEX] = [0, 1]
+        save_path = tmp_path / "Placebo_CLASSIC.npy"
+        analyzer.save_data(save_path=save_path)
+
+        assert (tmp_path / "Placebo_CLASSIC.metadata.csv").exists()
+
+        restored = _make_analyzer()
+        # No metadata_path: the sidecar must be found from the data path alone.
+        restored.load_data(load_path=save_path)
+
+        assert (
+            SingleDataMetadata.CONCATENATED_PERSON_INDEX in restored.filtered_df.columns
+        )
+        assert restored.filtered_df[
+            SingleDataMetadata.CONCATENATED_PERSON_INDEX
+        ].tolist() == [0, 1]
+
+    @patch("src.analysis.summary.DatasetFilter.filter_dataset_by_all_categories")
+    @patch("src.analysis.summary.DatasetHandler")
+    def test_legacy_bare_csv_sidecar_is_still_loaded(
+        self, mock_dataset_handler_cls, mock_filter, tmp_path
+    ):
+        """Sidecars written as ``<stem>.csv`` before the suffixes were aligned."""
+        mock_filter.return_value = pd.DataFrame(
+            {SingleDataMetadata.FILENAME: ["first_raw.fif"]}, index=[10]
+        )
+        mock_dataset_handler = MagicMock()
+        mock_dataset_handler.dataset_metadata = pd.DataFrame()
+        mock_dataset_handler.excluded_participants_metadata = pd.DataFrame()
+        mock_dataset_handler_cls.return_value = mock_dataset_handler
+
+        save_path = tmp_path / "Placebo_CLASSIC.npy"
+        np.save(save_path, np.arange(6).reshape(1, 2, 3))
+        pd.DataFrame(
+            {
+                "SingleDataMetadata.FILENAME": ["first_raw.fif"],
+                "SingleDataMetadata.CONCATENATED_PERSON_INDEX": [0],
+            },
+            index=[10],
+        ).to_csv(tmp_path / "Placebo_CLASSIC.csv", index=True)
+
+        restored = EEGSummarizedAnalyzer(
+            experiment_name=ExperimentNames.PSILO_MUSIC,
+            coordinate_system=CoordinateSystems.HYDROGEL_257,
+            music_types=[MusicTypeVariants.CLASSICAL],
+            conditions=[ConditionVariants.PLACEBO],
+            exclusion_categories=[],
+        )
+        restored.load_data(load_path=save_path)
+
+        assert restored.filtered_df[
+            SingleDataMetadata.CONCATENATED_PERSON_INDEX
+        ].tolist() == [0]
+
 
 def _make_mock_raw(n_channels: int, n_times: int, sfreq: float, onset_sec: list[float]):
     """Return a mock MNE Raw with fam+ annotations at the given onset seconds."""

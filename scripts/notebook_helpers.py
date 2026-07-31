@@ -19,6 +19,7 @@ Typical notebook usage::
         analyzers_to_datasets,
         compute_wavelet_datasets,
         load_analyzers,
+        participant_labels,
     )
 """
 
@@ -43,12 +44,14 @@ from scripts.analysis_common import (
     WAVELET_N_FREQS,
     analyzers_to_datasets,
     load_analyzers,
+    participant_label,
+    participant_labels,
     precompute_pre_alignment_wavelet_cache,
     wavelet_transform,
 )
 from src.analysis.data_representations import AnalysisData
 from src.definitions.fields import ExperimentNames
-from src.preprocessing.stimulus_alignment import EXPERIMENT_STIMULUS_LABELS
+from src.preprocessing.stimulus_alignment import EXPERIMENT_STIMULUS_MARKERS
 
 if TYPE_CHECKING:
     from src.analysis.summary import EEGSummarizedAnalyzer
@@ -64,6 +67,8 @@ __all__ = [
     "analyzers_to_datasets",
     "compute_wavelet_datasets",
     "load_analyzers",
+    "participant_label",
+    "participant_labels",
 ]
 
 
@@ -157,7 +162,7 @@ def compute_wavelet_datasets(
     :returns: Wavelet datasets keyed by label, trimmed to the extent of the
         corresponding *datasets* entry for stimulus experiments.
     """
-    is_stimulus = experiment_name in EXPERIMENT_STIMULUS_LABELS
+    is_stimulus = experiment_name in EXPERIMENT_STIMULUS_MARKERS
     effective_reuse = reuse_wavelets
     if is_stimulus and not reuse_wavelets:
         _logger.info(

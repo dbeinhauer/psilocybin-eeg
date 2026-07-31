@@ -452,6 +452,76 @@ def load_analyzers(
     return analyzers
 
 
+def participant_label(participant_id) -> str:
+    """Format a metadata participant ID as its zero-padded 3-digit label.
+
+    The sidecar CSV round-trip coerces ``PARTICIPANT_ID`` to an integer (``31``),
+    losing the zero padding of the original ``"031"``, so the digits are
+    re-padded here. A ``PSI`` prefix on the input is stripped; plot labels carry
+    the bare number.
+
+    :param participant_id: Participant ID from the dataset metadata.
+    :return: Label of the form ``031``.
+    """
+    digits = "".join(ch for ch in str(participant_id) if ch.isdigit())
+    return (digits[-3:] if digits else "").zfill(3)
+
+
+def participant_labels(filtered_df, n_subjects: int) -> list[str]:
+    """Map each concatenated subject index to its 3-digit participant label.
+
+    The subject axis of a concatenated array is ordered by
+    :attr:`~src.definitions.fields.SingleDataMetadata.CONCATENATED_PERSON_INDEX`,
+    which
+    :meth:`~src.analysis.summary.EEGSummarizedAnalyzer.load_and_prepare_data`
+    writes into the metadata sidecar. When an analyser was constructed but its
+    sidecar was never loaded, that column is absent — the rows are still in
+    concatenation order, so positional order is used as the fallback.
+
+    :param filtered_df: The analyser's ``filtered_df`` metadata table.
+    :param n_subjects: Number of subjects on the data's first axis. May be
+        smaller than ``len(filtered_df)`` when a subject subset is in use.
+    :return: ``n_subjects`` labels, ordered by subject index.
+    :raises ValueError: If the metadata is missing, empty, carries no
+        participant IDs, or covers fewer than ``n_subjects`` rows.
+    """
+    if filtered_df is None or len(filtered_df) == 0:
+        raise ValueError("No participant metadata available (filtered_df is empty).")
+    if SingleDataMetadata.PARTICIPANT_ID not in filtered_df.columns:
+        raise ValueError(
+            "Participant metadata has no PARTICIPANT_ID column; available: "
+            f"{list(filtered_df.columns)}"
+        )
+    if len(filtered_df) < n_subjects:
+        raise ValueError(
+            f"Participant metadata covers {len(filtered_df)} recording(s) but the "
+            f"data has {n_subjects} subject(s)."
+        )
+
+    if SingleDataMetadata.CONCATENATED_PERSON_INDEX in filtered_df.columns:
+        by_index = dict(
+            zip(
+                filtered_df[SingleDataMetadata.CONCATENATED_PERSON_INDEX],
+                filtered_df[SingleDataMetadata.PARTICIPANT_ID],
+            )
+        )
+        missing = [s for s in range(n_subjects) if s not in by_index]
+        if missing:
+            raise ValueError(
+                f"CONCATENATED_PERSON_INDEX is missing subject index/indices "
+                f"{missing}; cannot map them to participants."
+            )
+        return [participant_label(by_index[s]) for s in range(n_subjects)]
+
+    # No sidecar mapping — rows are still in concatenation order.
+    _logger.warning(
+        "Participant metadata has no CONCATENATED_PERSON_INDEX column; falling "
+        "back to metadata row order (the concatenation order) for subject labels."
+    )
+    ids = filtered_df[SingleDataMetadata.PARTICIPANT_ID].tolist()
+    return [participant_label(pid) for pid in ids[:n_subjects]]
+
+
 def analyzers_to_datasets(analyzers: dict) -> dict[str, AnalysisData]:
     """Convert loaded analysers to AnalysisData instances."""
     datasets = {
@@ -601,6 +671,7 @@ def run_isc_workflow(
 # ──────────────────────────────────────────────────────────────────────
 # Wavelet workflow helpers
 # ──────────────────────────────────────────────────────────────────────
+
 
 def wavelet_transform(
     datasets: dict[str, AnalysisData],

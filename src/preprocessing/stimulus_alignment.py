@@ -32,10 +32,12 @@ Key pieces:
 """
 
 import logging
+from dataclasses import dataclass
 
 import numpy as np
 import mne
 
+from src.definitions.constants import AssrEpoch
 from src.definitions.fields import ExperimentNames
 from src.utils.logging_config import LoggerMixin
 
@@ -44,25 +46,58 @@ _logger = logging.getLogger(__name__)
 # Default annotation label marking a stimulus onset.
 DEFAULT_STIMULUS_LABEL = "fam+"
 
-# Per-experiment stimulus-onset annotation label. Experiments listed here use a
-# stimulus-aware coarse crop during preprocessing; others fall back to the fixed
-# start/end crop.
-EXPERIMENT_STIMULUS_LABELS = {
-    ExperimentNames.ASSR: DEFAULT_STIMULUS_LABEL,
+
+@dataclass(frozen=True)
+class StimulusMarker:
+    """
+    How a stimulus annotation relates to the acoustic event it marks.
+
+    The label and the offset belong together: reading the annotations without
+    applying the offset silently mis-times every onset-locked analysis, so they
+    are resolved as one object rather than from two parallel registries.
+    """
+
+    # Annotation description marking a stimulus (case-insensitive).
+    label: str
+    # Seconds added to the marker time to obtain the true stimulus onset.
+    # Negative means the marker lags the stimulus. 0.0 = the marker *is* the onset.
+    onset_offset_s: float = 0.0
+
+
+# Per-experiment stimulus marker. Experiments listed here use a stimulus-aware
+# coarse crop during preprocessing; others fall back to the fixed start/end crop.
+EXPERIMENT_STIMULUS_MARKERS = {
+    ExperimentNames.ASSR: StimulusMarker(
+        label=DEFAULT_STIMULUS_LABEL,
+        onset_offset_s=AssrEpoch.MARKER_ONSET_OFFSET_S,
+    ),
 }
 
 
 def get_stimulus_onset_samples(
-    raw: mne.io.Raw, stimulus_label: str = DEFAULT_STIMULUS_LABEL
+    raw: mne.io.Raw,
+    stimulus_label: str = DEFAULT_STIMULUS_LABEL,
+    onset_offset_s: float = 0.0,
 ) -> np.ndarray:
     """
-    Extract the sample indices of the stimulus-onset annotations in a recording.
+    Extract the stimulus-onset sample indices of a recording.
+
+    This is the single point through which every consumer reads stimulus onsets,
+    so it is also where the marker→onset offset is applied — exactly once.
 
     :param raw: Recording whose annotations are searched.
-    :param stimulus_label: Annotation description marking a stimulus onset
+    :param stimulus_label: Annotation description marking a stimulus
         (case-insensitive, surrounding whitespace ignored).
+    :param onset_offset_s: Seconds added to each marker time to obtain the true
+        stimulus onset (see :class:`StimulusMarker`). Defaults to ``0.0``, i.e.
+        the raw marker positions — pass the experiment's registered offset from
+        :data:`EXPERIMENT_STIMULUS_MARKERS` to get acoustic onsets.
     :return: Sorted array of onset sample indices (relative to the first data
         sample of ``raw``).
+    :raises ValueError: If the offset moves an onset outside the recording.
+        Dropping such onsets is not an option: stimuli are paired across
+        recordings by their order, so a recording losing its first onset would
+        silently misalign the whole group.
     """
     target = stimulus_label.strip().lower()
     onset_seconds = [
@@ -77,9 +112,22 @@ def get_stimulus_onset_samples(
 
     # Annotation onsets are stored relative to ``orig_time``; ``first_time`` maps
     # them onto the sample grid (which starts at the first data sample).
-    relative_seconds = np.asarray(onset_seconds, dtype=float) - raw.first_time
-    samples = raw.time_as_index(relative_seconds, use_rounding=True)
-    return np.sort(samples)
+    relative_seconds = (
+        np.asarray(onset_seconds, dtype=float) - raw.first_time + onset_offset_s
+    )
+    samples = np.sort(raw.time_as_index(relative_seconds, use_rounding=True))
+
+    # Onsets are also used as half-open segment bounds, so ``n_times`` itself is a
+    # legal (exclusive) position; anything beyond it, or negative, is not.
+    if len(samples) and (samples[0] < 0 or samples[-1] > raw.n_times):
+        raise ValueError(
+            f"Applying an onset offset of {onset_offset_s:+.3f} s moves "
+            f"'{stimulus_label}' onsets outside the recording (samples "
+            f"[{samples[0]}, {samples[-1]}] for {raw.n_times} samples). The "
+            "recording does not retain enough data around its stimuli; re-run "
+            "the coarse crop with a margin larger than the offset."
+        )
+    return samples
 
 
 def coarse_crop_to_stimulus_span(
@@ -87,6 +135,7 @@ def coarse_crop_to_stimulus_span(
     stimulus_label: str = DEFAULT_STIMULUS_LABEL,
     trim_sec: float = 10.0,
     min_keep_sec: float = 0.5,
+    onset_offset_s: float = 0.0,
     logger=None,
 ) -> mne.io.Raw:
     """
@@ -109,13 +158,17 @@ def coarse_crop_to_stimulus_span(
     :param stimulus_label: Annotation description marking a stimulus onset.
     :param trim_sec: Maximum amount removed from each end of the recording.
     :param min_keep_sec: Minimum data kept before the first and after the last onset.
+        Applies to the true onsets, so it must exceed ``abs(onset_offset_s)`` for a
+        marker that lags its stimulus, or the crop would cut into the first response.
+    :param onset_offset_s: Marker→onset offset, see
+        :func:`get_stimulus_onset_samples`.
     :param logger: Optional logger instance. Falls back to module-level logger.
     :return: Cropped copy of ``raw``. If no stimulus annotations are found, returns
         an unchanged copy (with a warning).
     """
     log = logger or _logger
 
-    onsets = get_stimulus_onset_samples(raw, stimulus_label)
+    onsets = get_stimulus_onset_samples(raw, stimulus_label, onset_offset_s)
     if len(onsets) == 0:
         log.warning(
             f"No '{stimulus_label}' annotations found; skipping stimulus-aware crop."
@@ -397,6 +450,7 @@ def align_raws(
     keep_tail_sec: float = 0.1,
     pre_window_sec: float | None = None,
     post_window_sec: float | None = None,
+    onset_offset_s: float = 0.0,
 ) -> tuple[list[mne.io.Raw], StimulusAligner]:
     """
     Align stimulus onsets across a group of recordings by trimming inter-stimulus
@@ -410,10 +464,15 @@ def align_raws(
         ``None`` keeps the per-subject shortest available lead-in.
     :param post_window_sec: Optional cap on the window kept after the last onset;
         ``None`` keeps the per-subject shortest available lead-out.
+    :param onset_offset_s: Marker→onset offset, see
+        :func:`get_stimulus_onset_samples`. The splice is planned around the true
+        onsets, so ``keep_tail_sec`` really is the pre-stimulus baseline.
     :return: Tuple of (aligned recordings, the fitted :class:`StimulusAligner`).
     """
     sfreq = raws[0].info["sfreq"]
-    onset_samples = [get_stimulus_onset_samples(raw, stimulus_label) for raw in raws]
+    onset_samples = [
+        get_stimulus_onset_samples(raw, stimulus_label, onset_offset_s) for raw in raws
+    ]
     recording_lengths = [raw.n_times for raw in raws]
 
     aligner = StimulusAligner(

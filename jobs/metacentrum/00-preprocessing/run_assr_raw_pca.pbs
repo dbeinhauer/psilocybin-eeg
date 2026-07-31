@@ -10,17 +10,27 @@
 #
 # Replicates notebooks/00-preprocessing/assr_raw_pca_analysis.ipynb for ALL
 # subjects and ALL channels: the stimulus-locked (per fam+ onset) evoked voltage
-# is reduced to a single spatial component per participant by collapsing the
-# channel dimension with a PCA over channels. PC1's score is plotted as the
-# component's time course and PC1's loading as its scalp topography, per
-# participant and averaged across participants.
+# is reduced to a few spatial components per participant by collapsing the
+# channel dimension with a PCA over channels. Each component's score is plotted
+# as its time course and its loading as its scalp topography, per participant and
+# averaged across participants.
+#
+# N_COMPONENTS (below) sets how many leading components are kept — all treated
+# identically, so a later component can be compared against PC1 rather than
+# assumed uninformative: PCA ranks components by explained channel variance in
+# the evoked window, which is not the same thing as carrying the 40 Hz
+# steady-state, so a slow onset deflection can own PC1 and push the ASSR into PC2
+# or PC3. The job prints a comparison table (explained variance, topography
+# consistency, 40 Hz SNR of the driven interval) scoring the components against
+# each other. Override at submit time:
+#     qsub -v N_COMPONENTS=5 run_assr_raw_pca.pbs
 #
 # Each channel is z-scored against the WHOLE recording before epoching (equal
 # electrode influence -> correlation-PCA), then trial-averaged; the post-onset
 # window length is the shortest inter-onset interval so no epoch overlaps the
-# next stimulus. PC1 polarity is aligned across participants (loadings matched to
-# a common template, orientation anchored to Cz) so the topographies and time
-# courses share one consistent sign.
+# next stimulus. Polarity is aligned across participants independently per
+# component (loadings matched to a common template, orientation anchored to Cz)
+# so each component's topographies and time courses share one consistent sign.
 #
 # The concatenated raw array (~1 GB) is memory-mapped, so memory stays low; the
 # wavelet cache is opened only to read its small channel-name member (the canonical
@@ -35,8 +45,10 @@
 # A condition whose inputs are absent (e.g. Psilocybin not yet generated) is
 # skipped cleanly rather than failing the job.
 #
-# Output:
-#   plots/00-preprocessing/assr_raw_pca/<Condition>_ASSR/*.png
+# Output (one time-course + one topomap figure per component, plus the shared
+# overlay figure):
+#   plots/00-preprocessing/assr_raw_pca/<Condition>_ASSR/raw_pca_pc<N>_*.png
+#   plots/00-preprocessing/assr_raw_pca/<Condition>_ASSR/raw_pca_timecourse_overlay.png
 # ---------------------------------------------------------------------------
 
 set -e
@@ -69,18 +81,32 @@ cd "$DATADIR" || {
 
 cd "$SCRATCHDIR"
 
+# How many leading channel-PCA components to extract, plot and compare.
+# Change here, or override per submission with: qsub -v N_COMPONENTS=5 ...
+N_COMPONENTS="${N_COMPONENTS:-3}"
+echo "Components: $N_COMPONENTS"
+
+# The runner heredoc below is quoted, so N_COMPONENTS is read from the container
+# environment at run time rather than substituted here.
+export SINGULARITYENV_N_COMPONENTS="$N_COMPONENTS"
+export APPTAINERENV_N_COMPONENTS="$N_COMPONENTS"
+
 # Create the runner script for inside the container
 cat << 'EOF' > run_inside.sh
 #!/bin/bash
 source /opt/myproject/.venv/bin/activate
 
+N_COMPONENTS="${N_COMPONENTS:-3}"
+
 echo "=== Placebo at $(date) ==="
 python /mnt/scripts/run_assr_raw_pca.py \
-    --condition Placebo
+    --condition Placebo \
+    --n_components "$N_COMPONENTS"
 
 # echo "=== Psilocybin at $(date) ==="
 # python /mnt/scripts/run_assr_raw_pca.py \
-#     --condition Psilocybin
+#     --condition Psilocybin \
+#     --n_components "$N_COMPONENTS"
 EOF
 
 chmod +x run_inside.sh

@@ -1,12 +1,16 @@
 """
-Tests for src/definitions/constants.py — ProjectPaths.
+Tests for src/definitions/constants.py — ProjectPaths and AssrEpoch.
 """
 
+import numpy as np
 import pytest
 from pathlib import Path
 
-from src.definitions.constants import ProjectPaths
+from src.definitions.constants import AssrEpoch, ProjectPaths
 from src.definitions.fields import ExperimentNames, CoordinateSystems
+
+SFREQ = 250.0
+ASSR_MIN_GAP = 313  # shortest observed inter-onset gap in the ASSR dataset
 
 
 class TestProjectPaths:
@@ -98,3 +102,104 @@ class TestGetCoordinatesFilePath:
         assert excl_path == (
             ProjectPaths.EXCLUDED_ELECTRODES_DIR / "GSN-HydroCel-257_no-fiducials.csv"
         )
+
+
+def assr_epoch_times(sfreq=SFREQ, min_gap=ASSR_MIN_GAP):
+    """Epoch time axis the ASSR analyses build from ``AssrEpoch``."""
+    pre = AssrEpoch.pre_onset_samples(sfreq)
+    post = AssrEpoch.post_onset_samples(sfreq, min_gap=min_gap)
+    return np.arange(-pre, post) / sfreq
+
+
+class TestAssrEpochTiming:
+    """Paradigm timing values and their sample conversions."""
+
+    def test_paradigm_timing_values(self):
+        assert AssrEpoch.PRE_ONSET_S == 0.1
+        assert AssrEpoch.STIMULUS_DURATION_S == 0.5
+        assert AssrEpoch.POST_STIMULUS_S == 0.5
+        assert AssrEpoch.MARKER_ONSET_OFFSET_S == -0.4
+
+    def test_marker_offset_is_a_lag_shorter_than_the_train(self):
+        # The `fam+` marker lags the acoustic onset, landing inside the train.
+        # A value outside this range would mean the epoch windows above no longer
+        # describe the paradigm and the offset was mis-signed or mis-scaled.
+        assert -AssrEpoch.STIMULUS_DURATION_S < AssrEpoch.MARKER_ONSET_OFFSET_S < 0.0
+
+    def test_post_onset_span_is_stimulus_plus_post_stimulus(self):
+        assert AssrEpoch.POST_ONSET_S == pytest.approx(
+            AssrEpoch.STIMULUS_DURATION_S + AssrEpoch.POST_STIMULUS_S
+        )
+
+    def test_sample_counts_at_the_project_sampling_rate(self):
+        assert AssrEpoch.pre_onset_samples(SFREQ) == 25
+        assert AssrEpoch.post_onset_samples(SFREQ) == 250
+
+    @pytest.mark.parametrize("sfreq", [100.0, 250.0, 500.0, 1000.0])
+    def test_sample_counts_scale_with_sampling_rate(self, sfreq):
+        assert AssrEpoch.pre_onset_samples(sfreq) == round(
+            AssrEpoch.PRE_ONSET_S * sfreq
+        )
+        assert AssrEpoch.post_onset_samples(sfreq) == round(
+            AssrEpoch.POST_ONSET_S * sfreq
+        )
+
+
+class TestAssrEpochCapping:
+    """The shortest inter-onset gap caps the window so epochs never overlap."""
+
+    def test_full_epoch_fits_inside_the_assr_inter_onset_gap(self):
+        pre = AssrEpoch.pre_onset_samples(SFREQ)
+        post = AssrEpoch.post_onset_samples(SFREQ, min_gap=ASSR_MIN_GAP)
+        assert pre + post <= ASSR_MIN_GAP
+
+    def test_min_gap_caps_the_window(self):
+        assert AssrEpoch.post_onset_samples(SFREQ, min_gap=100) == 100
+
+    def test_min_gap_wider_than_paradigm_does_not_extend_the_window(self):
+        assert AssrEpoch.post_onset_samples(
+            SFREQ, min_gap=10_000
+        ) == AssrEpoch.post_onset_samples(SFREQ)
+
+    def test_post_onset_is_at_least_one_sample(self):
+        assert AssrEpoch.post_onset_samples(SFREQ, min_gap=1) == 1
+
+    @pytest.mark.parametrize("bad_gap", [0, -5])
+    def test_non_positive_min_gap_is_rejected(self, bad_gap):
+        with pytest.raises(ValueError):
+            AssrEpoch.post_onset_samples(SFREQ, min_gap=bad_gap)
+
+
+class TestAssrEpochStimulusMask:
+    """The mask isolating the driven interval from the silent remainder."""
+
+    def test_selects_only_the_driven_interval(self):
+        times = assr_epoch_times()
+        mask = AssrEpoch.stimulus_mask(times)
+        assert times[mask].min() >= 0.0
+        assert times[mask].max() < AssrEpoch.STIMULUS_DURATION_S
+        assert mask.sum() == round(AssrEpoch.STIMULUS_DURATION_S * SFREQ)
+
+    def test_excludes_baseline_and_post_stimulus(self):
+        times = assr_epoch_times()
+        mask = AssrEpoch.stimulus_mask(times)
+        assert not mask[times < 0.0].any()
+        assert not mask[times >= AssrEpoch.STIMULUS_DURATION_S].any()
+
+    def test_is_half_the_post_onset_window(self):
+        """Why the mask exists: the post-onset window is half silence."""
+        times = assr_epoch_times()
+        mask = AssrEpoch.stimulus_mask(times)
+        assert mask.sum() == pytest.approx((times >= 0.0).sum() / 2, rel=0.02)
+
+    def test_shape_and_dtype(self):
+        times = assr_epoch_times()
+        mask = AssrEpoch.stimulus_mask(times)
+        assert mask.dtype == bool
+        assert mask.shape == times.shape
+
+    def test_does_not_mutate_input(self):
+        times = assr_epoch_times()
+        before = times.copy()
+        AssrEpoch.stimulus_mask(times)
+        np.testing.assert_array_equal(times, before)

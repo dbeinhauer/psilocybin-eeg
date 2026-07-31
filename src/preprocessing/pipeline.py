@@ -47,10 +47,11 @@ from src.preprocessing.ica import (
 from src.preprocessing.time_alignment import TimeAligner, TAGObject
 from src.preprocessing.stimulus_alignment import (
     StimulusAligner,
+    StimulusMarker,
     align_raws,
     coarse_crop_to_stimulus_span,
     DEFAULT_STIMULUS_LABEL,
-    EXPERIMENT_STIMULUS_LABELS,
+    EXPERIMENT_STIMULUS_MARKERS,
 )
 from src.filtering.dataset_filter import DatasetFilter
 from src.visualization.preprocessing_plots import DatasetPlotter
@@ -69,7 +70,7 @@ class DatasetPreprocessor(LoggerMixin):
         self,
         coordinates_file_path: Path,
         excluded_coordinates_path: Path,
-        stimulus_label: str | None = None,
+        stimulus_marker: StimulusMarker | None = None,
         coarse_crop_trim_sec: float = 10.0,
         coarse_crop_min_keep_sec: float = 0.5,
     ):
@@ -78,10 +79,12 @@ class DatasetPreprocessor(LoggerMixin):
 
         :param coordinates_file_path: Path to the SFP montage file with electrode positions.
         :param excluded_coordinates_path: Path to CSV listing electrodes to exclude (e.g. boundary electrodes).
-        :param stimulus_label: If set, the recording is coarsely cropped around the
+        :param stimulus_marker: If set, the recording is coarsely cropped around the
             span of these stimulus annotations instead of using the fixed start/end
             crop. Keeps the data continuous for filtering/ICA while never dropping a
-            stimulus.
+            stimulus. Its ``onset_offset_s`` re-times the markers onto the true
+            stimulus onsets (see
+            :class:`~src.preprocessing.stimulus_alignment.StimulusMarker`).
         :param coarse_crop_trim_sec: Maximum amount trimmed from each end of the
             recording during the stimulus-aware coarse crop.
         :param coarse_crop_min_keep_sec: Minimum data kept before the first and after
@@ -94,7 +97,7 @@ class DatasetPreprocessor(LoggerMixin):
             .str.strip()
             .tolist()
         )
-        self.stimulus_label = stimulus_label
+        self.stimulus_marker = stimulus_marker
         self.coarse_crop_trim_sec = coarse_crop_trim_sec
         self.coarse_crop_min_keep_sec = coarse_crop_min_keep_sec
 
@@ -126,19 +129,20 @@ class DatasetPreprocessor(LoggerMixin):
         """
         Coarsely trim the noisy recording lead-in/lead-out.
 
-        For experiments with stimulus annotations (``self.stimulus_label`` set) the
+        For experiments with stimulus annotations (``self.stimulus_marker`` set) the
         recording is cropped to the stimulus span plus a margin, so no stimulus is
         lost to a blind fixed crop. Otherwise the fixed start/end crop is used.
 
         :param data: Data to trim.
         :return: Coarsely cropped data (still continuous, no splicing).
         """
-        if self.stimulus_label is not None:
+        if self.stimulus_marker is not None:
             return coarse_crop_to_stimulus_span(
                 data,
-                stimulus_label=self.stimulus_label,
+                stimulus_label=self.stimulus_marker.label,
                 trim_sec=self.coarse_crop_trim_sec,
                 min_keep_sec=self.coarse_crop_min_keep_sec,
+                onset_offset_s=self.stimulus_marker.onset_offset_s,
                 logger=self.logger,
             )
         return crop_start_and_end_of_dataseries(data, logger=self.logger)
@@ -231,7 +235,7 @@ class DatasetHandler(LoggerMixin):
         self.dataset_preprocessor = DatasetPreprocessor(
             self.coordinates_path,
             self.excluded_electrodes_path,
-            stimulus_label=EXPERIMENT_STIMULUS_LABELS.get(experiment_name),
+            stimulus_marker=EXPERIMENT_STIMULUS_MARKERS.get(experiment_name),
         )
         self.dataset_excluded_ics_metadata = self._init_excluded_ics_metadata()
         self.excluded_participants_metadata = pd.read_csv(
@@ -737,6 +741,7 @@ class DatasetHandler(LoggerMixin):
         pre_window_sec: float | None = None,
         post_window_sec: float | None = None,
         data_type_to_load: PreprocessedDataVariants = PreprocessedDataVariants.RAW_AFTER_ICA,
+        onset_offset_s: float | None = None,
     ) -> tuple[pd.DataFrame, list[mne.io.Raw], StimulusAligner]:
         """
         Aligns stimulus onsets across the participants of one group by trimming the
@@ -760,9 +765,17 @@ class DatasetHandler(LoggerMixin):
         :param post_window_sec: Optional cap on the window kept after the last onset.
             Defaults to ``None`` (keep the shortest available lead-out).
         :param data_type_to_load: The type of processed data to load and align.
+        :param onset_offset_s: Marker→onset offset in seconds. ``None`` (default)
+            uses the offset registered for this experiment in
+            :data:`~src.preprocessing.stimulus_alignment.EXPERIMENT_STIMULUS_MARKERS`,
+            which is what every caller should want; pass a value only to override it
+            deliberately (e.g. ``0.0`` to splice around the raw marker positions).
         :return: Tuple of (filtered metadata DataFrame, aligned recordings in the
             same row order, fitted StimulusAligner).
         """
+        if onset_offset_s is None:
+            marker = EXPERIMENT_STIMULUS_MARKERS.get(self.experiment_name)
+            onset_offset_s = marker.onset_offset_s if marker is not None else 0.0
         filtered_df = DatasetFilter.filter_dataset_by_all_categories(
             self.dataset_metadata,
             self.excluded_participants_metadata,
@@ -785,5 +798,6 @@ class DatasetHandler(LoggerMixin):
             keep_tail_sec=keep_tail_sec,
             pre_window_sec=pre_window_sec,
             post_window_sec=post_window_sec,
+            onset_offset_s=onset_offset_s,
         )
         return filtered_df, aligned, aligner

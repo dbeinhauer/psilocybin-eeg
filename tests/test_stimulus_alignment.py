@@ -5,7 +5,11 @@ Tests for annotation-based stimulus alignment (src.preprocessing.stimulus_alignm
 import numpy as np
 import pytest
 
+from src.definitions.constants import AssrEpoch
+from src.definitions.fields import ExperimentNames
 from src.preprocessing.stimulus_alignment import (
+    DEFAULT_STIMULUS_LABEL,
+    EXPERIMENT_STIMULUS_MARKERS,
     StimulusAligner,
     get_stimulus_onset_samples,
     coarse_crop_to_stimulus_span,
@@ -92,8 +96,12 @@ class TestStimulusAlignerEdges:
         onsets = [np.array([300, 1300]), np.array([800, 1800])]
         lengths = [1300 + 200, 1800 + 500]  # lead-outs: 200 and 500
         aligner = StimulusAligner(
-            onsets, lengths, SFREQ, keep_tail_sec=0.1,
-            pre_window_sec=None, post_window_sec=None,
+            onsets,
+            lengths,
+            SFREQ,
+            keep_tail_sec=0.1,
+            pre_window_sec=None,
+            post_window_sec=None,
         )
         # pre_target = min(lead-in) = min(300, 800) = 300 (uncapped).
         assert aligner.pre_target == 300
@@ -107,7 +115,11 @@ class TestStimulusAlignerEdges:
         onsets = [np.array([30, 1030]), np.array([500, 1500])]
         lengths = [1030, 1500]
         aligner = StimulusAligner(
-            onsets, lengths, SFREQ, keep_tail_sec=0.1, pre_window_sec=0.1,
+            onsets,
+            lengths,
+            SFREQ,
+            keep_tail_sec=0.1,
+            pre_window_sec=0.1,
             post_window_sec=0.0,
         )
         assert aligner.pre_target == 30
@@ -123,8 +135,12 @@ class TestStimulusAlignerCountMismatch:
         ]
         lengths = [2100, 1400]
         aligner = StimulusAligner(
-            onsets, lengths, SFREQ, keep_tail_sec=0.05,
-            pre_window_sec=0.0, post_window_sec=0.0,
+            onsets,
+            lengths,
+            SFREQ,
+            keep_tail_sec=0.05,
+            pre_window_sec=0.0,
+            post_window_sec=0.0,
         )
         assert aligner.common_count == 3
         assert aligner.original_counts == [4, 3]
@@ -140,8 +156,12 @@ class TestStimulusAlignerCountMismatch:
         ]
         lengths = [2700, 2400]  # plenty of room past the last common onset
         aligner = StimulusAligner(
-            onsets, lengths, SFREQ, keep_tail_sec=0.05,
-            pre_window_sec=None, post_window_sec=None,
+            onsets,
+            lengths,
+            SFREQ,
+            keep_tail_sec=0.05,
+            pre_window_sec=None,
+            post_window_sec=None,
         )
         # subj1 capped at 1700-1400 = 300; subj2 lead-out = 2400-1400 = 1000.
         assert aligner.post_target == 300
@@ -159,8 +179,12 @@ class TestStimulusAlignerCountMismatch:
         ]
         lengths = [1400 + 300, 1400 + 1000]
         aligner = StimulusAligner(
-            onsets, lengths, SFREQ, keep_tail_sec=0.05,
-            pre_window_sec=None, post_window_sec=None,
+            onsets,
+            lengths,
+            SFREQ,
+            keep_tail_sec=0.05,
+            pre_window_sec=None,
+            post_window_sec=None,
         )
         assert aligner.post_target == 300  # min lead-out, not a surplus cap
 
@@ -193,6 +217,78 @@ def _make_raw_with_onsets(onset_ms, n_ms, sfreq=SFREQ):
         )
     )
     return raw
+
+
+class TestMarkerOnsetOffset:
+    """The marker→onset offset: applied once, everywhere onsets are read."""
+
+    def test_default_returns_raw_marker_positions(self):
+        raw = _make_raw_with_onsets([1000, 3000], 4000)
+        assert get_stimulus_onset_samples(raw, "fam+").tolist() == [1000, 3000]
+
+    def test_negative_offset_moves_onsets_earlier(self):
+        # -0.4 s at 1 kHz = 400 samples earlier, applied to every onset.
+        raw = _make_raw_with_onsets([1000, 3000], 4000)
+        onsets = get_stimulus_onset_samples(raw, "fam+", onset_offset_s=-0.4)
+        assert onsets.tolist() == [600, 2600]
+
+    def test_positive_offset_moves_onsets_later(self):
+        raw = _make_raw_with_onsets([1000, 3000], 4000)
+        onsets = get_stimulus_onset_samples(raw, "fam+", onset_offset_s=0.25)
+        assert onsets.tolist() == [1250, 3250]
+
+    def test_offset_survives_a_cropped_recording(self):
+        # first_samp > 0 (as after the coarse crop): the offset must compose with
+        # the first_samp correction, not replace or double it.
+        raw = _make_raw_with_onsets([1000, 3000], 4000)
+        cropped = raw.copy().crop(tmin=0.5)
+        assert cropped.first_samp == 500
+        assert get_stimulus_onset_samples(cropped, "fam+").tolist() == [500, 2500]
+        assert get_stimulus_onset_samples(
+            cropped, "fam+", onset_offset_s=-0.4
+        ).tolist() == [100, 2100]
+
+    def test_offset_before_recording_start_raises(self):
+        # Dropping the onset instead would silently misalign the group.
+        raw = _make_raw_with_onsets([100, 3000], 4000)
+        with pytest.raises(ValueError, match="outside the recording"):
+            get_stimulus_onset_samples(raw, "fam+", onset_offset_s=-0.4)
+
+    def test_offset_past_recording_end_raises(self):
+        raw = _make_raw_with_onsets([1000, 3900], 4000)
+        with pytest.raises(ValueError, match="outside the recording"):
+            get_stimulus_onset_samples(raw, "fam+", onset_offset_s=0.4)
+
+    def test_assr_marker_is_registered_with_the_paradigm_offset(self):
+        marker = EXPERIMENT_STIMULUS_MARKERS[ExperimentNames.ASSR]
+        assert marker.label == DEFAULT_STIMULUS_LABEL
+        assert marker.onset_offset_s == AssrEpoch.MARKER_ONSET_OFFSET_S
+        # The marker lags the stimulus, and by less than the train length —
+        # otherwise the epoch geometry in AssrEpoch cannot describe it.
+        assert -AssrEpoch.STIMULUS_DURATION_S < marker.onset_offset_s < 0.0
+
+    def test_coarse_crop_keeps_min_keep_before_the_true_onset(self):
+        # With the offset applied the crop must protect the *stimulus*, not the
+        # marker: min_keep is measured from the true onset (marker - 400 ms).
+        raw = _make_raw_with_onsets([2000, 5000], 8000)
+        cropped = coarse_crop_to_stimulus_span(
+            raw, "fam+", trim_sec=10.0, min_keep_sec=0.5, onset_offset_s=-0.4
+        )
+        # True onsets 1600/4600. start = min(10000, 1600-500) = 1100.
+        onsets = get_stimulus_onset_samples(cropped, "fam+", onset_offset_s=-0.4)
+        assert onsets[0] == 500
+        assert cropped.first_samp == 1100
+
+    def test_align_raws_plans_around_true_onsets(self):
+        # Same recordings aligned with and without the offset: the spliced output
+        # must be shifted by exactly the offset, with identical geometry.
+        raws = [_make_raw_with_onsets([1000, 2000], 3000) for _ in range(2)]
+        _, plain = align_raws(raws, "fam+", keep_tail_sec=0.1)
+        _, shifted = align_raws(raws, "fam+", keep_tail_sec=0.1, onset_offset_s=-0.4)
+        assert plain.total_length == shifted.total_length
+        assert plain.interval_targets.tolist() == shifted.interval_targets.tolist()
+        # pre_target shrinks by the 400-sample offset, so onsets land 400 earlier.
+        assert plain.pre_target - shifted.pre_target == 400
 
 
 class TestCoarseCrop:
@@ -267,12 +363,14 @@ class TestApplyKeepSegmentsToArray:
         onsets = [np.array([0, 750]), np.array([0, 1000]), np.array([0, 700])]
         lengths = [750, 1000, 700]
         aligner = StimulusAligner(
-            onsets, lengths, SFREQ, keep_tail_sec=0.1,
-            pre_window_sec=0.0, post_window_sec=0.0,
+            onsets,
+            lengths,
+            SFREQ,
+            keep_tail_sec=0.1,
+            pre_window_sec=0.0,
+            post_window_sec=0.0,
         )
-        for i, (n_times, segments) in enumerate(
-            zip(lengths, aligner.keep_segments)
-        ):
+        for i, (n_times, segments) in enumerate(zip(lengths, aligner.keep_segments)):
             data = np.zeros((3, n_times))
             result = apply_keep_segments_to_array(data, segments)
             assert result.shape == (3, aligner.total_length), (
@@ -328,7 +426,5 @@ class TestApplyToRaw:
         lengths = {a.n_times for a in aligned}
         assert lengths == {aligner.total_length} == {700}
         # The second fam+ lands at the same sample in every aligned recording.
-        second_onsets = {
-            int(get_stimulus_onset_samples(a, "fam+")[1]) for a in aligned
-        }
+        second_onsets = {int(get_stimulus_onset_samples(a, "fam+")[1]) for a in aligned}
         assert second_onsets == {aligner.aligned_onset_samples[1]} == {700}

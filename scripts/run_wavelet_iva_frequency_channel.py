@@ -79,6 +79,8 @@ from scripts.analysis_common import (  # noqa: E402
 )
 from src.analysis.wavelet_ica import (  # noqa: E402
     align_iva_component_signs,
+    iva_component_patterns,
+    normalize_patterns_per_subject,
     zscore_by_time,
 )
 from src.definitions.constants import ProjectPaths  # noqa: E402
@@ -469,7 +471,15 @@ def _plot_topomap_mean_var(
     """Per-IC mean (signed) and variance (non-negative) topomaps across subjects.
 
     ``chan_loading`` shape ``(S, n_show, C)`` — already collapsed over freq.
+
+    Each subject's channel map is rescaled to unit L2 norm first: ``iva_g``
+    fixes the source scale but not the pattern scale, so unnormalised maps
+    differ across subjects by a subject-specific gain that would let the loudest
+    subjects dominate the mean map and would leak amplitude differences into the
+    variance map. See
+    :func:`src.analysis.wavelet_ica.normalize_patterns_per_subject`.
     """
+    chan_loading = normalize_patterns_per_subject(chan_loading)
     chan_mean = chan_loading.mean(axis=0)  # (n_show, C)
     chan_var = chan_loading.var(axis=0)  # (n_show, C)
     n_show = len(labels)
@@ -513,7 +523,7 @@ def _plot_topomap_mean_var(
     fig.text(
         0.01,
         0.75,
-        "Mean across subjects",
+        "Mean across subjects (unit-norm)",
         rotation=90,
         va="center",
         fontsize=11,
@@ -522,14 +532,14 @@ def _plot_topomap_mean_var(
     fig.text(
         0.01,
         0.25,
-        "Variance across subjects",
+        "Variance across subjects (unit-norm)",
         rotation=90,
         va="center",
         fontsize=11,
         fontweight="bold",
     )
     fig.suptitle(
-        f"Mean and Variance Topomaps Across Subjects — {label}",
+        f"Mean and Variance Topomaps Across Subjects (unit-norm patterns) — {label}",
         fontsize=13,
     )
     fig.tight_layout(rect=(0.03, 0, 1, 0.97))
@@ -954,7 +964,11 @@ def _run_iva(
     for k in range(n_subjects):
         W_k = W[:, :, k]
         iva_scores_pca[k] = W_k @ X_pca[:, :, k]
-        components_full = W_k @ pcas[k].components_  # (N_PCA, C*F)
+        # Forward (mixing) patterns, NOT the unmixing rows — see
+        # iva_component_patterns for why the two differ after iva_g's whitening.
+        components_full = iva_component_patterns(
+            W_k, pcas[k].components_
+        )  # (N_PCA, C*F)
         iva_components[k] = components_full.reshape(
             n_pca, n_channels, n_freqs
         ).transpose(0, 2, 1)

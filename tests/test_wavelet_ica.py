@@ -25,6 +25,8 @@ from src.analysis.wavelet_ica import (
     decompose_subject_frequency,
     zscore_by_time,
     align_iva_component_signs,
+    iva_component_patterns,
+    normalize_patterns_per_subject,
 )
 
 # ---------------------------------------------------------------------------
@@ -446,6 +448,162 @@ class TestAlignIvaComponentSigns:
         with pytest.raises(ValueError):
             # W shape inconsistent with sigma_n.
             align_iva_component_signs(np.zeros((4, 4, 3)), np.zeros((3, 3, 5)))
+
+
+class TestIvaComponentPatterns:
+    """iva_component_patterns must return forward patterns, not unmixing rows."""
+
+    @staticmethod
+    def _inputs(n_comp: int = 5, n_features: int = 12, seed: int = 3):
+        """Random invertible W plus an orthonormal-row PCA loading matrix."""
+        rng = np.random.default_rng(seed)
+        w = rng.standard_normal((n_comp, n_comp))
+        # Orthonormal rows, as produced by sklearn's PCA.
+        q, _ = np.linalg.qr(rng.standard_normal((n_features, n_comp)))
+        return w, q.T
+
+    def test_output_shape(self) -> None:
+        w, p = self._inputs()
+        assert iva_component_patterns(w, p).shape == p.shape
+
+    def test_equals_pseudo_inverse_of_unmixing(self) -> None:
+        # A = pinv(W @ P); the function returns A.T.
+        w, p = self._inputs()
+        patterns = iva_component_patterns(w, p)
+        np.testing.assert_allclose(patterns, np.linalg.pinv(w @ p).T, atol=1e-10)
+
+    def test_differs_from_unmixing_rows(self) -> None:
+        # Guards the regression this function exists to fix.
+        w, p = self._inputs()
+        assert not np.allclose(iva_component_patterns(w, p), w @ p, atol=1e-6)
+
+    def test_recovers_known_mixing(self) -> None:
+        # With a known mixing A and W = pinv(A) (up to the PCA subspace), the
+        # returned patterns must match A's columns.
+        rng = np.random.default_rng(11)
+        n_comp, n_features = 4, 10
+        a_true = rng.standard_normal((n_features, n_comp))
+        q, _ = np.linalg.qr(a_true)  # PCA basis spanning A's column space
+        p = q.T  # (K, n_features), orthonormal rows
+        w = np.linalg.pinv(p @ a_true)  # unmixing within the PCA subspace
+        np.testing.assert_allclose(iva_component_patterns(w, p), a_true.T, atol=1e-8)
+
+    def test_unmixing_composition_is_identity(self) -> None:
+        # patterns.T is a right inverse of the composite unmixing operator.
+        w, p = self._inputs()
+        patterns = iva_component_patterns(w, p)
+        np.testing.assert_allclose((w @ p) @ patterns.T, np.eye(w.shape[0]), atol=1e-10)
+
+    def test_sign_flip_propagates_per_component(self) -> None:
+        # align_iva_component_signs left-multiplies W by diag(s); each pattern
+        # row must flip with its own component and nothing else.
+        w, p = self._inputs()
+        signs = np.array([1.0, -1.0, 1.0, 1.0, -1.0])
+        base = iva_component_patterns(w, p)
+        flipped = iva_component_patterns(signs[:, np.newaxis] * w, p)
+        np.testing.assert_allclose(flipped, base * signs[:, np.newaxis], atol=1e-10)
+
+    def test_input_not_mutated(self) -> None:
+        w, p = self._inputs()
+        w_copy, p_copy = w.copy(), p.copy()
+        iva_component_patterns(w, p)
+        np.testing.assert_array_equal(w, w_copy)
+        np.testing.assert_array_equal(p, p_copy)
+
+    def test_rejects_bad_shapes(self) -> None:
+        w, p = self._inputs()
+        with pytest.raises(ValueError):
+            iva_component_patterns(np.zeros((3, 4)), p)  # not square
+        with pytest.raises(ValueError):
+            iva_component_patterns(w, np.zeros((w.shape[0] + 1, 12)))  # K mismatch
+        with pytest.raises(ValueError):
+            iva_component_patterns(np.zeros((2, 2, 2)), p)  # not 2-D
+
+
+class TestNormalizePatternsPerSubject:
+    """normalize_patterns_per_subject must strip per-subject gain, nothing else."""
+
+    @staticmethod
+    def _shared_patterns(n_subjects: int = 8, n_comp: int = 3, n_chan: int = 12):
+        """Patterns sharing one topography per component, times a subject gain."""
+        rng = np.random.default_rng(7)
+        shared = rng.standard_normal((n_comp, n_chan))
+        gains = np.linspace(0.5, 4.0, n_subjects)
+        patterns = np.empty((n_subjects, n_comp, n_chan))
+        for s in range(n_subjects):
+            patterns[s] = gains[s] * (shared + 0.05 * rng.standard_normal(shared.shape))
+        return patterns, shared, gains
+
+    def test_shape_preserved(self) -> None:
+        patterns, _, _ = self._shared_patterns()
+        assert normalize_patterns_per_subject(patterns).shape == patterns.shape
+
+    def test_patterns_are_unit_norm(self) -> None:
+        patterns, _, _ = self._shared_patterns()
+        norms = np.linalg.norm(normalize_patterns_per_subject(patterns), axis=2)
+        np.testing.assert_allclose(norms, 1.0, atol=1e-12)
+
+    def test_invariant_to_per_subject_gain(self) -> None:
+        # The whole point: rescaling one subject must not move the group maps.
+        patterns, _, _ = self._shared_patterns()
+        rescaled = patterns.copy()
+        rescaled[0] *= 17.0
+        base = normalize_patterns_per_subject(patterns)
+        scaled = normalize_patterns_per_subject(rescaled)
+        np.testing.assert_allclose(base.mean(axis=0), scaled.mean(axis=0), atol=1e-10)
+        np.testing.assert_allclose(base.var(axis=0), scaled.var(axis=0), atol=1e-10)
+
+    def test_gain_dominates_the_unnormalised_mean(self) -> None:
+        # Guards the regression this function exists to fix: with one loud
+        # subject the raw mean map follows that subject, the normalised one does
+        # not.
+        patterns, _, _ = self._shared_patterns()
+        loud = patterns.copy()
+        loud[0] *= 50.0
+        raw_shift = np.abs(loud.mean(axis=0) - patterns.mean(axis=0)).max()
+        norm_shift = np.abs(
+            normalize_patterns_per_subject(loud).mean(axis=0)
+            - normalize_patterns_per_subject(patterns).mean(axis=0)
+        ).max()
+        assert norm_shift < 1e-10 < raw_shift
+
+    def test_direction_unchanged(self) -> None:
+        # Only the scale may change: each pattern stays collinear with itself.
+        patterns, _, _ = self._shared_patterns()
+        normalized = normalize_patterns_per_subject(patterns)
+        for s in range(patterns.shape[0]):
+            for k in range(patterns.shape[1]):
+                np.testing.assert_allclose(
+                    normalized[s, k] * np.linalg.norm(patterns[s, k]),
+                    patterns[s, k],
+                    atol=1e-10,
+                )
+
+    def test_zero_pattern_does_not_divide_by_zero(self) -> None:
+        patterns, _, _ = self._shared_patterns()
+        patterns[2, 1, :] = 0.0
+        normalized = normalize_patterns_per_subject(patterns)
+        assert np.isfinite(normalized).all()
+        np.testing.assert_array_equal(normalized[2, 1], 0.0)
+
+    def test_single_subject_is_just_rescaled(self) -> None:
+        patterns, _, _ = self._shared_patterns(n_subjects=1)
+        norms = np.linalg.norm(normalize_patterns_per_subject(patterns), axis=2)
+        np.testing.assert_allclose(norms, 1.0, atol=1e-12)
+
+    def test_input_not_mutated(self) -> None:
+        patterns, _, _ = self._shared_patterns()
+        original = patterns.copy()
+        normalize_patterns_per_subject(patterns)
+        np.testing.assert_array_equal(patterns, original)
+
+    def test_rejects_bad_shapes(self) -> None:
+        with pytest.raises(ValueError):
+            normalize_patterns_per_subject(np.zeros((4, 5)))  # not 3-D
+        with pytest.raises(ValueError):
+            normalize_patterns_per_subject(np.zeros((3, 4, 5, 6)))  # not 3-D
+        with pytest.raises(ValueError):
+            normalize_patterns_per_subject(np.zeros((0, 4, 5)))  # no subjects
 
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ from unittest.mock import patch
 import runpy
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import sys
@@ -17,12 +18,18 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from scripts.analysis_common import (
     _wavelet_transform,
     add_common_arguments,
+    participant_label,
+    participant_labels,
     resolve_wavelet_dir,
     run_wavelet_workflow,
 )
 from src.analysis.data_representations import AnalysisData, DataRepresentation
 from src.definitions.constants import ProjectPaths
-from src.definitions.fields import AnalysisVariants, ExperimentNames
+from src.definitions.fields import (
+    AnalysisVariants,
+    ExperimentNames,
+    SingleDataMetadata,
+)
 from src.definitions.frequency import (
     WAVELET_FREQ_MAX,
     WAVELET_FREQ_MIN,
@@ -486,3 +493,60 @@ class TestRunWaveletWorkflowReshapeRaisesInWorkflow:
                 reshape_frequency_dim=True,
                 keep_frequency_dim=True,
             )
+
+
+class TestParticipantLabels:
+    """Subject-index -> 3-digit participant mapping for per-subject plots."""
+
+    @staticmethod
+    def _metadata(participant_ids, person_indices=None):
+        df = pd.DataFrame({SingleDataMetadata.PARTICIPANT_ID: participant_ids})
+        if person_indices is not None:
+            df[SingleDataMetadata.CONCATENATED_PERSON_INDEX] = person_indices
+        return df
+
+    @pytest.mark.parametrize(
+        "participant_id,expected",
+        [
+            ("031", "031"),
+            (31, "031"),  # sidecar round-trip drops the zero padding
+            ("19", "019"),
+            ("PSI019", "019"),  # a PSI prefix on the input is stripped
+            ("PSI019_EEGA_ASSR.edf", "019"),
+        ],
+    )
+    def test_participant_label_formats(self, participant_id, expected):
+        assert participant_label(participant_id) == expected
+
+    def test_uses_concatenated_person_index_not_row_order(self):
+        # Rows deliberately out of index order: the mapping must follow
+        # CONCATENATED_PERSON_INDEX, not the DataFrame's row order.
+        df = self._metadata(["031", "019", "024"], person_indices=[2, 0, 1])
+        assert participant_labels(df, 3) == ["019", "024", "031"]
+
+    def test_subset_returns_only_requested_subjects(self):
+        df = self._metadata(["031", "019", "024"], person_indices=[0, 1, 2])
+        assert participant_labels(df, 2) == ["031", "019"]
+
+    def test_falls_back_to_row_order_without_person_index(self):
+        df = self._metadata(["031", "019"])
+        assert participant_labels(df, 2) == ["031", "019"]
+
+    def test_raises_when_metadata_missing(self):
+        with pytest.raises(ValueError, match="No participant metadata"):
+            participant_labels(None, 2)
+
+    def test_raises_when_participant_id_column_missing(self):
+        df = pd.DataFrame({SingleDataMetadata.CONCATENATED_PERSON_INDEX: [0, 1]})
+        with pytest.raises(ValueError, match="no PARTICIPANT_ID column"):
+            participant_labels(df, 2)
+
+    def test_raises_when_metadata_covers_fewer_subjects_than_data(self):
+        df = self._metadata(["031"], person_indices=[0])
+        with pytest.raises(ValueError, match="covers 1 recording"):
+            participant_labels(df, 2)
+
+    def test_raises_when_person_index_does_not_cover_every_subject(self):
+        df = self._metadata(["031", "019"], person_indices=[0, 5])
+        with pytest.raises(ValueError, match="missing subject index"):
+            participant_labels(df, 2)

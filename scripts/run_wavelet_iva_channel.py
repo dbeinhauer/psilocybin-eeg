@@ -12,6 +12,11 @@ spectro-temporal source ``(F, T)`` plus a per-subject channel topography
 ``(C,)``. The aligned SCV is the whole time-frequency pattern, so a
 component that aligns is aligned in time **and** spectrum jointly.
 
+Channel topographies are the **forward (mixing) patterns** —
+``pinv(W_k @ pca.components_)`` — not the unmixing rows. See
+:func:`src.analysis.wavelet_ica.iva_component_patterns` for why the two differ
+(and why ``iva_g``'s internal whitening makes the difference large).
+
 Produces all the analyses from the notebook, ranked by mean off-diagonal
 ``Sigma_N`` correlation, with the top ``--n_top`` and bottom ``--n_bottom``
 components visualised separately (bottom = noise / no-alignment contrast):
@@ -21,7 +26,8 @@ components visualised separately (bottom = noise / no-alignment contrast):
     signed marginals — the two synchrony read-outs
   - LOO-ISC bars for four axes (spectro-temporal, temporal, spectral,
     channel) + a grouped by-axis summary
-  - topomap mean/variance of the channel patterns
+  - topomap mean/variance of the channel patterns, each subject's pattern
+    rescaled to unit L2 norm first so no map is driven by per-subject gain
   - the shared time × frequency source map (direct, no rank-1 product)
   - source mean ± √variance along time and along frequency
   - pair-space heatmaps (Time × Subject, Subject × Frequency,
@@ -48,6 +54,32 @@ Pass ``--band <name>`` to slice the cached broadband wavelets down to a
 single frequency band before IVA. ``--n_pca`` reduces the **channel** axis,
 so it must be ≤ the number of channels.
 
+Pass ``--quality`` (ASSR-only; reproduces
+``wavelet_iva_channel_quality.ipynb``) to additionally emit, per dataset:
+
+  - ``*_quality_reference_topomap`` — group raw-PCA evoked PC1 topography
+    (the x-axis reference)
+  - ``*_quality_onset_response_{pca,40hz}`` — per-component group-mean
+    onset-averaged response with the fixed response window shaded
+  - ``*_quality_scatter_time_{pca,40hz}`` — combined topomap-vs-time
+    correlation scatter, coloured by component with a per-component score
+  - ``*_quality_scatter_time_{pca,40hz}_per_component`` — one labelled panel
+    per component
+  - ``*_quality_participant_topomaps_<label>/`` — one participant-comparison
+    figure per IVA component (1-based, in IVA order): every participant's
+    channel topography side by side plus the group mean and the reference
+
+The scoring lives in :mod:`src.analysis.iva_quality` and the rendering in
+:mod:`src.visualization.iva_quality_plots`; this script only orchestrates them.
+
+The y-axis reference is **onset-locked**: each component's reduced time course
+is averaged around every stimulus onset and correlated (zero-lag Pearson) with
+a **rigid boxcar** (0 before onset, 1 for the fixed
+``iva_quality.RESP_DURATION_S`` = 500 ms stimulus window after it, 0 after). Onset-locking is what makes this
+work — a plain on/off indicator over the whole recording fails because the ASSR
+stimulation is continuous. The quality analysis requires stimulus onsets, so it
+is silently skipped for experiments without them (e.g. psilo_music).
+
 Usage::
 
     # broadband
@@ -59,6 +91,11 @@ Usage::
     python scripts/run_wavelet_iva_channel.py \\
         --condition Placebo --music_type CLASSIC PSYTRANCE \\
         --band alpha --n_pca 100 --n_top 10 --n_bottom 5 --reuse_wavelets
+
+    # ASSR with the decomposition-quality scatterplots
+    python scripts/run_wavelet_iva_channel.py \\
+        --experiment assr --condition Placebo \\
+        --n_pca 15 --n_top 15 --n_bottom 0 --quality --reuse_wavelets
 """
 
 from __future__ import annotations
@@ -91,10 +128,15 @@ from scripts.analysis_common import (  # noqa: E402
     add_wavelet_grid_args,
     analyzers_to_datasets,
     load_analyzers,
+    participant_labels,
     resolve_wavelet_dir,
 )
+from src.analysis import iva_quality  # noqa: E402
+from src.analysis.iva_quality import compute_iva_quality  # noqa: E402
 from src.analysis.wavelet_ica import (  # noqa: E402
     align_iva_component_signs,
+    iva_component_patterns,
+    normalize_patterns_per_subject,
     zscore_by_time,
 )
 from src.definitions.constants import ProjectPaths  # noqa: E402
@@ -106,6 +148,7 @@ from src.definitions.fields import (  # noqa: E402
     FrequencyBandNames,
     MusicTypeVariants,
 )
+from src.visualization import iva_quality_plots as qplots  # noqa: E402
 
 _logger = logging.getLogger(__name__)
 
@@ -286,6 +329,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "Optional frequency band. When set, the cached broadband wavelet "
             "tensor is sliced to the band's frequency range before IVA, and "
             "plots are written to 'bands/iva_channel/' with a '<band>_' prefix."
+        ),
+    )
+    parser.add_argument(
+        "--quality",
+        action="store_true",
+        help=(
+            "ASSR-only: additionally compute the decomposition-quality analysis "
+            "(reference topomap, per-component onset-averaged responses, and "
+            "topomap-vs-onset-locked-time correlation scatterplots). The time "
+            "reference is a rigid 500 ms boxcar starting at each stimulus "
+            "onset. Requires stimulus onsets, so it is silently skipped "
+            "for experiments without them."
         ),
     )
     parser.add_argument(
@@ -524,7 +579,15 @@ def _plot_topomap_mean_var(
     """Per-IC mean (signed) and variance topomaps across subjects.
 
     ``chan_loading`` shape ``(S, n_show, C)`` — the channel patterns.
+
+    Each subject's pattern is rescaled to unit L2 norm first: ``iva_g`` fixes
+    the source scale but not the pattern scale, so unnormalised patterns differ
+    across subjects by a subject-specific gain that would let the loudest
+    subjects dominate the mean map and would leak amplitude differences into the
+    variance map. See
+    :func:`src.analysis.wavelet_ica.normalize_patterns_per_subject`.
     """
+    chan_loading = normalize_patterns_per_subject(chan_loading)
     chan_mean = chan_loading.mean(axis=0)  # (n_show, C)
     chan_var = chan_loading.var(axis=0)  # (n_show, C)
     n_show = len(labels)
@@ -568,7 +631,7 @@ def _plot_topomap_mean_var(
     fig.text(
         0.01,
         0.75,
-        "Mean across subjects",
+        "Mean across subjects (unit-norm)",
         rotation=90,
         va="center",
         fontsize=11,
@@ -577,14 +640,14 @@ def _plot_topomap_mean_var(
     fig.text(
         0.01,
         0.25,
-        "Variance across subjects",
+        "Variance across subjects (unit-norm)",
         rotation=90,
         va="center",
         fontsize=11,
         fontweight="bold",
     )
     fig.suptitle(
-        f"Mean and Variance Topomaps Across Subjects — {label}",
+        f"Mean and Variance Topomaps Across Subjects (unit-norm patterns) — {label}",
         fontsize=13,
     )
     fig.tight_layout(rect=(0.03, 0, 1, 0.97))
@@ -803,6 +866,187 @@ def _plot_subject_loadings(
 
 
 # ---------------------------------------------------------------------------
+# Quality analysis (ASSR-only): topomap & time correlation scatterplots
+#
+# Only the orchestration lives here — it runs when ``--quality`` is passed. The
+# scoring is in ``src/analysis/iva_quality.py`` (pure) and the rendering in
+# ``src/visualization/iva_quality_plots.py``.
+# ---------------------------------------------------------------------------
+
+
+def _run_quality(
+    iva_components: np.ndarray,
+    iva_sources: np.ndarray,
+    freqs: np.ndarray,
+    info,
+    n_channels: int,
+    raw_voltage: np.ndarray | None,
+    onsets: np.ndarray | None,
+    sfreq: float,
+    *,
+    subject_ids: list[str] | None,
+    label: str,
+    out_dir: Path,
+    prefix: str,
+) -> None:
+    """Compute + plot the topomap/time correlation quality analysis (ASSR-only).
+
+    Skipped with a warning when its inputs are unavailable (no stimulus onsets,
+    no MNE info, or no raw voltage), so non-ASSR experiments pass through
+    harmlessly.
+    """
+    if onsets is None or len(onsets) == 0:
+        _logger.warning(
+            f"[{label}] Quality analysis skipped: no stimulus onsets (ASSR-only)."
+        )
+        return
+    if info is None:
+        _logger.warning(
+            f"[{label}] Quality analysis skipped: no MNE info for topomaps."
+        )
+        return
+    if raw_voltage is None:
+        _logger.warning(f"[{label}] Quality analysis skipped: raw voltage unavailable.")
+        return
+
+    n_subjects, n_pca, _ = iva_components.shape
+    comp_indices = list(range(n_pca))
+    if subject_ids is None or len(subject_ids) != n_subjects:
+        # No participant metadata — fall back to the subject index, marked as
+        # such so it is never mistaken for a real participant ID.
+        subject_ids = [f"#{s:03d}" for s in range(n_subjects)]
+
+    topo_info = mne.pick_info(info, mne.pick_types(info, eeg=True))
+    ref_ch_names = list(topo_info["ch_names"])
+    iva_ch_names = (
+        ref_ch_names[:n_channels] if n_channels < len(ref_ch_names) else ref_ch_names
+    )
+
+    try:
+        quality = compute_iva_quality(
+            iva_components,
+            iva_sources,
+            freqs,
+            raw_voltage,
+            onsets,
+            sfreq,
+            ref_ch_names,
+            iva_ch_names,
+        )
+    except Exception as exc:  # noqa: BLE001 - skip quality gracefully
+        _logger.warning(f"[{label}] Quality analysis failed ({exc}); skipping.")
+        return
+
+    _logger.info(
+        f"[{label}] Quality: reference topomap anchored on {quality.anchor_channel}."
+    )
+    win = quality.n_epoch_pre + quality.n_epoch_post
+    _logger.info(
+        f"[{label}] Quality onset epoch: {win} samples ({quality.n_epoch_pre} pre, "
+        f"{quality.n_epoch_post} post); rigid response window "
+        f"{quality.resp_duration_s * 1000:.0f} ms."
+    )
+    if not quality.have_40hz:
+        _logger.warning(
+            f"[{label}] Quality: {iva_quality.ASSR_FREQ:.0f} Hz outside freq range "
+            f"[{freqs.min():.1f}, {freqs.max():.1f}] Hz; skipping 40 Hz variant."
+        )
+    for name, arr in (
+        ("topomap", quality.topo_corr),
+        ("time-PCA", quality.time_corr_pca),
+    ):
+        frac = iva_quality.sign_agreement(arr)
+        _logger.info(
+            f"[{label}] Quality sign agreement [{name}]: mean "
+            f"{frac.mean() * 100:.0f}%, min {frac.min() * 100:.0f}%."
+        )
+    n_flipped = int((quality.sign_per_comp < 0).sum())
+    _logger.info(
+        f"[{label}] Quality: oriented {n_flipped}/{n_pca} components so the mean "
+        f"topomap correlation is >= 0."
+    )
+
+    qplots.plot_reference_topomap(
+        quality.ref_topo,
+        info,
+        n_channels,
+        label=label,
+        save_path=out_dir / f"{prefix}quality_reference_topomap_{label}.png",
+    )
+    plt.close("all")
+
+    # One participant-comparison figure per IVA component. Independent of the
+    # time-reduction variant, so they are emitted once.
+    topo_root = out_dir / f"{prefix}quality_participant_topomaps_{label}"
+    written = qplots.plot_participant_topomaps(
+        quality.patterns,
+        quality.ref_topo,
+        quality.topo_corr,
+        info,
+        n_channels,
+        comp_indices,
+        subject_ids,
+        label=label,
+        root_dir=topo_root,
+        prefix=prefix,
+    )
+    _logger.info(
+        f"[{label}] Quality: wrote {len(written)} participant-comparison figures "
+        f"(one per component, {n_pca} components) to {topo_root}"
+    )
+
+    colors = qplots.component_colors(comp_indices)
+    panels = qplots.panel_indices(
+        quality.topo_corr, quality.time_corr_pca, comp_indices
+    )
+    if len(panels) < n_pca:
+        _logger.info(
+            f"[{label}] Quality: {n_pca} components > {qplots.MAX_PANELS} panel "
+            f"cap; per-component grid shows the top {len(panels)} by score."
+        )
+
+    for variant_name, time_corr, onset_avg, tag in quality.variants():
+        qplots.plot_onset_diagnostic(
+            onset_avg,
+            quality.resp_duration_s,
+            quality.topo_corr,
+            time_corr,
+            quality.epoch_times,
+            comp_indices,
+            colors,
+            variant_name=variant_name,
+            label=label,
+            save_path=out_dir / f"{prefix}quality_onset_response_{tag}_{label}.png",
+        )
+        lim = qplots.axis_limit(quality.topo_corr, time_corr, comp_indices)
+        qplots.plot_quality_scatter(
+            quality.topo_corr,
+            time_corr,
+            comp_indices,
+            colors,
+            lim,
+            variant_name=variant_name,
+            label=label,
+            save_path=out_dir / f"{prefix}quality_scatter_time_{tag}_{label}.png",
+        )
+        qplots.plot_quality_scatter_per_component(
+            quality.topo_corr,
+            time_corr,
+            panels,
+            colors,
+            subject_ids,
+            lim,
+            variant_name=variant_name,
+            label=label,
+            save_path=out_dir
+            / f"{prefix}quality_scatter_time_{tag}_per_component_{label}.png",
+        )
+        plt.close("all")
+
+    _logger.info(f"[{label}] Quality analysis: plots saved to {out_dir}")
+
+
+# ---------------------------------------------------------------------------
 # Main IVA pipeline (channel as the independent / mixing axis)
 # ---------------------------------------------------------------------------
 
@@ -823,6 +1067,10 @@ def _run_iva(
     iva_w_diff_stop: float,
     save_dir: Path,
     band: str | None,
+    quality: bool = False,
+    raw_voltage: np.ndarray | None = None,
+    stimulus_onsets: np.ndarray | None = None,
+    subject_ids: list[str] | None = None,
 ) -> None:
     """Run the channel-as-mixing IVA pipeline and save all plots."""
     pca_subdir = f"pca_{n_pca}"
@@ -905,7 +1153,10 @@ def _run_iva(
     for k in range(n_subjects):
         W_k = W[:, :, k]
         iva_scores_pca[k] = W_k @ X_pca[:, :, k]
-        iva_components[k] = W_k @ pcas[k].components_  # (N_PCA, C)
+        # Forward (mixing) patterns, NOT the unmixing rows: a topography is the
+        # column of the mixing matrix, and after iva_g's internal whitening the
+        # unmixing rows carry a Σ⁻¹ reweighting. See iva_component_patterns.
+        iva_components[k] = iva_component_patterns(W_k, pcas[k].components_)
     # Reshape aligned F*T axis back to (F, T): the shared spectro-temporal source.
     iva_sources = iva_scores_pca.reshape(n_subjects, n_pca, n_freqs, n_times)
     # Signed marginals (signs kept; iva_freq is ~0 by construction — see header).
@@ -914,6 +1165,29 @@ def _run_iva(
     _logger.info(
         f"[{label}] Recover: sources={iva_sources.shape}, "
         f"components={iva_components.shape}"
+    )
+
+    # Diagnostic: how far the forward patterns sit from the unmixing rows that
+    # used to be plotted. |r| near 1 → the whitening reweighting was harmless
+    # here; |r| near 0 → the old topomaps were showing something else entirely.
+    filter_pattern_r = np.array(
+        [
+            abs(
+                pearsonr(
+                    (W[:, :, k] @ pcas[k].components_)[c],
+                    iva_components[k, c],
+                )[0]
+            )
+            for k in range(n_subjects)
+            for c in range(n_pca)
+        ]
+    )
+    _logger.info(
+        f"[{label}] Pattern vs unmixing-row |r| across "
+        f"{n_subjects}x{n_pca} (subject, component) pairs: "
+        f"mean {np.nanmean(filter_pattern_r):.3f}, "
+        f"median {np.nanmedian(filter_pattern_r):.3f}, "
+        f"max {np.nanmax(filter_pattern_r):.3f}."
     )
 
     # Step 5 — Rank by mean off-diagonal Sigma_N correlation, select top + bottom.
@@ -1111,6 +1385,23 @@ def _run_iva(
 
     _logger.info(f"[{label}] IVA-channel: plot files saved to {out_dir}")
 
+    # (j) Quality analysis (ASSR-only): topomap & time correlation scatterplots.
+    if quality:
+        _run_quality(
+            iva_components,
+            iva_sources,
+            freqs,
+            info,
+            n_channels,
+            raw_voltage,
+            stimulus_onsets,
+            sfreq,
+            subject_ids=subject_ids,
+            label=label,
+            out_dir=out_dir,
+            prefix=prefix,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Main
@@ -1177,6 +1468,23 @@ if __name__ == "__main__":
         ad = datasets[dataset_key]
         analyzer = analyzers.get(dataset_key)
         info = getattr(analyzer, "info", None) if analyzer is not None else None
+        stimulus_onsets = (
+            getattr(analyzer, "stimulus_onsets", None) if analyzer is not None else None
+        )
+
+        # Per-subject participant labels (3-digit ID from the metadata sidecar) for
+        # the quality scatter point labels.
+        fdf = getattr(analyzer, "filtered_df", None) if analyzer is not None else None
+        try:
+            subject_ids = participant_labels(fdf, ad.data.shape[0])
+        except ValueError as exc:
+            # Labels are optional, but never fail silently — a wrong or missing
+            # participant label makes every per-subject plot unreadable.
+            _logger.warning(
+                f"[{dataset_key}] Participant labels unavailable ({exc}); "
+                "quality plots will fall back to subject indices."
+            )
+            subject_ids = None
 
         _logger.info(
             f"Dataset [{dataset_key}]: shape={ad.data.shape}  sfreq={ad.sfreq} Hz"
@@ -1226,6 +1534,10 @@ if __name__ == "__main__":
             iva_w_diff_stop=args.iva_w_diff_stop,
             save_dir=save_dir,
             band=band_name,
+            quality=args.quality,
+            raw_voltage=ad.data,
+            stimulus_onsets=stimulus_onsets,
+            subject_ids=subject_ids,
         )
 
     _logger.info("IVA-channel analysis complete.")

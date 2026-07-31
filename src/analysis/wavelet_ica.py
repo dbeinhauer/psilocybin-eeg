@@ -552,3 +552,107 @@ def align_iva_component_signs(
         W_aligned[k, :, :] *= s[np.newaxis, :]
 
     return sigma_corr, W_aligned, signs
+
+
+def iva_component_patterns(
+    w_subject: np.ndarray, pca_components: np.ndarray
+) -> np.ndarray:
+    """Forward (mixing) patterns of one subject's IVA components.
+
+    ``W_k @ pca_components`` is the **backward** model — the spatial *filter*
+    that extracts each source from the features. What belongs on a topomap (or
+    any "what does this component look like" plot) is the **forward** model: the
+    mixing pattern that says how the source projects *onto* the features. The
+    two are not interchangeable, and conflating them is the classic filter-vs-
+    pattern error (Haufe et al., 2014, NeuroImage 87:96-110). MNE follows the
+    same convention: ``ica.get_components()`` returns the mixing matrix, not
+    ``unmixing_matrix_``.
+
+    The distinction matters especially after ``iva_g(..., whiten=True)``, which
+    folds the whitening matrix ``V_k = Λ^{-1/2} Eᵀ`` into the returned ``W_k``.
+    Writing ``W_k = W_white,k V_k`` with ``W_white,k`` (near-)orthogonal::
+
+        pattern ∝ P_kᵀ V_k⁻¹ W_white,kᵀ = P_kᵀ E Λ^{+1/2} c
+        filter  ∝ P_kᵀ V_kᵀ  W_white,kᵀ = P_kᵀ E Λ^{-1/2} c
+
+    so the filter carries a ``Σ⁻¹`` weighting that up-weights the *lowest*-
+    variance retained PCA directions — the noisy tail of the per-subject PCA.
+    With a realistic eigenvalue spread the filter and the pattern of the same
+    component are nearly unrelated.
+
+    Because ``pca_components`` has orthonormal rows (sklearn's ``PCA``), the
+    pattern matrix is exactly the pseudo-inverse of the composite unmixing
+    operator::
+
+        A_k = pinv(W_k @ P_k) = P_kᵀ W_k⁻¹        (shape ``(n_features, K)``)
+
+    and this function returns ``A_kᵀ``, so the result is indexed
+    ``[component, feature]`` — a drop-in replacement for
+    ``W_k @ pca_components``.
+
+    Per-subject sign alignment propagates correctly: pre-multiplying ``W_k`` by
+    ``diag(s)`` with ``s = ±1`` scales column ``k`` of the inverse by ``s_k``,
+    so a component's pattern flips together with its source. Call this **after**
+    :func:`align_iva_component_signs`.
+
+    :param w_subject: ``(K, K)`` unmixing matrix for one subject — a
+        ``W[:, :, k]`` slice of the ``iva_g`` output (whitening already folded
+        in by ``iva_g``).
+    :param pca_components: ``(K, n_features)`` per-subject PCA loadings
+        (``pca.components_``), assumed to have orthonormal rows.
+    :return: ``(K, n_features)`` forward patterns, one row per component.
+    :raises ValueError: If ``w_subject`` is not square or its size does not
+        match ``pca_components``' first axis.
+    """
+    if w_subject.ndim != 2 or w_subject.shape[0] != w_subject.shape[1]:
+        raise ValueError(
+            f"w_subject must be a square (K, K) matrix; got shape {w_subject.shape}."
+        )
+    if pca_components.ndim != 2 or pca_components.shape[0] != w_subject.shape[0]:
+        raise ValueError(
+            f"pca_components must be (K, n_features) with K = "
+            f"{w_subject.shape[0]} to match w_subject; got shape "
+            f"{pca_components.shape}."
+        )
+    # (W⁻¹)ᵀ P — via pinv so a near-singular W degrades gracefully instead of
+    # raising. Equivalent to pinv(W @ P).T for orthonormal-row P.
+    return np.linalg.pinv(w_subject).T @ pca_components
+
+
+# ---------------------------------------------------------------------------
+# Per-subject pattern scaling
+# ---------------------------------------------------------------------------
+
+
+def normalize_patterns_per_subject(patterns: np.ndarray) -> np.ndarray:
+    """Rescale each subject's component pattern to unit L2 norm.
+
+    ``iva_g`` fixes the *source* scale (its unmixing rows are unit-norm in the
+    whitened space) but not the *pattern* scale: ``A_k = Pᵀ W_k⁻¹`` still
+    carries subject *k*'s channel-PCA eigenvalue spread, so patterns differ
+    across subjects by a subject-specific gain. Averaging them unnormalised
+    lets the largest-gain subjects dominate the group mean, and makes an
+    across-subject variance map a picture of amplitude differences rather than
+    of topographic disagreement. Call this before any across-subject mean /
+    variance / shared-colour-limit plot of the patterns.
+
+    Correlation-based quantities (e.g. topography correlations against a
+    reference) are scale-invariant and therefore unaffected by this rescaling.
+
+    :param patterns: ``(S, K, C)`` per-subject component patterns (channel
+        topographies, or any feature axis) — **not** mutated.
+    :return: A **new** array of the same shape, each ``(subject, component)``
+        pattern having unit L2 norm. All-zero patterns are left at zero
+        instead of dividing by zero.
+    :raises ValueError: If *patterns* is not 3-D or has no subjects.
+    """
+    if patterns.ndim != 3:
+        raise ValueError(
+            f"patterns must be 3-D (n_subjects, n_components, n_channels); "
+            f"got shape {patterns.shape} (ndim={patterns.ndim})."
+        )
+    if patterns.shape[0] < 1:
+        raise ValueError("patterns must contain at least one subject.")
+
+    norms = np.linalg.norm(patterns, axis=2)  # (S, K)
+    return patterns / np.where(norms == 0.0, 1.0, norms)[:, :, np.newaxis]

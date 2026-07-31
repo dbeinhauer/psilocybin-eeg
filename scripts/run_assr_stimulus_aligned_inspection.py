@@ -263,7 +263,7 @@ def plot_gfp_per_participant(
         ax.plot(epoch_times, gfp_curves[subj], lw=1.6, color="C0")
         ax.axvline(0.0, color="red", ls="--", lw=0.8)
         ax.set_title(labels[subj], fontsize=9)
-    for ax in flat[len(subjects):]:
+    for ax in flat[len(subjects) :]:
         ax.axis("off")
     fig.suptitle(
         f"Per-participant stimulus-locked broadband GFP (evoked) — {title_suffix}",
@@ -291,8 +291,13 @@ def plot_butterfly_overlay(
     fig, ax = plt.subplots(figsize=(12, 6))
     for subj, evoked in evoked_curves.items():
         ax.plot(epoch_times, evoked.mean(axis=0), lw=1.0, alpha=0.7, label=labels[subj])
-    ax.plot(epoch_times, group_evoked.mean(axis=0), lw=2.8, color="black",
-            label="group mean")
+    ax.plot(
+        epoch_times,
+        group_evoked.mean(axis=0),
+        lw=2.8,
+        color="black",
+        label="group mean",
+    )
     ax.axvline(0.0, color="red", ls="--", lw=1, label="onset")
     ax.set_title(f"Stimulus-locked channel-mean evoked response — {title_suffix}")
     ax.set_xlabel("Time relative to onset (s)")
@@ -323,7 +328,7 @@ def plot_butterfly_per_participant(
         ax.plot(epoch_times, evoked_curves[subj].mean(axis=0), lw=1.6, color="C0")
         ax.axvline(0.0, color="red", ls="--", lw=0.8)
         ax.set_title(labels[subj], fontsize=9)
-    for ax in flat[len(subjects):]:
+    for ax in flat[len(subjects) :]:
         ax.axis("off")
     fig.suptitle(
         f"Per-participant channel-mean evoked response — {title_suffix}",
@@ -360,8 +365,13 @@ def plot_tf_per_participant(
     im = None
     for ax, subj in zip(flat, range(n_subj)):
         im = ax.imshow(
-            power_maps[subj], aspect="auto", origin="lower", extent=extent,
-            cmap="RdBu_r", vmin=-vmax, vmax=vmax,
+            power_maps[subj],
+            aspect="auto",
+            origin="lower",
+            extent=extent,
+            cmap="RdBu_r",
+            vmin=-vmax,
+            vmax=vmax,
         )
         ax.axvline(0.0, color="k", ls="--", lw=0.7)
         ax.axhline(assr_freq, color="green", ls=":", lw=0.9)
@@ -394,8 +404,13 @@ def plot_tf_group(
     extent = [epoch_times[0], epoch_times[-1], freqs[0], freqs[-1]]
     fig, ax = plt.subplots(figsize=(7, 4.6))
     im = ax.imshow(
-        group_tf, aspect="auto", origin="lower", extent=extent, cmap="RdBu_r",
-        vmin=-vmax, vmax=vmax,
+        group_tf,
+        aspect="auto",
+        origin="lower",
+        extent=extent,
+        cmap="RdBu_r",
+        vmin=-vmax,
+        vmax=vmax,
     )
     ax.axvline(0.0, color="k", ls="--", lw=0.8, label="onset")
     ax.axhline(assr_freq, color="green", ls=":", lw=1.2, label=f"{assr_freq:.0f} Hz")
@@ -425,14 +440,13 @@ def plot_assr_band(
     band = (freqs >= assr_freq - 2) & (freqs <= assr_freq + 2)
     n_subj = power_maps.shape[0]
     # power_maps is already z-scored vs the whole recording; just average the band.
-    curves = np.stack(
-        [power_maps[s, band].mean(axis=0) for s in range(n_subj)]
-    )
+    curves = np.stack([power_maps[s, band].mean(axis=0) for s in range(n_subj)])
     fig, ax = plt.subplots(figsize=(12, 6))
     for subj in range(n_subj):
         ax.plot(epoch_times, curves[subj], lw=1.0, alpha=0.7, label=labels[subj])
-    ax.plot(epoch_times, curves.mean(axis=0), lw=2.8, color="black",
-            label="group average")
+    ax.plot(
+        epoch_times, curves.mean(axis=0), lw=2.8, color="black", label="group average"
+    )
     ax.axvline(0.0, color="red", ls="--", lw=1, label="onset")
     ax.set_title(
         f"Stimulus-locked {assr_freq:.0f} Hz power (z-scored vs recording) — "
@@ -472,11 +486,16 @@ def plot_topomaps(
     im = None
     for ax, (label, vals) in zip(flat, panels):
         im, _ = mne.viz.plot_topomap(
-            vals, topo_info, axes=ax, show=False, cmap="RdBu_r",
-            vlim=(-vlim, vlim), contours=4,
+            vals,
+            topo_info,
+            axes=ax,
+            show=False,
+            cmap="RdBu_r",
+            vlim=(-vlim, vlim),
+            contours=4,
         )
         ax.set_title(label, fontsize=9)
-    for ax in flat[len(panels):]:
+    for ax in flat[len(panels) :]:
         ax.axis("off")
     fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.6, label="z-scored power")
     fig.suptitle(
@@ -526,7 +545,9 @@ def run_inspection(args: argparse.Namespace) -> None:
     wavelet_path = wavelet_matches[0]
 
     save_root = Path(args.save_dir) if args.save_dir else ProjectPaths.PLOTS_PATH
-    plots_dir = save_root / "00-preprocessing" / "assr_stimulus_aligned_inspection" / label
+    plots_dir = (
+        save_root / "00-preprocessing" / "assr_stimulus_aligned_inspection" / label
+    )
     plots_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"=== {label} ===", flush=True)
@@ -543,14 +564,11 @@ def run_inspection(args: argparse.Namespace) -> None:
     freqs, channel_names, n_freqs = read_wavelet_metadata(wavelet_path)
     if len(channel_names) != n_channels:
         raise ValueError(
-            f"wavelet channel count {len(channel_names)} != raw n_channels "
-            f"{n_channels}"
+            f"wavelet channel count {len(channel_names)} != raw n_channels {n_channels}"
         )
 
     # Subject index -> participant label (ordered by concatenated person index).
-    idx_to_pid = dict(
-        zip(meta[_PIDX_COL], meta[_PID_COL].astype(str).str.zfill(3))
-    )
+    idx_to_pid = dict(zip(meta[_PIDX_COL], meta[_PID_COL].astype(str).str.zfill(3)))
     labels = {s: f"PSI{idx_to_pid.get(s, '???')}" for s in range(n_subj)}
 
     sfreq = args.sfreq
@@ -584,7 +602,9 @@ def run_inspection(args: argparse.Namespace) -> None:
     print(f"Raw GFP: averaged {n_used} stimuli per participant.", flush=True)
 
     title_suffix = f"{condition.value}/{music_type.value} (n={n_subj})"
-    plot_gfp_overlay(gfp_curves, group_curve, epoch_times, labels, title_suffix, plots_dir)
+    plot_gfp_overlay(
+        gfp_curves, group_curve, epoch_times, labels, title_suffix, plots_dir
+    )
     plot_gfp_per_participant(
         gfp_curves, group_curve, epoch_times, labels, title_suffix, plots_dir
     )
@@ -598,8 +618,14 @@ def run_inspection(args: argparse.Namespace) -> None:
     # ---- Wavelet: single streaming pass over the whole cache ----------------
     print(f"Streaming wavelet cache ({wavelet_path.name}) ...", flush=True)
     power_maps, topo, n_times_wav = stream_wavelet_reduce(
-        wavelet_path, n_channels, n_freqs, onsets, pre, post,
-        topo_freq_mask, topo_post_mask,
+        wavelet_path,
+        n_channels,
+        n_freqs,
+        onsets,
+        pre,
+        post,
+        topo_freq_mask,
+        topo_post_mask,
     )
     print(
         f"Wavelet reduced: power_maps={power_maps.shape}, topo={topo.shape} "
@@ -610,7 +636,9 @@ def run_inspection(args: argparse.Namespace) -> None:
     plot_tf_per_participant(
         power_maps, epoch_times, freqs, labels, args.assr_freq, title_suffix, plots_dir
     )
-    plot_tf_group(power_maps, epoch_times, freqs, args.assr_freq, title_suffix, plots_dir)
+    plot_tf_group(
+        power_maps, epoch_times, freqs, args.assr_freq, title_suffix, plots_dir
+    )
     plot_assr_band(
         power_maps, epoch_times, freqs, labels, args.assr_freq, title_suffix, plots_dir
     )
@@ -669,24 +697,57 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[e.value for e in ExperimentNames],
         help="Experiment dataset (default assr).",
     )
-    parser.add_argument("--sfreq", type=float, default=250.0,
-                        help="Sampling rate of the concatenated / wavelet data.")
-    parser.add_argument("--epoch_tmin", type=float, default=-0.1,
-                        help="Epoch start relative to onset (s).")
-    parser.add_argument("--epoch_tmax", type=float, default=1.2,
-                        help="Epoch end relative to onset (s).")
-    parser.add_argument("--assr_freq", type=float, default=40.0,
-                        help="Expected steady-state frequency (Hz).")
-    parser.add_argument("--topo_tmin", type=float, default=0.0,
-                        help="Topomap post-onset window start (s).")
-    parser.add_argument("--topo_tmax", type=float, default=None,
-                        help="Topomap post-onset window end (s); default = epoch_tmax.")
-    parser.add_argument("--topo_freq_min", type=float, default=1.0,
-                        help="Lowest frequency collapsed into the topomap (Hz).")
-    parser.add_argument("--topo_freq_max", type=float, default=50.0,
-                        help="Highest frequency collapsed into the topomap (Hz).")
-    parser.add_argument("--save_dir", type=str, default=None,
-                        help="Base directory for output plots. Defaults to plots/ root.")
+    parser.add_argument(
+        "--sfreq",
+        type=float,
+        default=250.0,
+        help="Sampling rate of the concatenated / wavelet data.",
+    )
+    parser.add_argument(
+        "--epoch_tmin",
+        type=float,
+        default=-0.1,
+        help="Epoch start relative to onset (s).",
+    )
+    parser.add_argument(
+        "--epoch_tmax", type=float, default=1.0, help="Epoch end relative to onset (s)."
+    )
+    parser.add_argument(
+        "--assr_freq",
+        type=float,
+        default=40.0,
+        help="Expected steady-state frequency (Hz).",
+    )
+    parser.add_argument(
+        "--topo_tmin",
+        type=float,
+        default=0.0,
+        help="Topomap post-onset window start (s).",
+    )
+    parser.add_argument(
+        "--topo_tmax",
+        type=float,
+        default=None,
+        help="Topomap post-onset window end (s); default = epoch_tmax.",
+    )
+    parser.add_argument(
+        "--topo_freq_min",
+        type=float,
+        default=1.0,
+        help="Lowest frequency collapsed into the topomap (Hz).",
+    )
+    parser.add_argument(
+        "--topo_freq_max",
+        type=float,
+        default=50.0,
+        help="Highest frequency collapsed into the topomap (Hz).",
+    )
+    parser.add_argument(
+        "--save_dir",
+        type=str,
+        default=None,
+        help="Base directory for output plots. Defaults to plots/ root.",
+    )
     return parser
 
 

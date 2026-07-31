@@ -48,7 +48,7 @@ from src.definitions.fields import (
     AnalysisVariants,
     ExperimentNames,
 )
-from src.preprocessing.stimulus_alignment import EXPERIMENT_STIMULUS_LABELS
+from src.preprocessing.stimulus_alignment import EXPERIMENT_STIMULUS_MARKERS
 from src.definitions.constants import ProjectPaths
 
 _logger = logging.getLogger(__name__)
@@ -141,7 +141,7 @@ if __name__ == "__main__":
     reuse_wavelets_for_workflow = args.reuse_wavelets
     if (
         run_wavelet
-        and experiment_name in EXPERIMENT_STIMULUS_LABELS
+        and experiment_name in EXPERIMENT_STIMULUS_MARKERS
         and not args.reuse_wavelets
     ):
         representations = (["power"] if run_wavelet_power else []) + (

@@ -2,9 +2,16 @@
 
 Headless, all-subjects / all-channels counterpart of
 ``notebooks/00-preprocessing/assr_raw_pca_analysis.ipynb``. For a given condition
-it reduces the stimulus-locked **evoked voltage** to a single spatial component per
+it reduces the stimulus-locked **evoked voltage** to a few spatial components per
 participant by collapsing the channel dimension with a **PCA over channels**, then
-plots the first-component time course and scalp topography.
+plots each component's time course and scalp topography.
+
+``--n_components`` (default 3) sets how many leading components are kept. All of
+them are processed **identically** — same alignment, same diagnostics, same plots —
+so later components can be compared against PC1 instead of assumed uninformative:
+PCA orders components by explained *channel variance* in the evoked window, which
+is not the same thing as carrying the 40 Hz steady-state, so a large slow onset
+deflection can own PC1 and push the ASSR into PC2 or PC3.
 
 Pipeline (per subject):
 
@@ -13,14 +20,24 @@ Pipeline (per subject):
    (``--no_zscore_per_channel`` keeps raw µV, a covariance-PCA).
 2. **Trial average.** The signal is epoch-averaged around every ``fam+`` onset. The
    epoch keeps a fixed ``pre_pad`` before onset and a post-onset length equal to the
-   shortest inter-onset interval, so no epoch overlaps the next stimulus.
+   paradigm's post-onset span — ``0.5`` s stimulus + ``0.5`` s post-stimulus (see
+   :class:`src.definitions.constants.AssrEpoch`) — capped by the shortest
+   inter-onset gap so no epoch overlaps a neighbouring stimulus.
 3. **Channel PCA.** Each time sample is an observation and each channel a variable;
-   PCA is fit over the ``(win, n_channels)`` matrix. PC1's score is the component's
-   time course ``(win,)``; PC1's loading is its scalp topography ``(n_channels,)``.
-4. **Polarity alignment across participants.** A PCA sign is arbitrary, so each
-   subject's loading is aligned to a common template (iteratively-refined group
-   mean) and the global orientation anchored to a reference channel (``Cz``),
-   giving one consistent polarity; the score is flipped with the loading.
+   PCA is fit over the ``(win, n_channels)`` matrix. Every kept component's score is
+   its time course ``(win,)`` and its loading is its scalp topography
+   ``(n_channels,)``.
+4. **Polarity alignment across participants**, run **independently per component**
+   (each component's sign is its own arbitrary choice). Each subject's loading is
+   aligned to a common template (iteratively-refined group mean) and the overall
+   orientation anchored to a reference channel (:mod:`src.analysis.pca_polarity`).
+   This maximises cross-subject topography agreement, which is what makes the group
+   averages meaningful; the score is flipped with the loading so topography and time
+   course stay consistent.
+5. **Component comparison.** A summary table is printed with, per component, the
+   mean explained variance, the topography-consistency diagnostic and the ASSR-band
+   SNR of the driven interval (per-subject median and group-mean waveform) — the
+   evidence for whether a later component is the better steady-state carrier.
 
 Inputs (produced by stimulus alignment + the wavelet store jobs)::
 
@@ -58,7 +75,12 @@ from sklearn.decomposition import PCA  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.definitions.constants import ProjectPaths  # noqa: E402
+from src.analysis.pca_polarity import (  # noqa: E402
+    align_pc1_signs,
+    apply_pc1_signs,
+    topography_consistency,
+)
+from src.definitions.constants import AssrEpoch, ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
     ConditionVariants,
     CoordinateSystems,
@@ -110,62 +132,135 @@ def epoch_average(
     return acc / n_used, n_used
 
 
-def channel_pca_component(evoked: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
-    """Collapse channels of an evoked map with PCA, keeping PC1.
+def channel_pca_components(
+    evoked: np.ndarray, n_components: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Collapse channels of an evoked map with PCA, keeping the leading components.
 
     Args:
         evoked: ``(n_channels, win)`` stimulus-locked trial average.
+        n_components: Number of leading components to keep.
 
     Returns:
-        Tuple ``(time_course, loading, explained)``: PC1 score ``(win,)``, PC1
-        loading ``(n_channels,)`` and PC1's explained-variance ratio. The sign is
-        left arbitrary here; it is fixed across participants by ``align_polarity``.
+        Tuple ``(time_courses, loadings, explained)`` with shapes
+        ``(n_components, win)``, ``(n_components, n_channels)`` and
+        ``(n_components,)``: each component's score (time course), loading (scalp
+        topography) and explained-variance ratio. Signs are left arbitrary here;
+        they are aligned across participants, per component, by
+        :func:`src.analysis.pca_polarity.align_pc1_signs`.
     """
     matrix = evoked.T  # (win, n_channels): observations = time, variables = channels
-    pca = PCA(n_components=1)
-    time_course = pca.fit_transform(matrix)[:, 0]  # (win,)
-    loading = pca.components_[0]  # (n_channels,)
-    return time_course, loading, float(pca.explained_variance_ratio_[0])
+    pca = PCA(n_components=n_components)
+    time_courses = pca.fit_transform(matrix).T  # (n_components, win)
+    return time_courses, pca.components_, pca.explained_variance_ratio_
 
 
-def align_polarity(
-    loading_mat: np.ndarray, channel_names: list[str], n_iter: int = 10
-) -> tuple[np.ndarray, np.ndarray, str]:
-    """Align PC1 polarity across participants to one consistent sign.
+def assr_snr(
+    time_course: np.ndarray,
+    stim_mask: np.ndarray,
+    sfreq: float,
+    assr_freq: float,
+    n_side: int = 3,
+    n_exclude: int = 1,
+) -> float:
+    """Steady-state SNR of one component score over the driven interval.
 
-    Every subject's loading is aligned to a common template (the iteratively-
-    refined group-mean loading), then the whole set's global orientation is
-    anchored to a reference channel (``Cz`` if present, else the strongest template
-    channel) so the sign is stable regardless of subject ordering.
+    Power at *assr_freq* relative to the median of neighbouring spectral bins,
+    computed on the stimulus interval only — a 1.1 s epoch around a 0.5 s stimulus
+    is half silence, which dilutes a steady-state estimate. The Hann taper spreads
+    the peak into its immediate neighbours, so *n_exclude* bins on each side are
+    skipped when forming the noise floor.
 
     Args:
-        loading_mat: ``(n_subj, n_channels)`` per-subject PC1 loadings.
-        channel_names: Channel names aligned to the loading columns.
-        n_iter: Template-refinement iterations.
+        time_course: ``(win,)`` component score over the full epoch.
+        stim_mask: Boolean mask selecting the driven samples of the epoch.
+        sfreq: Sampling rate (Hz).
+        assr_freq: Steady-state frequency (Hz).
+        n_side: Noise-floor bins taken on each side of the ASSR bin.
+        n_exclude: Bins adjacent to the peak skipped (taper leakage).
 
     Returns:
-        Tuple ``(aligned, signs, ref_name)``: sign-aligned loadings, the per-subject
-        sign applied (``+1``/``-1``, to also flip the time courses) and the
-        reference channel name.
+        The SNR ratio, or NaN when the noise floor is degenerate.
     """
-    aligned = loading_mat.copy()
-    template = aligned[0].copy()
-    for _ in range(n_iter):
-        flips = np.sign(aligned @ template)
-        flips[flips == 0] = 1.0
-        aligned = aligned * flips[:, None]
-        template = aligned.mean(axis=0)
-    ref_name = (
-        "Cz"
-        if "Cz" in channel_names
-        else channel_names[int(np.argmax(np.abs(template)))]
+    seg = np.asarray(time_course, dtype=float)[stim_mask]
+    seg = (seg - seg.mean()) * np.hanning(seg.size)
+    power = np.abs(np.fft.rfft(seg)) ** 2
+    freqs = np.fft.rfftfreq(seg.size, 1.0 / sfreq)
+    peak = int(np.argmin(np.abs(freqs - assr_freq)))
+    left_end = peak - n_exclude
+    side = np.concatenate(
+        [
+            power[max(left_end - n_side, 0) : max(left_end, 0)],
+            power[peak + n_exclude + 1 : peak + n_exclude + 1 + n_side],
+        ]
     )
-    ref_idx = channel_names.index(ref_name)
-    if template[ref_idx] < 0:
-        aligned, template = -aligned, -template
-    signs = np.sign((loading_mat * aligned).sum(axis=1))
-    signs[signs == 0] = 1.0
-    return aligned, signs, ref_name
+    floor = float(np.median(side)) if side.size else float("nan")
+    return float(power[peak] / floor) if floor > 0 else float("nan")
+
+
+def component_comparison(
+    time_courses: np.ndarray,
+    explained: np.ndarray,
+    consistency: list,
+    pc_labels: list[str],
+    stim_mask: np.ndarray,
+    sfreq: float,
+    assr_freq: float,
+    snr_threshold: float,
+) -> pd.DataFrame:
+    """Score every component on the same measures, for a side-by-side comparison.
+
+    A later component is the better ASSR carrier only if it beats PC1 on the SNR
+    columns *and* holds up on topography consistency: winning on SNR while failing
+    consistency means subjects have 40 Hz in some second mode, but not in the same
+    second mode, so its group average is not interpretable.
+
+    Args:
+        time_courses: ``(n_components, n_subjects, win)`` polarity-aligned scores.
+        explained: ``(n_components, n_subjects)`` explained-variance ratios.
+        consistency: Per-component
+            :class:`src.analysis.pca_polarity.SignConsistency` results.
+        pc_labels: Component names, e.g. ``["PC1", "PC2"]``.
+        stim_mask: Boolean mask selecting the driven samples of the epoch.
+        sfreq: Sampling rate (Hz).
+        assr_freq: Steady-state frequency (Hz).
+        snr_threshold: Per-subject SNR counted as a hit in the ``n_SNR>`` column.
+
+    Returns:
+        A DataFrame indexed by component name.
+    """
+    n_components = time_courses.shape[0]
+    subject_snr = np.array(
+        [
+            [assr_snr(tc, stim_mask, sfreq, assr_freq) for tc in time_courses[c]]
+            for c in range(n_components)
+        ]
+    )
+    group_snr = np.array(
+        [
+            assr_snr(time_courses[c].mean(axis=0), stim_mask, sfreq, assr_freq)
+            for c in range(n_components)
+        ]
+    )
+    return pd.DataFrame(
+        {
+            "component": pc_labels,
+            "mean_EV_%": [explained[c].mean() * 100 for c in range(n_components)],
+            "agreeing": [
+                f"{consistency[c].n_agreeing}/{consistency[c].n_subjects}"
+                for c in range(n_components)
+            ],
+            "median_pairwise_r": [
+                consistency[c].median_pairwise_r for c in range(n_components)
+            ],
+            "min_subject_r": [
+                consistency[c].min_subject_r for c in range(n_components)
+            ],
+            f"{assr_freq:.0f}Hz_SNR_subject_median": np.nanmedian(subject_snr, axis=1),
+            f"{assr_freq:.0f}Hz_SNR_group_mean": group_snr,
+            f"n_SNR>{snr_threshold:.0f}": (subject_snr > snr_threshold).sum(axis=1),
+        }
+    ).set_index("component")
 
 
 # --------------------------------------------------------------------------- #
@@ -211,10 +306,13 @@ def plot_timecourse_per_participant(
     epoch_times: np.ndarray,
     labels: list[str],
     unit: str,
+    pc_label: str,
+    color: str,
+    stim_end: float,
     title_suffix: str,
     plots_dir: Path,
 ) -> None:
-    """Grid of per-participant PC1 time courses (ordered by participant ID)."""
+    """Grid of per-participant time courses for ONE component (sorted by PID)."""
     n_subj = time_courses.shape[0]
     nrows, ncols = grid_shape(n_subj)
     fig, axes = plt.subplots(
@@ -222,20 +320,23 @@ def plot_timecourse_per_participant(
     )
     flat = axes.flatten()
     for ax, subj in zip(flat, range(n_subj)):
-        ax.plot(epoch_times, time_courses[subj], lw=1.5, color="C0")
+        ax.plot(epoch_times, time_courses[subj], lw=1.5, color=color)
+        ax.axvspan(0.0, stim_end, color="grey", alpha=0.12, lw=0)
         ax.axvline(0.0, color="red", ls="--", lw=0.8)
-        ax.set_title(f"{labels[subj]}  (PC1 {explained[subj] * 100:.0f}%)", fontsize=9)
+        ax.set_title(
+            f"{labels[subj]}  ({pc_label} {explained[subj] * 100:.0f}%)", fontsize=9
+        )
     for ax in flat[n_subj:]:
         ax.axis("off")
     fig.supxlabel("Time relative to onset (s)")
-    fig.supylabel(f"PC1 projected signal ({unit}, polarity-aligned)")
+    fig.supylabel(f"{pc_label} projected signal ({unit}, polarity-aligned)")
     fig.suptitle(
-        f"Per-participant channel-PCA first-component time course — {title_suffix}",
+        f"Per-participant channel-PCA {pc_label} time course — {title_suffix}",
         y=1.0,
     )
     fig.tight_layout()
     fig.savefig(
-        plots_dir / "raw_pca_timecourse_per_participant.png",
+        plots_dir / f"raw_pca_{pc_label.lower()}_timecourse_per_participant.png",
         dpi=150,
         bbox_inches="tight",
     )
@@ -244,25 +345,61 @@ def plot_timecourse_per_participant(
 
 def plot_timecourse_overlay(
     time_courses: np.ndarray,
+    explained: np.ndarray,
+    consistency: list,
     epoch_times: np.ndarray,
     labels: list[str],
     unit: str,
+    pc_labels: list[str],
+    stim_end: float,
     title_suffix: str,
     plots_dir: Path,
 ) -> None:
-    """All participants' PC1 time courses overlaid, with the group mean."""
-    fig, ax = plt.subplots(figsize=(11, 5))
-    for subj, label in enumerate(labels):
-        ax.plot(epoch_times, time_courses[subj], lw=1.1, alpha=0.75, label=label)
-    ax.plot(epoch_times, time_courses.mean(axis=0), lw=2.6, color="black",
-            label="group mean")
-    ax.axvline(0.0, color="red", ls="--", lw=1, label="onset")
-    ax.set_title(f"Channel-PCA first-component time course — {title_suffix}")
-    ax.set_xlabel("Time relative to onset (s)")
-    ax.set_ylabel(f"PC1 projected signal ({unit}, polarity-aligned)")
-    ax.legend(loc="upper right", fontsize=7, ncol=3)
+    """Participants overlaid with the group mean, one row per component.
+
+    Each row keeps its own y-scale: component scores shrink with component order by
+    construction, so a shared scale would flatten later components into lines and
+    hide the waveform shape being compared.
+    """
+    n_components = time_courses.shape[0]
+    fig, axes = plt.subplots(
+        n_components,
+        1,
+        figsize=(11, 4.2 * n_components),
+        sharex=True,
+        squeeze=False,
+    )
+    for comp, pc_label in enumerate(pc_labels):
+        ax = axes[comp, 0]
+        for subj, label in enumerate(labels):
+            ax.plot(
+                epoch_times, time_courses[comp, subj], lw=1.1, alpha=0.75, label=label
+            )
+        ax.plot(
+            epoch_times,
+            time_courses[comp].mean(axis=0),
+            lw=2.6,
+            color="black",
+            label="group mean",
+        )
+        ax.axvspan(0.0, stim_end, color="grey", alpha=0.12, lw=0)
+        ax.axvline(0.0, color="red", ls="--", lw=1, label="onset")
+        ax.set_title(
+            f"{pc_label} — mean EV {explained[comp].mean() * 100:.0f}%, "
+            f"topographies agreeing {consistency[comp].n_agreeing}/"
+            f"{consistency[comp].n_subjects}, median pairwise r "
+            f"{consistency[comp].median_pairwise_r:+.2f}",
+            fontsize=10,
+        )
+        ax.set_ylabel(f"{pc_label} ({unit})")
+        if comp == 0:
+            ax.legend(loc="upper right", fontsize=7, ncol=3)
+    axes[-1, 0].set_xlabel("Time relative to onset (s)")
+    fig.suptitle(f"Channel-PCA component time courses — {title_suffix}", y=1.0)
     fig.tight_layout()
-    fig.savefig(plots_dir / "raw_pca_timecourse_overlay.png", dpi=150)
+    fig.savefig(
+        plots_dir / "raw_pca_timecourse_overlay.png", dpi=150, bbox_inches="tight"
+    )
     plt.close(fig)
 
 
@@ -272,22 +409,30 @@ def plot_topomaps(
     topo_info: mne.Info,
     info_order: list[int],
     labels: list[str],
+    pc_label: str,
+    agreement: str,
     title_suffix: str,
     plots_dir: Path,
 ) -> None:
-    """Per-participant + group PC1 scalp topographies (nb05 convention).
+    """Per-participant + group scalp topographies of ONE component (nb05 convention).
 
-    Panel titles carry each subject's PC1 explained-variance ratio; the group panel
-    carries the mean across subjects.
+    Panel titles carry each subject's explained-variance ratio for this component;
+    the group panel carries the mean across subjects.
     """
     n_subj = loadings.shape[0]
     panels = [
-        (f"{labels[s]}  (PC1 {explained[s] * 100:.0f}%)", loadings[s][info_order])
+        (
+            f"{labels[s]}  ({pc_label} {explained[s] * 100:.0f}%)",
+            loadings[s][info_order],
+        )
         for s in range(n_subj)
     ]
     mean_ev = float(np.mean(explained)) * 100
     panels.append(
-        (f"group average  (mean PC1 {mean_ev:.0f}%)", loadings.mean(axis=0)[info_order])
+        (
+            f"group average  (mean {pc_label} {mean_ev:.0f}%)",
+            loadings.mean(axis=0)[info_order],
+        )
     )
 
     # Symmetric shared scale (nb05 convention): 99th percentile of |loading|.
@@ -303,19 +448,27 @@ def plot_topomaps(
     im = None
     for ax, (label, vals) in zip(flat, panels):
         im, _ = mne.viz.plot_topomap(
-            vals, topo_info, axes=ax, show=False, cmap="RdBu_r",
-            vlim=(-vlim, vlim), contours=4,
+            vals,
+            topo_info,
+            axes=ax,
+            show=False,
+            cmap="RdBu_r",
+            vlim=(-vlim, vlim),
+            contours=4,
         )
         ax.set_title(label, fontsize=9)
-    for ax in flat[len(panels):]:
+    for ax in flat[len(panels) :]:
         ax.axis("off")
-    fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.6, label="PC1 loading (a.u.)")
+    fig.colorbar(
+        im, ax=axes.ravel().tolist(), shrink=0.6, label=f"{pc_label} loading (a.u.)"
+    )
     fig.suptitle(
-        f"Per-participant channel-PCA first-component topography — {title_suffix}",
+        f"Per-participant channel-PCA {pc_label} topography — {title_suffix} "
+        f"(agreeing {agreement})",
         y=1.0,
     )
     fig.savefig(
-        plots_dir / "raw_pca_topomap_per_participant.png",
+        plots_dir / f"raw_pca_{pc_label.lower()}_topomap_per_participant.png",
         dpi=150,
         bbox_inches="tight",
     )
@@ -376,49 +529,102 @@ def run_pca(args: argparse.Namespace) -> None:
 
     sfreq = args.sfreq
     pre = int(round(args.pre_pad * sfreq))
-    post = int(gaps.min())  # trim to shortest inter-onset gap: no epoch overlaps
+    # Paradigm window, only capped by the shortest gap so epochs never overlap.
+    post = min(int(round(args.post_window * sfreq)), int(gaps.min()))
     epoch_times = np.arange(-pre, post) / sfreq
+    stim_mask = AssrEpoch.stimulus_mask(epoch_times)  # driven interval
+
+    # More components than channels is not decomposable; clamp instead of failing.
+    n_components = min(args.n_components, n_channels)
+    if n_components < args.n_components:
+        print(
+            f"  NOTE: --n_components {args.n_components} exceeds the {n_channels} "
+            f"available channels; using {n_components}.",
+            flush=True,
+        )
+    pc_labels = [f"PC{c + 1}" for c in range(n_components)]
+
     print(
         f"n_subj={n_subj}, n_channels={n_channels}, onsets={onsets.shape[0]}, "
+        f"n_components={n_components}, "
         f"epoch window={pre + post} samples ({pre} pre, {post} post) "
-        f"= [{epoch_times[0]:.3f}, {epoch_times[-1]:.3f}] s, "
+        f"= [{epoch_times[0]:.3f}, {epoch_times[-1]:.3f}] s "
+        f"(stimulus 0–{AssrEpoch.STIMULUS_DURATION_S:.2f} s), "
         f"zscore_per_channel={args.zscore_per_channel}",
         flush=True,
     )
+    if pre + post > int(gaps.min()):
+        print(
+            f"  WARNING: epoch ({pre + post} samples) exceeds the shortest "
+            f"inter-onset gap ({int(gaps.min())}) — the pre-onset baseline reaches "
+            f"into the previous stimulus.",
+            flush=True,
+        )
 
     # ---- Per-subject channel PCA --------------------------------------------
-    time_courses = np.zeros((n_subj, pre + post), dtype=np.float64)
-    loadings = np.zeros((n_subj, n_channels), dtype=np.float64)
-    explained = np.zeros(n_subj, dtype=np.float64)
+    # Component-major storage: axis 0 = component, axis 1 = subject. Every
+    # component is produced by the same code path, so none is special-cased.
+    time_courses = np.zeros((n_components, n_subj, pre + post), dtype=np.float64)
+    loadings = np.zeros((n_components, n_subj, n_channels), dtype=np.float64)
+    explained = np.zeros((n_components, n_subj), dtype=np.float64)
     for subj in range(n_subj):
         sig = np.asarray(raw_mm[subj])  # (n_ch, n_times)
         if args.zscore_per_channel:
             sig = zscore(sig, axis=1)  # equal electrode influence (correlation-PCA)
         evoked, n_used = epoch_average(sig, onsets, pre, post)  # (n_ch, win)
-        time_courses[subj], loadings[subj], explained[subj] = channel_pca_component(
-            evoked
+        (
+            time_courses[:, subj],
+            loadings[:, subj],
+            explained[:, subj],
+        ) = channel_pca_components(evoked, n_components)
+        ev_summary = ", ".join(
+            f"{pc} {explained[c, subj] * 100:.1f}%" for c, pc in enumerate(pc_labels)
         )
         print(
             f"  reduced subject {subj + 1}/{n_subj} (PSI{idx_to_pid.get(subj, '???')},"
-            f" {n_used} stimuli, PC1 {explained[subj] * 100:.1f}%)",
+            f" {n_used} stimuli, {ev_summary})",
             flush=True,
         )
 
-    # ---- Align PC1 polarity across participants -----------------------------
-    loadings, signs, ref_name = align_polarity(loadings, channel_names)
-    time_courses = time_courses * signs[:, None]
-    print(
-        f"Polarity aligned (reference channel {ref_name}; "
-        f"{int((signs < 0).sum())} subject(s) flipped).",
-        flush=True,
-    )
-
-    # ---- Order per-participant panels by participant ID ---------------------
+    # ---- Order subjects by participant ID ------------------------------------
+    # Done BEFORE the polarity alignment, not just for the panels: the template is
+    # seeded from the first subject, so for a weakly consistent component the
+    # converged signs depend on subject order. Sorting first makes the script
+    # reproduce the notebook, which works in participant-ID order throughout.
     order = sorted(range(n_subj), key=lambda s: int(idx_to_pid.get(s, "9999")))
-    time_courses = time_courses[order]
-    loadings = loadings[order]
-    explained = explained[order]
+    time_courses = time_courses[:, order]
+    loadings = loadings[:, order]
+    explained = explained[:, order]
     labels = [f"PSI{idx_to_pid.get(s, '???')}" for s in order]
+
+    # ---- Align polarity across participants, per component -------------------
+    # Flip every subject toward the group-mean template, which maximises
+    # cross-subject topography agreement — the criterion that matters when the
+    # goal is to aggregate participants. The overall orientation is then anchored
+    # to a reference channel so the result is reproducible. Each component's sign
+    # is independently arbitrary, so each gets its own alignment pass.
+    consistency = []
+    for comp, pc_label in enumerate(pc_labels):
+        signs, anchor = align_pc1_signs(loadings[comp], channel_names=channel_names)
+        loadings[comp] = apply_pc1_signs(loadings[comp], signs)
+        time_courses[comp] = apply_pc1_signs(time_courses[comp], signs)
+        cons = topography_consistency(loadings[comp])
+        consistency.append(cons)
+        print(
+            f"{pc_label} polarity aligned across participants "
+            f"({int((signs < 0).sum())}/{n_subj} subject(s) flipped; anchor {anchor}; "
+            f"{cons.n_agreeing}/{cons.n_subjects} topographies agree, "
+            f"median pairwise r={cons.median_pairwise_r:+.2f}, "
+            f"weakest subject r={cons.min_subject_r:+.2f}).",
+            flush=True,
+        )
+        if cons.n_agreeing < cons.n_subjects:
+            print(
+                f"  WARNING: {cons.n_subjects - cons.n_agreeing} subject(s) still "
+                f"anti-correlate with the group topography — a topographic outlier, "
+                f"not a sign problem. Inspect before trusting the {pc_label} panels.",
+                flush=True,
+            )
 
     # ---- Topomap electrode positions from a RAW_CROPPED recording -----------
     handler = DatasetHandler(experiment, CoordinateSystems.HYDROGEL_257_NO_FIDUCIALS)
@@ -438,18 +644,67 @@ def run_pca(args: argparse.Namespace) -> None:
         raise ValueError("RAW_CROPPED channels are not a subset of channel names.")
     info_order = [name_pos[name] for name in topo_info["ch_names"]]
 
-    # ---- Plots --------------------------------------------------------------
+    # ---- Plots (one figure set per component) --------------------------------
     unit = "z-scored" if args.zscore_per_channel else "µV"
     title_suffix = f"{condition.value}/{music_type.value} (n={n_subj})"
-    plot_timecourse_per_participant(
-        time_courses, explained, epoch_times, labels, unit, title_suffix, plots_dir
-    )
+    stim_end = AssrEpoch.STIMULUS_DURATION_S
+    for comp, pc_label in enumerate(pc_labels):
+        plot_timecourse_per_participant(
+            time_courses[comp],
+            explained[comp],
+            epoch_times,
+            labels,
+            unit,
+            pc_label,
+            f"C{comp}",
+            stim_end,
+            title_suffix,
+            plots_dir,
+        )
+        plot_topomaps(
+            loadings[comp],
+            explained[comp],
+            topo_info,
+            info_order,
+            labels,
+            pc_label,
+            f"{consistency[comp].n_agreeing}/{consistency[comp].n_subjects}",
+            title_suffix,
+            plots_dir,
+        )
     plot_timecourse_overlay(
-        time_courses, epoch_times, labels, unit, title_suffix, plots_dir
+        time_courses,
+        explained,
+        consistency,
+        epoch_times,
+        labels,
+        unit,
+        pc_labels,
+        stim_end,
+        title_suffix,
+        plots_dir,
     )
-    plot_topomaps(
-        loadings, explained, topo_info, info_order, labels, title_suffix, plots_dir
+
+    # ---- Component comparison ------------------------------------------------
+    # PCA ranks components by explained channel variance, which is not the same
+    # thing as carrying the steady-state, so score every component on the same
+    # measures rather than assuming PC1 wins.
+    comparison = component_comparison(
+        time_courses,
+        explained,
+        consistency,
+        pc_labels,
+        stim_mask,
+        sfreq,
+        args.assr_freq,
+        args.snr_threshold,
     )
+    print(
+        f"Component comparison (driven interval {int(stim_mask.sum())} samples, "
+        f"{sfreq / stim_mask.sum():.1f} Hz spectral resolution):",
+        flush=True,
+    )
+    print(comparison.round(3).to_string(), flush=True)
     print(f"[DONE] {label}: plots written to {plots_dir}", flush=True)
 
 
@@ -459,9 +714,22 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Whole-dataset ASSR raw-voltage channel-PCA reduction: collapse the "
             "channel dimension of the stimulus-locked evoked voltage with a PCA "
-            "over channels and plot the first-component time course and scalp "
-            "topography per participant (polarity aligned across participants)."
+            "over channels and plot each leading component's time course and scalp "
+            "topography per participant (polarity aligned across participants), "
+            "plus a comparison table scoring the components against each other."
         )
+    )
+    parser.add_argument(
+        "--n_components",
+        type=int,
+        default=3,
+        help=(
+            "Number of leading channel-PCA components to extract, plot and compare. "
+            "All are treated identically, so later components can be compared "
+            "against PC1 rather than assumed uninformative (the highest-variance "
+            "mode is not necessarily the best ASSR carrier). Use 1 for PC1 only. "
+            "Clamped to the channel count."
+        ),
     )
     parser.add_argument(
         "--condition",
@@ -477,22 +745,56 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[e.value for e in ExperimentNames],
         help="Experiment dataset (default assr).",
     )
-    parser.add_argument("--sfreq", type=float, default=250.0,
-                        help="Sampling rate of the concatenated data.")
-    parser.add_argument("--pre_pad", type=float, default=0.1,
-                        help="Pad kept before each onset (s); post length = "
-                             "shortest inter-onset gap.")
+    parser.add_argument(
+        "--sfreq",
+        type=float,
+        default=250.0,
+        help="Sampling rate of the concatenated data.",
+    )
+    parser.add_argument(
+        "--pre_pad",
+        type=float,
+        default=AssrEpoch.PRE_ONSET_S,
+        help="Baseline kept before each onset (s).",
+    )
+    parser.add_argument(
+        "--post_window",
+        type=float,
+        default=AssrEpoch.POST_ONSET_S,
+        help=(
+            f"Post-onset epoch length (s), capped by the shortest inter-onset gap. "
+            f"Default {AssrEpoch.POST_ONSET_S} s = "
+            f"{AssrEpoch.STIMULUS_DURATION_S} s stimulus + "
+            f"{AssrEpoch.POST_STIMULUS_S} s post-stimulus."
+        ),
+    )
+    parser.add_argument(
+        "--assr_freq",
+        type=float,
+        default=40.0,
+        help="Expected steady-state frequency (Hz), scored by the comparison table.",
+    )
+    parser.add_argument(
+        "--snr_threshold",
+        type=float,
+        default=3.0,
+        help="Per-subject ASSR SNR counted as a hit in the comparison table.",
+    )
     parser.add_argument(
         "--no_zscore_per_channel",
         dest="zscore_per_channel",
         action="store_false",
         help="Run PCA on raw µV (covariance-PCA) instead of z-scoring each channel "
-             "against the whole recording (correlation-PCA, equal electrode "
-             "influence).",
+        "against the whole recording (correlation-PCA, equal electrode "
+        "influence).",
     )
     parser.set_defaults(zscore_per_channel=True)
-    parser.add_argument("--save_dir", type=str, default=None,
-                        help="Base directory for output plots. Defaults to plots/ root.")
+    parser.add_argument(
+        "--save_dir",
+        type=str,
+        default=None,
+        help="Base directory for output plots. Defaults to plots/ root.",
+    )
     return parser
 
 
