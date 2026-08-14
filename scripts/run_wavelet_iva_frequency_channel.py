@@ -1111,9 +1111,7 @@ def _run_iva(
         (top_indices, top_labels, "top"),
         (bottom_indices, bot_labels, "bottom"),
     ):
-        freq_profiles_sel = (
-            mean_components_all[indices].mean(axis=2).T  # (F, K_sel)
-        )
+        freq_profiles_sel = mean_components_all[indices].mean(axis=2).T  # (F, K_sel)
         time_profiles_sel = time_profiles_all[indices]  # (K_sel, T)
         _plot_tf_map(
             freq_profiles_sel,
@@ -1174,7 +1172,7 @@ def _run_iva(
             subj_freq,
             freqs,
             y_label="Frequency (Hz)",
-            variant_name=f"Subject × Frequency (channel-avg components)",
+            variant_name="Subject × Frequency (channel-avg components)",
             labels=labels_grp,
             label=label,
             save_path=out_dir
@@ -1186,7 +1184,7 @@ def _run_iva(
             subj_chan,
             np.arange(n_channels),
             y_label="Channel",
-            variant_name=f"Subject × Channel (frequency-avg components)",
+            variant_name="Subject × Channel (frequency-avg components)",
             labels=labels_grp,
             label=label,
             save_path=out_dir

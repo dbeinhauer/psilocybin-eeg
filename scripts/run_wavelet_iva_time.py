@@ -1110,9 +1110,7 @@ def _run_iva(
         (top_indices, top_labels, "top"),
         (bottom_indices, bot_labels, "bottom"),
     ):
-        freq_profiles_sel = (
-            mean_components_all[indices].mean(axis=2).T  # (F, K_sel)
-        )
+        freq_profiles_sel = mean_components_all[indices].mean(axis=2).T  # (F, K_sel)
         time_profiles_sel = time_profiles_all[indices]  # (K_sel, T)
         _plot_tf_map(
             freq_profiles_sel,

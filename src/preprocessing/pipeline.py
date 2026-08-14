@@ -733,9 +733,9 @@ class DatasetHandler(LoggerMixin):
             cropped = raw.crop(
                 tmin=crop_start / time_aligner.sfreq, tmax=crop_end / time_aligner.sfreq
             )
-            assert (
-                cropped.n_times == time_aligner.end - time_aligner.start + 1
-            ), f"Cropped signal of file {filename} has length {cropped.n_times}, expected {time_aligner.end - time_aligner.start + 1}!"
+            assert cropped.n_times == time_aligner.end - time_aligner.start + 1, (
+                f"Cropped signal of file {filename} has length {cropped.n_times}, expected {time_aligner.end - time_aligner.start + 1}!"
+            )
 
             self.save_data_file(
                 cropped, filename.split(".")[0], PreprocessedDataVariants.RAW_CROPPED

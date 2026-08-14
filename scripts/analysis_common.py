@@ -1192,9 +1192,11 @@ def _run_wavelet_workflow_for_label(
         label,
         representation=representation,
         freqs=freqs,
-        wavelet_dir=(wavelet_dir / SpectrumTypeVariants.BROADBAND.value)
-        if wavelet_dir
-        else None,
+        wavelet_dir=(
+            (wavelet_dir / SpectrumTypeVariants.BROADBAND.value)
+            if wavelet_dir
+            else None
+        ),
         reuse_wavelets=reuse_wavelets,
     )
     bb_4d_data = wd_4d.data  # (n_subj, n_ch, n_freqs, n_times)

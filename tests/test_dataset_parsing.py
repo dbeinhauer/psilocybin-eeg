@@ -22,9 +22,7 @@ class TestDatasetParser:
     @pytest.fixture(autouse=True)
     def _setup(self, sample_participant_map):
         """Set up test fixtures before each test method."""
-        self.parser = DatasetParser(
-            ExperimentNames.PSILO_MUSIC, sample_participant_map
-        )
+        self.parser = DatasetParser(ExperimentNames.PSILO_MUSIC, sample_participant_map)
 
     def test_parse_filename_valid_classical(self):
         filename = "PSI018_EEGA_MUSIC_CLASSIC_EC_20171124_014218.edf"
@@ -255,9 +253,7 @@ class TestDatasetParserIntegration:
     @pytest.fixture(autouse=True)
     def _setup(self, sample_participant_map):
         """Set up test fixtures before each test method."""
-        self.parser = DatasetParser(
-            ExperimentNames.PSILO_MUSIC, sample_participant_map
-        )
+        self.parser = DatasetParser(ExperimentNames.PSILO_MUSIC, sample_participant_map)
 
     def test_full_workflow(self):
         """Test the complete workflow from filename to DataFrame."""
