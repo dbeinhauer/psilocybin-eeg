@@ -29,7 +29,12 @@ If the model matches (or the user has already been warned), continue.
 
 ## 3. Create a git worktree
 
-Run from the **root of the main checkout**:
+**When running inside the Docker orchestrator** (`/workspace` exists and data dirs are
+bind-mounted at `/data`, `/plots`, `/results`, `/results_db`):
+The worktree is already set up — skip directly to step 4.
+
+**When running manually** (the default), create the worktree from the **root of the
+main checkout**:
 
 ```bash
 git fetch origin develop

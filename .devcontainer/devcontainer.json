@@ -1,0 +1,23 @@
+{
+  "name": "Psilocybin EEG – Issue Sandbox",
+  "build": { "dockerfile": "Dockerfile", "context": ".." },
+  "runArgs": ["--cap-add=NET_ADMIN", "--cap-add=NET_RAW", "--security-opt=label=disable", "--userns=keep-id"],
+  "remoteUser": "researcher",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
+  "workspaceFolder": "/workspace",
+  "mounts": [
+    "source=${localWorkspaceFolder}/../../data,target=/data,type=bind,readonly",
+    "source=${localWorkspaceFolder}/../../plots,target=/plots,type=bind,readonly",
+    "source=${localWorkspaceFolder}/../../results,target=/results,type=bind,readonly",
+    "source=${localWorkspaceFolder}/../../results_db,target=/results_db,type=bind,readonly",
+    "source=psilocybin-claude-config,target=/home/researcher/.claude,type=volume"
+  ],
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/researcher/.claude",
+    "PSILOCYBIN_DATA_DIR": "/data",
+    "PSILOCYBIN_RESULTS_DIR": "/results",
+    "MPLBACKEND": "Agg"
+  },
+  "postStartCommand": "sudo /usr/local/bin/init-firewall.sh && pip install -e /workspace --quiet",
+  "waitFor": "postStartCommand"
+}
