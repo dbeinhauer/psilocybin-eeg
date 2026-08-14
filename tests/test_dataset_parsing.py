@@ -9,6 +9,7 @@ import pandas as pd
 
 from src.io.parsing import DatasetParser
 from src.definitions.fields import (
+    ExperimentNames,
     SingleDataMetadata,
     ConditionVariants,
     MusicTypeVariants,
@@ -21,7 +22,9 @@ class TestDatasetParser:
     @pytest.fixture(autouse=True)
     def _setup(self, sample_participant_map):
         """Set up test fixtures before each test method."""
-        self.parser = DatasetParser(sample_participant_map)
+        self.parser = DatasetParser(
+            ExperimentNames.PSILO_MUSIC, sample_participant_map
+        )
 
     def test_parse_filename_valid_classical(self):
         filename = "PSI018_EEGA_MUSIC_CLASSIC_EC_20171124_014218.edf"
@@ -187,13 +190,74 @@ class TestDatasetParser:
         assert result[SingleDataMetadata.PARTICIPANT_ID] == "999"
 
 
+class TestDatasetParserASSR:
+    """Test class for DatasetParser parsing of the ASSR experiment."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, sample_participant_map):
+        """Set up test fixtures before each test method."""
+        self.parser = DatasetParser(ExperimentNames.ASSR, sample_participant_map)
+
+    def test_parse_filename_valid_assr(self):
+        filename = "PSI018_EEGA_ASSR_FAM_2_EC_20171124_011824.edf"
+
+        result = self.parser.parse_filename(filename)
+
+        assert result is not None
+        assert result[SingleDataMetadata.PARTICIPANT_ID] == "018"
+        # Condition is still derived from the participant mapping.
+        assert result[SingleDataMetadata.CONDITION] == ConditionVariants.PLACEBO
+        # ASSR has no music dimension -> fixed default music type.
+        assert result[SingleDataMetadata.MUSIC_TYPE] == MusicTypeVariants.ASSR
+        assert result[SingleDataMetadata.FILENAME] == filename
+
+    def test_parse_filename_assr_psilocybin_condition(self):
+        filename = "PSI018_EEGB_ASSR_FAM_2_EC_20180122_123721.edf"
+
+        result = self.parser.parse_filename(filename)
+
+        assert result is not None
+        assert result[SingleDataMetadata.CONDITION] == ConditionVariants.PSILOCYBIN
+        assert result[SingleDataMetadata.MUSIC_TYPE] == MusicTypeVariants.ASSR
+
+    def test_parse_filename_assr_extra_ec_token(self):
+        # Some ASSR filenames carry an extra "_EC_B" token; it must still parse.
+        filename = "PSI019_EEGB_ASSR_FAM_2_EC_B_20171219_122523.edf"
+
+        result = self.parser.parse_filename(filename)
+
+        assert result is not None
+        assert result[SingleDataMetadata.PARTICIPANT_ID] == "019"
+        assert result[SingleDataMetadata.MUSIC_TYPE] == MusicTypeVariants.ASSR
+
+    def test_parse_filename_rejects_music_format(self):
+        # A MUSIC-format filename must not match the ASSR pattern.
+        filename = "PSI018_EEGA_MUSIC_CLASSIC_EC_20171124_014218.edf"
+
+        result = self.parser.parse_filename(filename)
+
+        assert result is None
+
+
+class TestDatasetParserConstruction:
+    """Test class for DatasetParser construction requirements."""
+
+    def test_missing_participant_map_raises(self, tmp_path):
+        missing_path = tmp_path / "does_not_exist.csv"
+
+        with pytest.raises(FileNotFoundError):
+            DatasetParser(ExperimentNames.ASSR, missing_path)
+
+
 class TestDatasetParserIntegration:
     """Integration tests for DatasetParser."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, sample_participant_map):
         """Set up test fixtures before each test method."""
-        self.parser = DatasetParser(sample_participant_map)
+        self.parser = DatasetParser(
+            ExperimentNames.PSILO_MUSIC, sample_participant_map
+        )
 
     def test_full_workflow(self):
         """Test the complete workflow from filename to DataFrame."""

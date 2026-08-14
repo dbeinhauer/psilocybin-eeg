@@ -62,11 +62,6 @@ from src.analysis.mean_variance import (
     compute_pairwise_isc_matrices,
     FREQUENCY_BANDS,
 )
-from src.analysis.results_store import (
-    save_intersubject_timeseries,
-    save_windowed_stats,
-    save_pairwise_isc,
-)
 from src.visualization.mean_variance_plots import (
     plot_timeseries,
     plot_variance_distribution,
@@ -77,13 +72,17 @@ from src.visualization.mean_variance_plots import (
     plot_band_windowed_analysis,
 )
 from src.definitions.fields import (
+    SpectrumTypeVariants,
     MusicTypeVariants,
     ConditionVariants,
     ExclusionCategories,
+    ExperimentNames,
 )
 from src.definitions.constants import ProjectPaths
 
 _logger = logging.getLogger(__name__)
+
+_STAGE_DIR = "01-raw-mean-variance-analysis"
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -92,6 +91,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "Run the intersubject mean-variance analysis on preprocessed EEG data."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--experiment",
+        choices=[e.value for e in ExperimentNames],
+        default=ExperimentNames.PSILO_MUSIC.value,
+        help="Which experiment dataset to analyse.",
     )
     parser.add_argument(
         "--condition",
@@ -103,8 +108,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--music_type",
         nargs="+",
         choices=[mt.value for mt in MusicTypeVariants],
-        default=[MusicTypeVariants.CLASSICAL.value, MusicTypeVariants.PSYTRANCE.value],
-        help="One or more music types to analyse.",
+        default=None,
+        help=(
+            "One or more music types to analyse. When omitted, defaults to "
+            "CLASSIC + PSYTRANCE for the psilo_music experiment and ASSR for "
+            "the assr experiment."
+        ),
     )
     parser.add_argument(
         "--window_sec",
@@ -148,19 +157,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--save_dir",
         type=Path,
         default=None,
-        help=(
-            "Root directory for output plots. "
-            "Defaults to plots/01-raw-mean-variance-analysis/."
-        ),
-    )
-    parser.add_argument(
-        "--results_db_dir",
-        type=Path,
-        default=None,
-        help=(
-            "Root directory for the CSV results database (Interactive Explorer). "
-            "Defaults to results_db/01-raw-mean-variance-analysis/."
-        ),
+        help="Base directory for output plots. Defaults to project plots/ root.",
     )
     parser.add_argument(
         "--verbose",
@@ -177,17 +174,19 @@ def _run_raw_analysis(
     window_sec: float,
     sync_percentile: float,
     step_sec: float | None = None,
-    *,
-    condition: str = "",
-    music_type: str = "",
-    results_db_dir: Path | None = None,
 ) -> None:
     """Run all raw (broadband) mean-variance sections for one dataset."""
-    broadband_timeseries_dir = save_dir / "broadband" / "timeseries"
+    broadband_timeseries_dir = (
+        save_dir / SpectrumTypeVariants.BROADBAND.value / "timeseries"
+    )
     broadband_timeseries_dir.mkdir(parents=True, exist_ok=True)
-    broadband_variance_dir = save_dir / "broadband" / "variance"
+    broadband_variance_dir = (
+        save_dir / SpectrumTypeVariants.BROADBAND.value / "variance"
+    )
     broadband_variance_dir.mkdir(parents=True, exist_ok=True)
-    broadband_windowed_dir = save_dir / "broadband" / "windowed"
+    broadband_windowed_dir = (
+        save_dir / SpectrumTypeVariants.BROADBAND.value / "windowed"
+    )
     broadband_windowed_dir.mkdir(parents=True, exist_ok=True)
 
     _logger.info(f"[{label}] Computing intersubject statistics …")
@@ -239,23 +238,6 @@ def _run_raw_analysis(
         save_path_overlay=broadband_windowed_dir / "windowed_overlay.png",
     )
 
-    # ── Export CSV results for Interactive Explorer ────────────────────────
-    if results_db_dir is not None:
-        db_dir = results_db_dir / "broadband"
-        save_intersubject_timeseries(
-            stats,
-            sfreq,
-            db_dir,
-            condition=condition,
-            music_type=music_type,
-        )
-        save_windowed_stats(
-            df_wins,
-            db_dir,
-            condition=condition,
-            music_type=music_type,
-        )
-
 
 def _run_band_analysis(
     ad: "AnalysisData",  # noqa: F821
@@ -264,19 +246,15 @@ def _run_band_analysis(
     window_sec: float,
     sync_percentile: float,
     step_sec: float | None = None,
-    *,
-    condition: str = "",
-    music_type: str = "",
-    results_db_dir: Path | None = None,
 ) -> None:
     """Run all per-band mean-variance sections for one dataset."""
-    bands_timeseries_dir = save_dir / "bands" / "timeseries"
+    bands_timeseries_dir = save_dir / SpectrumTypeVariants.BANDS.value / "timeseries"
     bands_timeseries_dir.mkdir(parents=True, exist_ok=True)
-    bands_variance_dir = save_dir / "bands" / "variance"
+    bands_variance_dir = save_dir / SpectrumTypeVariants.BANDS.value / "variance"
     bands_variance_dir.mkdir(parents=True, exist_ok=True)
-    bands_isc_dir = save_dir / "bands" / "isc_matrices"
+    bands_isc_dir = save_dir / SpectrumTypeVariants.BANDS.value / "isc_matrices"
     bands_isc_dir.mkdir(parents=True, exist_ok=True)
-    bands_windowed_dir = save_dir / "bands" / "windowed"
+    bands_windowed_dir = save_dir / SpectrumTypeVariants.BANDS.value / "windowed"
     bands_windowed_dir.mkdir(parents=True, exist_ok=True)
 
     sfreq = ad.sfreq
@@ -335,44 +313,6 @@ def _run_band_analysis(
         save_path_per_band_dir=bands_windowed_dir,
     )
 
-    # ── Export CSV results for Interactive Explorer ────────────────────────
-    if results_db_dir is not None:
-        for band, stats in band_stats.items():
-            db_dir = results_db_dir / "bands" / band
-            save_intersubject_timeseries(
-                stats,
-                sfreq,
-                db_dir,
-                condition=condition,
-                music_type=music_type,
-                band=band,
-            )
-            n_band_times = len(stats["mean_t"])
-            df_band_wins = compute_windowed_stats(
-                stats,
-                n_times=n_band_times,
-                sfreq=sfreq,
-                window_sec=window_sec,
-                sync_percentile=sync_percentile,
-                step_sec=step_sec,
-            )
-            save_windowed_stats(
-                df_band_wins,
-                db_dir,
-                condition=condition,
-                music_type=music_type,
-                band=band,
-            )
-        for band, matrix in isc_matrices.items():
-            db_dir = results_db_dir / "bands" / band
-            save_pairwise_isc(
-                matrix,
-                db_dir,
-                condition=condition,
-                music_type=music_type,
-                band=band,
-            )
-
 
 if __name__ == "__main__":
     parser = _build_arg_parser()
@@ -383,25 +323,24 @@ if __name__ == "__main__":
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
+    experiment_name = ExperimentNames(args.experiment)
     condition = ConditionVariants(args.condition)
-    music_types = [MusicTypeVariants(mt) for mt in args.music_type]
+    if args.music_type is not None:
+        music_types = [MusicTypeVariants(mt) for mt in args.music_type]
+    elif experiment_name == ExperimentNames.ASSR:
+        # ASSR has no music dimension; uses a single placeholder "music type".
+        music_types = [MusicTypeVariants.ASSR]
+    else:
+        music_types = [MusicTypeVariants.CLASSICAL, MusicTypeVariants.PSYTRANCE]
     exclusion_categories = [
         ExclusionCategories.BAD_MUSIC,
         ExclusionCategories.ARTIFACTS,
     ]
-    save_root = (
-        args.save_dir
-        if args.save_dir is not None
-        else ProjectPaths.PLOTS_PATH / "01-raw-mean-variance-analysis"
-    )
-    results_db_root = (
-        args.results_db_dir
-        if args.results_db_dir is not None
-        else ProjectPaths.RESULTS_DB_PATH / "01-raw-mean-variance-analysis"
-    )
+    save_root = args.save_dir if args.save_dir is not None else ProjectPaths.PLOTS_PATH
 
     _logger.info(
-        f"Starting mean-variance analysis: condition={condition.value}, "
+        f"Starting mean-variance analysis: experiment={experiment_name.value}, "
+        f"condition={condition.value}, "
         f"music_types={[mt.value for mt in music_types]}"
     )
 
@@ -413,6 +352,7 @@ if __name__ == "__main__":
         args.process_and_save,
         n_jobs=args.n_jobs,
         normalize_data=True,
+        experiment_name=experiment_name,
     )
     datasets = analyzers_to_datasets(analyzers)
 
@@ -426,9 +366,7 @@ if __name__ == "__main__":
         ad = datasets[dataset_key]
         _logger.info(f"Dataset [{label}]: shape={ad.data.shape}  sfreq={ad.sfreq} Hz")
 
-        save_dir = save_root / dataset_key
-
-        results_db_dir = results_db_root / dataset_key
+        save_dir = save_root / _STAGE_DIR / dataset_key
 
         _run_raw_analysis(
             ad,
@@ -437,9 +375,6 @@ if __name__ == "__main__":
             window_sec=args.window_sec,
             sync_percentile=args.sync_percentile,
             step_sec=args.step_sec,
-            condition=condition.value,
-            music_type=label,
-            results_db_dir=results_db_dir,
         )
 
         _run_band_analysis(
@@ -449,9 +384,6 @@ if __name__ == "__main__":
             window_sec=args.window_sec,
             sync_percentile=args.sync_percentile,
             step_sec=args.step_sec,
-            condition=condition.value,
-            music_type=label,
-            results_db_dir=results_db_dir,
         )
 
     _logger.info("Mean-variance analysis complete.")

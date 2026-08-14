@@ -34,7 +34,7 @@ echo "Task started at $(date)"
 PROJECT_NAME="psilocybin-eeg"
 SERVER_LOCATION="praha1"
 DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
-SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music.sif"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
 
 export TMPDIR=$SCRATCHDIR
 
@@ -54,11 +54,13 @@ cat << 'EOF' > run_inside.sh
 #!/bin/bash
 source /opt/myproject/.venv/bin/activate
 
-WAVELET_DIR="/mnt/data/processed/psilo_music/wavelets"
+WAVELET_DIR="/mnt/data/processed"
 
+# To restrict to specific music types, add:  --music_type CLASSIC PSYTRANCE
+# (omitted -> defaults to all music types for the experiment)
 python /mnt/scripts/run_wavelet_ica_time.py \
     --condition Placebo \
-    --music_type CLASSIC PSYTRANCE \
+    --experiment psilo_music \
     --band alpha \
     --n_pca 30 \
     --n_ica 10 \

@@ -21,6 +21,10 @@ from src.utils.logging_config import LoggerMixin
 
 _logger = logging.getLogger(__name__)
 
+# Top-level plots section for preprocessing-stage plots (mirrors the
+# `{NN}-{analysis-name}` layout used by the analysis CLI scripts).
+PREPROCESSING_PLOTS_SECTION = "00-preprocessing"
+
 
 class DatasetPlotter(LoggerMixin):
     """
@@ -30,25 +34,39 @@ class DatasetPlotter(LoggerMixin):
 
     @staticmethod
     def get_plot_path(
-        filename: str, subdir_name: str, variant_name: str, custom_full_path: str
+        filename: str,
+        subdir_name: str,
+        variant_name: str,
+        custom_full_path: str,
+        experiment_name: str = "",
     ) -> Path:
         """
         Based on the provided parameters create path where to store the plot.
 
         Path to a plot will be created based on the following pattern:
-            `ProjectPaths.PLOTS_PATH / subdir_name / variant_name / filename`
+            `ProjectPaths.PLOTS_PATH / PREPROCESSING_PLOTS_SECTION / experiment_name
+             / subdir_name / variant_name / filename`
 
         :param filename: Name of the plot file.
         :param subdir_name: Name of the plot type subdirectory.
         :param variant_name: Name of the data variant type.
         :param custom_full_path: Full path to a plot (in case we want custom one).
+        :param experiment_name: Name of the experiment the plot belongs to (used to
+            separate plots per dataset). Empty string omits the experiment segment.
         :return: Returns path to a plot.
         """
         if custom_full_path:
             # If full path provided -> we just take it and
             return Path(custom_full_path)
 
-        return ProjectPaths.PLOTS_PATH / subdir_name / variant_name / filename
+        return (
+            ProjectPaths.PLOTS_PATH
+            / PREPROCESSING_PLOTS_SECTION
+            / experiment_name
+            / subdir_name
+            / variant_name
+            / filename
+        )
 
     @staticmethod
     def plot_topomap_combined(data: mne.io.Raw, title: str = ""):
@@ -125,6 +143,7 @@ class DatasetPlotter(LoggerMixin):
         custom_full_path: str = "",
         title="",
         fmax: int = 125,
+        experiment_name: str = "",
     ):
         """
         Plot Raw dataseries object using MNE plotting functionalities from `compute_psd` base.
@@ -138,6 +157,8 @@ class DatasetPlotter(LoggerMixin):
         :param custom_full_path: In case one wants to store the plot in custom path.
         :param title: Title of the plot.
         :param fmax: Maximal frequency to include in plot, defaults to 125
+        :param experiment_name: Name of the experiment the plot belongs to (used to
+            separate plots per dataset in the output path).
         """
         show = save_fig == "" and custom_full_path == ""
         fig = None
@@ -165,7 +186,11 @@ class DatasetPlotter(LoggerMixin):
         if not show:
             # Save the plot.
             plot_path = DatasetPlotter.get_plot_path(
-                save_fig, plot_variant, variant_name.value, custom_full_path
+                save_fig,
+                plot_variant,
+                variant_name.value,
+                custom_full_path,
+                experiment_name=experiment_name,
             )
             # If the path does not exist. Create the parents.
             plot_path.parent.mkdir(parents=True, exist_ok=True)

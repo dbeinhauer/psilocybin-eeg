@@ -59,12 +59,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from scripts.analysis_common import (  # noqa: E402
     FREQUENCY_BANDS,
     _broadband_wavelet_4d,
+    add_wavelet_grid_args,
     analyzers_to_datasets,
     load_analyzers,
+    resolve_wavelet_dir,
 )
 from src.analysis.wavelet_ica import zscore_by_time  # noqa: E402
 from src.definitions.constants import ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
+    SpectrumTypeVariants,
     ConditionVariants,
     ExclusionCategories,
     ExperimentNames,
@@ -170,6 +173,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
+        "--experiment",
+        choices=[e.value for e in ExperimentNames],
+        default=ExperimentNames.PSILO_MUSIC.value,
+        help="Which experiment dataset to analyse.",
+    )
+    parser.add_argument(
         "--condition",
         choices=[c.value for c in ConditionVariants],
         default=ConditionVariants.PLACEBO.value,
@@ -179,11 +188,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--music_type",
         nargs="+",
         choices=[mt.value for mt in MusicTypeVariants],
-        default=[
-            MusicTypeVariants.CLASSICAL.value,
-            MusicTypeVariants.PSYTRANCE.value,
-        ],
-        help="One or more music types to analyse.",
+        default=None,
+        help=(
+            "One or more music types to analyse. When omitted, defaults to "
+            "CLASSIC + PSYTRANCE for the psilo_music experiment and ASSR for "
+            "the assr experiment."
+        ),
     )
     parser.add_argument(
         "--n_pca",
@@ -211,32 +221,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=42,
         help="Seed shared by PCA and FastICA.",
     )
-    parser.add_argument(
-        "--wavelet_freq_min",
-        type=float,
-        default=1.0,
-        help="Minimum Morlet frequency (Hz).",
-    )
-    parser.add_argument(
-        "--wavelet_freq_max",
-        type=float,
-        default=40.0,
-        help="Maximum Morlet frequency (Hz).",
-    )
-    parser.add_argument(
-        "--wavelet_n_freqs",
-        type=int,
-        default=20,
-        help="Number of Morlet frequency steps.",
-    )
+    add_wavelet_grid_args(parser)
     parser.add_argument(
         "--wavelet_data_dir",
         type=Path,
-        default=(
-            ProjectPaths.PROCESSED_DATA_DIR
-            / ExperimentNames.PSILO_MUSIC.value
-            / "wavelets"
-        ),
+        default=None,
         help="Directory for cached wavelet tensors.",
     )
     parser.add_argument(
@@ -661,6 +650,42 @@ def _plot_topomap_mean_variance(
     plt.close(fig)
 
 
+def _plot_score_timecourses(
+    ica_scores: np.ndarray,
+    time: np.ndarray,
+    n_ica: int,
+    *,
+    label: str,
+    save_path: Path,
+) -> None:
+    """Analysis (g) — Per-component ICA score time courses (raw values).
+
+    ``ica_scores`` has shape ``(T, K)``; each component's column is plotted
+    directly against time — no averaging, because time is already the
+    observation axis here.
+    """
+    n_show = n_ica
+    fig, axes = plt.subplots(n_show, 1, figsize=(14, 2.2 * n_show), sharex=True)
+    if n_show == 1:
+        axes = [axes]
+
+    for i, ax in enumerate(axes):
+        ax.plot(time, ica_scores[:, i], lw=0.8, color="darkorange")
+        ax.axhline(0.0, color="gray", lw=0.5, ls="--")
+        ax.set_ylabel(f"IC {i + 1}")
+        ax.set_title(f"Component {i + 1} — Score Time Course", fontsize=10)
+
+    axes[-1].set_xlabel("Time (s)")
+    fig.suptitle(
+        f"ICA Component Score Time Courses — {label}",
+        fontsize=13,
+        y=1.01,
+    )
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def _plot_pairwise_heatmap(
     maps: np.ndarray,
     n_ica: int,
@@ -735,10 +760,16 @@ def _run_subject_frequency_channel(
     ``<band>_``. Otherwise the broadband layout is used.
     """
     if band is None:
-        out_dir = save_dir / "broadband" / "subject_frequency_channel"
+        out_dir = (
+            save_dir
+            / SpectrumTypeVariants.BROADBAND.value
+            / "subject_frequency_channel"
+        )
         prefix = ""
     else:
-        out_dir = save_dir / "bands" / "subject_frequency_channel"
+        out_dir = (
+            save_dir / SpectrumTypeVariants.BANDS.value / "subject_frequency_channel"
+        )
         prefix = f"{band}_"
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -898,7 +929,16 @@ def _run_subject_frequency_channel(
         save_path=out_dir / f"{prefix}ica_pairwise_frequency_channel_{label}.png",
     )
 
-    n_plots = 10 if not skip_pca else 9
+    # Plot 10 — (g) Per-component ICA score time courses (raw values)
+    _plot_score_timecourses(
+        ica_scores,
+        time,
+        n_ica,
+        label=label,
+        save_path=out_dir / f"{prefix}ica_component_timecourses_{label}.png",
+    )
+
+    n_plots = 11 if not skip_pca else 10
     _logger.info(
         f"[{label}] Subject-Frequency-Channel: {n_plots} plots + "
         f"cluster CSV saved to {out_dir}"
@@ -919,14 +959,21 @@ if __name__ == "__main__":
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
+    experiment_name = ExperimentNames(args.experiment)
     condition = ConditionVariants(args.condition)
-    music_types = [MusicTypeVariants(mt) for mt in args.music_type]
+    if args.music_type is not None:
+        music_types = [MusicTypeVariants(mt) for mt in args.music_type]
+    elif experiment_name == ExperimentNames.ASSR:
+        # ASSR has no music dimension; uses a single placeholder "music type".
+        music_types = [MusicTypeVariants.ASSR]
+    else:
+        music_types = [MusicTypeVariants.CLASSICAL, MusicTypeVariants.PSYTRANCE]
     exclusion_categories = [
         ExclusionCategories.BAD_MUSIC,
         ExclusionCategories.ARTIFACTS,
     ]
     save_root = args.save_dir if args.save_dir is not None else ProjectPaths.PLOTS_PATH
-    wavelet_dir = Path(args.wavelet_data_dir)
+    wavelet_dir = resolve_wavelet_dir(args.wavelet_data_dir, experiment_name)
     freqs = np.linspace(
         args.wavelet_freq_min,
         args.wavelet_freq_max,
@@ -938,7 +985,7 @@ if __name__ == "__main__":
         f"Subject-Frequency-Channel ICA: condition={condition.value}, "
         f"music_types={[mt.value for mt in music_types]}, "
         f"n_pca={args.n_pca}, n_ica={args.n_ica}, "
-        f"band={band_name or 'broadband'}"
+        f"band={band_name or SpectrumTypeVariants.BROADBAND.value}"
     )
 
     analyzers = load_analyzers(
@@ -948,6 +995,7 @@ if __name__ == "__main__":
         args.process_and_save,
         n_jobs=args.n_jobs,
         normalize_data=False,
+        experiment_name=experiment_name,
     )
     datasets = analyzers_to_datasets(analyzers)
 
@@ -971,7 +1019,7 @@ if __name__ == "__main__":
             dataset_key,
             representation="power",
             freqs=freqs,
-            wavelet_dir=(wavelet_dir / "broadband"),
+            wavelet_dir=(wavelet_dir / SpectrumTypeVariants.BROADBAND.value),
             reuse_wavelets=args.reuse_wavelets,
         )
 

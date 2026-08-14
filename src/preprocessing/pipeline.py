@@ -3,7 +3,7 @@ This module contains the top-level orchestration for the EEG preprocessing
 pipeline (current DatasetHandler preprocessing).
 """
 
-from typing import Any
+from typing import Any, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -45,6 +45,14 @@ from src.preprocessing.ica import (
     apply_ica_component_filtering,
 )
 from src.preprocessing.time_alignment import TimeAligner, TAGObject
+from src.preprocessing.stimulus_alignment import (
+    StimulusAligner,
+    StimulusMarker,
+    align_raws,
+    coarse_crop_to_stimulus_span,
+    DEFAULT_STIMULUS_LABEL,
+    resolve_stimulus_marker,
+)
 from src.filtering.dataset_filter import DatasetFilter
 from src.visualization.preprocessing_plots import DatasetPlotter
 from src.utils.logging_config import LoggerMixin
@@ -58,12 +66,29 @@ class DatasetPreprocessor(LoggerMixin):
     Delegates to focused modules in src.preprocessing (channel_prep, filtering, ica).
     """
 
-    def __init__(self, coordinates_file_path: Path, excluded_coordinates_path: Path):
+    def __init__(
+        self,
+        coordinates_file_path: Path,
+        excluded_coordinates_path: Path,
+        stimulus_marker: StimulusMarker | None = None,
+        coarse_crop_trim_sec: float = 10.0,
+        coarse_crop_min_keep_sec: float = 0.5,
+    ):
         """
         Initialize the preprocessor with electrode coordinate and exclusion information.
 
         :param coordinates_file_path: Path to the SFP montage file with electrode positions.
         :param excluded_coordinates_path: Path to CSV listing electrodes to exclude (e.g. boundary electrodes).
+        :param stimulus_marker: If set, the recording is coarsely cropped around the
+            span of these stimulus annotations instead of using the fixed start/end
+            crop. Keeps the data continuous for filtering/ICA while never dropping a
+            stimulus. Its ``onset_offset_s`` re-times the markers onto the true
+            stimulus onsets (see
+            :class:`~src.preprocessing.stimulus_alignment.StimulusMarker`).
+        :param coarse_crop_trim_sec: Maximum amount trimmed from each end of the
+            recording during the stimulus-aware coarse crop.
+        :param coarse_crop_min_keep_sec: Minimum data kept before the first and after
+            the last onset during the stimulus-aware coarse crop.
         """
         self.montage = load_coordinates_file(coordinates_file_path)
         # List of all electrodes that we want to exclude.
@@ -72,8 +97,13 @@ class DatasetPreprocessor(LoggerMixin):
             .str.strip()
             .tolist()
         )
+        self.stimulus_marker = stimulus_marker
+        self.coarse_crop_trim_sec = coarse_crop_trim_sec
+        self.coarse_crop_min_keep_sec = coarse_crop_min_keep_sec
 
-    def _data_preparation(self, data: mne.io.Raw) -> tuple[mne.io.Raw, mne.io.Raw]:
+    def _data_preparation(
+        self, data: mne.io.Raw, filename: str | None = None
+    ) -> tuple[mne.io.Raw, mne.io.Raw]:
         """
         Do first preparation of the raw data.
 
@@ -82,21 +112,48 @@ class DatasetPreprocessor(LoggerMixin):
         the data series (typically noisy).
 
         :param data: Data to be processed.
+        :param filename: Name of the file *data* came from, used to resolve this
+            recording's marker→onset offset for the stimulus-aware crop.
         :return: Returns tuple of prepared data splitted on EEG and rest of channels.
         """
-        prepared_data = crop_start_and_end_of_dataseries(
+        prepared_data = self._coarse_crop(
             exclude_selected_channels(
                 add_coordinates_montage(data, self.montage, logger=self.logger),
                 self.electrodes_to_exclude,
                 logger=self.logger,
             ),
-            logger=self.logger,
+            filename,
         )
 
         eeg_data = prepared_data.copy().pick_types(eeg=True)
         aux_data = prepared_data.copy().pick_types(eeg=False, ecg=True, stim=True)
 
         return eeg_data, aux_data
+
+    def _coarse_crop(self, data: mne.io.Raw, filename: str | None = None) -> mne.io.Raw:
+        """
+        Coarsely trim the noisy recording lead-in/lead-out.
+
+        For experiments with stimulus annotations (``self.stimulus_marker`` set) the
+        recording is cropped to the stimulus span plus a margin, so no stimulus is
+        lost to a blind fixed crop. Otherwise the fixed start/end crop is used.
+
+        :param data: Data to trim.
+        :param filename: Name of the file *data* came from. The marker→onset offset
+            is per recording, and the crop is planned around the *true* onsets, so
+            without it a recording is trimmed against another one's calibration.
+        :return: Coarsely cropped data (still continuous, no splicing).
+        """
+        if self.stimulus_marker is not None:
+            return coarse_crop_to_stimulus_span(
+                data,
+                stimulus_label=self.stimulus_marker.label,
+                trim_sec=self.coarse_crop_trim_sec,
+                min_keep_sec=self.coarse_crop_min_keep_sec,
+                onset_offset_s=self.stimulus_marker.onset_offset_for(filename),
+                logger=self.logger,
+            )
+        return crop_start_and_end_of_dataseries(data, logger=self.logger)
 
     def _filter_data(self, eeg_data: mne.io.Raw) -> mne.io.Raw:
         """
@@ -112,7 +169,7 @@ class DatasetPreprocessor(LoggerMixin):
         )
 
     def initial_preprocessing_and_bad_channel_interpolation(
-        self, data: mne.io.Raw
+        self, data: mne.io.Raw, filename: str | None = None
     ) -> tuple[mne.io.Raw, mne.io.Raw]:
         """
         Run initial preprocessing steps (electrode naming,
@@ -120,13 +177,15 @@ class DatasetPreprocessor(LoggerMixin):
         channel interpolation).
 
         :param data: Raw EEG data series from one measurement.
+        :param filename: Name of the file *data* came from, used to resolve this
+            recording's marker→onset offset for the stimulus-aware crop.
         :return: Tuple of preprocessed data with interpolated bad channels and rest of channels (other than EEG).
         """
         self.logger.info(
             "Starting initial data preprocessing and interpolation of the bad channels."
         )
         # Prepare the data for preprocessing.
-        eeg_data, aux_data = self._data_preparation(data)
+        eeg_data, aux_data = self._data_preparation(data, filename)
         # Filter, interpolate the bad channels by using average reference and annotate bad epochs.
         eeg_data = detect_bad_epochs(
             interpolate_bad_channels(self._filter_data(eeg_data), logger=self.logger)
@@ -168,6 +227,7 @@ class DatasetHandler(LoggerMixin):
         :param experiment_name: Which experiment dataset to use (e.g. ExperimentNames.PSILO_MUSIC).
         :param coordinate_system: Electrode coordinate system for montage loading.
         """
+        self.experiment_name = experiment_name
         (
             self.raw_data_dir,  # Raw data directory
             self.participant_map_path,  # Path to CSV mapping for each experiment (Placebo/Psilocybin)
@@ -178,12 +238,14 @@ class DatasetHandler(LoggerMixin):
             self.excluded_participants_path,  # Path to CSV list of excluded participants.
         ) = self._init_dataset_paths(experiment_name, coordinate_system)
 
-        self.dataset_parser = DatasetParser(self.participant_map_path)
+        self.dataset_parser = DatasetParser(experiment_name, self.participant_map_path)
         self.dataset_metadata = self.dataset_parser.parse_dataset_filenames(
             self.raw_data_dir
         )
         self.dataset_preprocessor = DatasetPreprocessor(
-            self.coordinates_path, self.excluded_electrodes_path
+            self.coordinates_path,
+            self.excluded_electrodes_path,
+            stimulus_marker=resolve_stimulus_marker(experiment_name),
         )
         self.dataset_excluded_ics_metadata = self._init_excluded_ics_metadata()
         self.excluded_participants_metadata = pd.read_csv(
@@ -358,7 +420,7 @@ class DatasetHandler(LoggerMixin):
         # Get preprocessed data with interpolated bad channels.
         interpolated_data, aux_data = (
             self.dataset_preprocessor.initial_preprocessing_and_bad_channel_interpolation(
-                self.load_data_file(filename, is_processed=False)
+                self.load_data_file(filename, is_processed=False), filename
             )
         )
 
@@ -510,6 +572,7 @@ class DatasetHandler(LoggerMixin):
                         save_fig=original_filename.split(".")[0],
                         plot_variant=plot_variant,
                         variant_name=data_variant,
+                        experiment_name=self.experiment_name.value,
                     )
                 else:
                     if plot_variant == "power_spectrum":
@@ -542,6 +605,7 @@ class DatasetHandler(LoggerMixin):
                             plot_variant=plot_variant,
                             variant_name=data_variant,
                             title=f"IC - {excluded_row[ExcludedICsMetadata.IC_ID.value]}, {excluded_row[ExcludedICsMetadata.IC_CATEGORY.value]}, p: {excluded_row[ExcludedICsMetadata.MAIN_PROBABILITY.value]:.2f}",
+                            experiment_name=self.experiment_name.value,
                         )
 
         self.logger.info("Plotting successfully finished")
@@ -669,10 +733,88 @@ class DatasetHandler(LoggerMixin):
             cropped = raw.crop(
                 tmin=crop_start / time_aligner.sfreq, tmax=crop_end / time_aligner.sfreq
             )
-            assert cropped.n_times == time_aligner.end - time_aligner.start + 1, (
-                f"Cropped signal of file {filename} has length {cropped.n_times}, expected {time_aligner.end - time_aligner.start + 1}!"
-            )
+            assert (
+                cropped.n_times == time_aligner.end - time_aligner.start + 1
+            ), f"Cropped signal of file {filename} has length {cropped.n_times}, expected {time_aligner.end - time_aligner.start + 1}!"
 
             self.save_data_file(
                 cropped, filename.split(".")[0], PreprocessedDataVariants.RAW_CROPPED
             )
+
+    def align_stimuli_by_annotations(
+        self,
+        music_type: MusicTypeVariants,
+        condition_type: ConditionVariants,
+        exclusion_categories: list[ExclusionCategories],
+        stimulus_label: str = DEFAULT_STIMULUS_LABEL,
+        keep_tail_sec: float = 0.1,
+        pre_window_sec: float | None = None,
+        post_window_sec: float | None = None,
+        data_type_to_load: PreprocessedDataVariants = PreprocessedDataVariants.RAW_AFTER_ICA,
+        onset_offset_s: float | Sequence[float] | None = None,
+    ) -> tuple[pd.DataFrame, list[mne.io.Raw], StimulusAligner]:
+        """
+        Aligns stimulus onsets across the participants of one group by trimming the
+        inter-stimulus intervals and splicing the EEG (see
+        :mod:`src.preprocessing.stimulus_alignment`).
+
+        Each over-long interval is trimmed from the front to the group-wide minimum
+        for that interval, preserving ``keep_tail_sec`` of continuous data before
+        every onset. The resulting recordings have equal length with stimulus onsets
+        at identical sample positions.
+
+        :param music_type: Music type to include.
+        :param condition_type: Condition type to include (ConditionVariants.PLACEBO or ConditionVariants.PSILOCYBIN).
+        :param exclusion_categories: Which categories of participants to exclude.
+        :param stimulus_label: Annotation description marking a stimulus onset.
+        :param keep_tail_sec: Continuous data preserved immediately before each onset.
+        :param pre_window_sec: Optional cap on the window kept before the first onset.
+            Defaults to ``None`` (keep the per-subject shortest available lead-in),
+            which finishes the cross-subject alignment begun by the coarse crop during
+            preprocessing. Pass a value to cap it.
+        :param post_window_sec: Optional cap on the window kept after the last onset.
+            Defaults to ``None`` (keep the shortest available lead-out).
+        :param data_type_to_load: The type of processed data to load and align.
+        :param onset_offset_s: Marker→onset offset in seconds. ``None`` (default)
+            resolves each recording's own calibrated offset via
+            :func:`~src.preprocessing.stimulus_alignment.resolve_stimulus_marker`,
+            which is what every caller should want — the marker error differs
+            between recordings, so a shared constant would align the group on their
+            *markers* rather than on the stimulus. Pass a value only to override it
+            deliberately (e.g. ``0.0`` to splice around the raw marker positions).
+        :return: Tuple of (filtered metadata DataFrame, aligned recordings in the
+            same row order, fitted StimulusAligner).
+        """
+        filtered_df = DatasetFilter.filter_dataset_by_all_categories(
+            self.dataset_metadata,
+            self.excluded_participants_metadata,
+            [music_type],
+            [condition_type],
+            exclusion_categories,
+        )
+        filenames = [
+            row[SingleDataMetadata.FILENAME] for _, row in filtered_df.iterrows()
+        ]
+        if onset_offset_s is None:
+            marker = resolve_stimulus_marker(self.experiment_name)
+            onset_offset_s = (
+                marker.offsets_for(filenames) if marker is not None else 0.0
+            )
+        raws = [
+            self.load_data_file(
+                filename,
+                is_processed=True,
+                processed_data_type=data_type_to_load,
+                preload=True,
+            )
+            for filename in filenames
+        ]
+        aligned, aligner = align_raws(
+            raws,
+            stimulus_label=stimulus_label,
+            keep_tail_sec=keep_tail_sec,
+            pre_window_sec=pre_window_sec,
+            post_window_sec=post_window_sec,
+            onset_offset_s=onset_offset_s,
+        )
+        return filtered_df, aligned, aligner

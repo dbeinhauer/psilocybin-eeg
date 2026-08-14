@@ -34,6 +34,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from src.definitions.fields import SpectrumTypeVariants
+
 _logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -66,7 +68,7 @@ def save_intersubject_timeseries(
     *,
     condition: str = "",
     music_type: str = "",
-    band: str = "broadband",
+    band: str = SpectrumTypeVariants.BROADBAND.value,
 ) -> Path:
     """Save intersubject mean and variance time-series to CSV.
 
@@ -76,7 +78,7 @@ def save_intersubject_timeseries(
     :param out_dir: Directory in which to create the CSV.
     :param condition: Condition label (e.g. ``"Placebo"``).
     :param music_type: Music-type label (e.g. ``"CLASSIC"``).
-    :param band: Frequency band name or ``"broadband"``.
+    :param band: Frequency band name or ``SpectrumTypeVariants.BROADBAND.value``.
     :return: Path to the written CSV file.
     """
     if sfreq <= 0:
@@ -110,7 +112,7 @@ def save_windowed_stats(
     *,
     condition: str = "",
     music_type: str = "",
-    band: str = "broadband",
+    band: str = SpectrumTypeVariants.BROADBAND.value,
 ) -> Path:
     """Save windowed statistics DataFrame to CSV.
 
@@ -119,7 +121,7 @@ def save_windowed_stats(
     :param out_dir: Target directory.
     :param condition: Condition label.
     :param music_type: Music-type label.
-    :param band: Frequency band name or ``"broadband"``.
+    :param band: Frequency band name or ``SpectrumTypeVariants.BROADBAND.value``.
     :return: Path to the written CSV file.
     """
     df = windowed_df.copy()
@@ -141,7 +143,7 @@ def save_loo_isc(
     *,
     condition: str = "",
     music_type: str = "",
-    band: str = "broadband",
+    band: str = SpectrumTypeVariants.BROADBAND.value,
     method: str = "pearson",
 ) -> Path:
     """Save leave-one-out ISC scores to CSV.
@@ -151,7 +153,7 @@ def save_loo_isc(
     :param out_dir: Target directory.
     :param condition: Condition label.
     :param music_type: Music-type label.
-    :param band: Frequency band name or ``"broadband"``.
+    :param band: Frequency band name or ``SpectrumTypeVariants.BROADBAND.value``.
     :param method: Correlation method (``"pearson"`` or ``"spearman"``).
     :return: Path to the written CSV file.
     """
@@ -200,7 +202,7 @@ def save_pairwise_isc(
     *,
     condition: str = "",
     music_type: str = "",
-    band: str = "broadband",
+    band: str = SpectrumTypeVariants.BROADBAND.value,
 ) -> Path:
     """Save a pairwise ISC matrix to CSV.
 
@@ -208,7 +210,7 @@ def save_pairwise_isc(
     :param out_dir: Target directory.
     :param condition: Condition label.
     :param music_type: Music-type label.
-    :param band: Frequency band name or ``"broadband"``.
+    :param band: Frequency band name or ``SpectrumTypeVariants.BROADBAND.value``.
     :return: Path to the written CSV file.
     """
     if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
@@ -308,8 +310,9 @@ def scan_results_db(root: Path) -> list[dict[str, str]]:
     - ``condition_music`` — e.g. ``"Placebo_CLASSIC"``.
     - ``condition`` — e.g. ``"Placebo"``.
     - ``music_type`` — e.g. ``"CLASSIC"``.
-    - ``spectrum_type`` — ``"broadband"`` or ``"bands"``.
-    - ``band`` — band name or ``"broadband"``.
+    - ``spectrum_type`` — ``SpectrumTypeVariants.BROADBAND.value`` or
+      ``SpectrumTypeVariants.BANDS.value``.
+    - ``band`` — band name or ``SpectrumTypeVariants.BROADBAND.value``.
     - ``analysis_type`` — one of ``intersubject_timeseries``,
       ``windowed_stats``, ``loo_isc``, ``pairwise_isc``.
 
@@ -337,14 +340,17 @@ def scan_results_db(root: Path) -> list[dict[str, str]]:
             continue
 
         spectrum_type = parts[1]
-        if spectrum_type not in ("broadband", "bands"):
+        if spectrum_type not in (
+            SpectrumTypeVariants.BROADBAND.value,
+            SpectrumTypeVariants.BANDS.value,
+        ):
             continue
 
         condition, music_type = condition_music.split("_", 1)
         analysis_type = csv_path.stem  # e.g. "loo_isc"
 
-        if spectrum_type == "broadband":
-            band = "broadband"
+        if spectrum_type == SpectrumTypeVariants.BROADBAND.value:
+            band = SpectrumTypeVariants.BROADBAND.value
         elif len(parts) >= 4:
             band = parts[2]
         else:

@@ -93,6 +93,7 @@ def remove_bad_epoch_annotations(data: mne.io.Raw) -> mne.io.Raw:
         onset=old_annotations.onset[keep_annotations],
         duration=old_annotations.duration[keep_annotations],
         description=old_annotations.description[keep_annotations],
+        orig_time=old_annotations.orig_time,
     )
     return data.set_annotations(new_annotations)
 
@@ -122,14 +123,18 @@ def detect_bad_epochs(
     bad_epoch_indices = np.where(reject_log.bad_epochs)[0]
     log.info(f"Found {len(bad_epoch_indices)} bad epochs out of {len(epochs)}")
 
-    # This marks bad segments WITHOUT removing them
+    # This marks bad segments WITHOUT removing them. The new annotations must share
+    # the same time origin as any existing annotations (e.g. stimulus markers on the
+    # ASSR data, which carry the recording's meas_date); otherwise MNE refuses to
+    # concatenate them.
     bad_annotations = mne.Annotations(
         onset=[epochs.events[i, 0] / data.info["sfreq"] for i in bad_epoch_indices],
         duration=[epoch_len] * len(bad_epoch_indices),  # duration of each epoch
         description=["BAD_epoch"] * len(bad_epoch_indices),
+        orig_time=data.annotations.orig_time,
     )
 
-    # Add annotations to raw data
+    # Add annotations to raw data (preserving any pre-existing annotations).
     return data.set_annotations(data.annotations + bad_annotations)
 
 

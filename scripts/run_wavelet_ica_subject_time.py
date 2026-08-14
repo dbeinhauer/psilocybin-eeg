@@ -60,12 +60,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from scripts.analysis_common import (  # noqa: E402
     FREQUENCY_BANDS,
     _broadband_wavelet_4d,
+    add_wavelet_grid_args,
     analyzers_to_datasets,
     load_analyzers,
+    resolve_wavelet_dir,
 )
 from src.analysis.wavelet_ica import zscore_by_time  # noqa: E402
 from src.definitions.constants import ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
+    SpectrumTypeVariants,
     ConditionVariants,
     ExclusionCategories,
     ExperimentNames,
@@ -175,6 +178,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
+        "--experiment",
+        choices=[e.value for e in ExperimentNames],
+        default=ExperimentNames.PSILO_MUSIC.value,
+        help="Which experiment dataset to analyse.",
+    )
+    parser.add_argument(
         "--condition",
         choices=[c.value for c in ConditionVariants],
         default=ConditionVariants.PLACEBO.value,
@@ -184,11 +193,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--music_type",
         nargs="+",
         choices=[mt.value for mt in MusicTypeVariants],
-        default=[
-            MusicTypeVariants.CLASSICAL.value,
-            MusicTypeVariants.PSYTRANCE.value,
-        ],
-        help="One or more music types to analyse.",
+        default=None,
+        help=(
+            "One or more music types to analyse. When omitted, defaults to "
+            "CLASSIC + PSYTRANCE for the psilo_music experiment and ASSR for "
+            "the assr experiment."
+        ),
     )
     parser.add_argument(
         "--n_pca",
@@ -216,32 +226,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=42,
         help="Seed shared by PCA and FastICA.",
     )
-    parser.add_argument(
-        "--wavelet_freq_min",
-        type=float,
-        default=1.0,
-        help="Minimum Morlet frequency (Hz).",
-    )
-    parser.add_argument(
-        "--wavelet_freq_max",
-        type=float,
-        default=40.0,
-        help="Maximum Morlet frequency (Hz).",
-    )
-    parser.add_argument(
-        "--wavelet_n_freqs",
-        type=int,
-        default=20,
-        help="Number of Morlet frequency steps.",
-    )
+    add_wavelet_grid_args(parser)
     parser.add_argument(
         "--wavelet_data_dir",
         type=Path,
-        default=(
-            ProjectPaths.PROCESSED_DATA_DIR
-            / ExperimentNames.PSILO_MUSIC.value
-            / "wavelets"
-        ),
+        default=None,
         help="Directory for cached wavelet tensors.",
     )
     parser.add_argument(
@@ -982,10 +971,10 @@ def _run_subject_time(
     filenames prefixed by ``<band>_``. Otherwise the broadband layout is used.
     """
     if band is None:
-        out_dir = save_dir / "broadband" / "subject_time"
+        out_dir = save_dir / SpectrumTypeVariants.BROADBAND.value / "subject_time"
         prefix = ""
     else:
-        out_dir = save_dir / "bands" / "subject_time"
+        out_dir = save_dir / SpectrumTypeVariants.BANDS.value / "subject_time"
         prefix = f"{band}_"
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1158,14 +1147,21 @@ if __name__ == "__main__":
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
+    experiment_name = ExperimentNames(args.experiment)
     condition = ConditionVariants(args.condition)
-    music_types = [MusicTypeVariants(mt) for mt in args.music_type]
+    if args.music_type is not None:
+        music_types = [MusicTypeVariants(mt) for mt in args.music_type]
+    elif experiment_name == ExperimentNames.ASSR:
+        # ASSR has no music dimension; uses a single placeholder "music type".
+        music_types = [MusicTypeVariants.ASSR]
+    else:
+        music_types = [MusicTypeVariants.CLASSICAL, MusicTypeVariants.PSYTRANCE]
     exclusion_categories = [
         ExclusionCategories.BAD_MUSIC,
         ExclusionCategories.ARTIFACTS,
     ]
     save_root = args.save_dir if args.save_dir is not None else ProjectPaths.PLOTS_PATH
-    wavelet_dir = Path(args.wavelet_data_dir)
+    wavelet_dir = resolve_wavelet_dir(args.wavelet_data_dir, experiment_name)
     freqs = np.linspace(
         args.wavelet_freq_min,
         args.wavelet_freq_max,
@@ -1178,7 +1174,7 @@ if __name__ == "__main__":
         f"Subject-Time ICA: condition={condition.value}, "
         f"music_types={[mt.value for mt in music_types]}, "
         f"n_pca={args.n_pca}, n_ica={args.n_ica}, "
-        f"band={band_name or 'broadband'}"
+        f"band={band_name or SpectrumTypeVariants.BROADBAND.value}"
     )
 
     analyzers = load_analyzers(
@@ -1188,6 +1184,7 @@ if __name__ == "__main__":
         args.process_and_save,
         n_jobs=args.n_jobs,
         normalize_data=False,
+        experiment_name=experiment_name,
     )
     datasets = analyzers_to_datasets(analyzers)
 
@@ -1212,7 +1209,7 @@ if __name__ == "__main__":
             dataset_key,
             representation="power",
             freqs=freqs,
-            wavelet_dir=(wavelet_dir / "broadband"),
+            wavelet_dir=(wavelet_dir / SpectrumTypeVariants.BROADBAND.value),
             reuse_wavelets=args.reuse_wavelets,
         )
 

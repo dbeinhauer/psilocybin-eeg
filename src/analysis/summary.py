@@ -22,6 +22,13 @@ import pandas as pd
 from scipy.stats import zscore
 
 from src.preprocessing.pipeline import DatasetHandler
+from src.preprocessing.stimulus_alignment import (
+    resolve_stimulus_marker,
+    StimulusAligner,
+    StimulusMarker,
+    get_stimulus_onset_samples,
+    apply_keep_segments_to_array,  # noqa: F401 — re-exported for caller convenience
+)
 from src.filtering.dataset_filter import DatasetFilter
 from src.definitions.constants import ProjectPaths
 from src.definitions.fields import (
@@ -29,11 +36,11 @@ from src.definitions.fields import (
     ConditionVariants,
     ExclusionCategories,
     ExperimentNames,
-    FrequencyBandNames,
     MusicTypeVariants,
     PreprocessedDataVariants,
     SingleDataMetadata,
 )
+from src.definitions.frequency import FREQUENCY_BANDS
 from src.analysis.isc import (
     compute_loo_isc as _compute_loo_isc,
     compute_pairwise_isc as _compute_pairwise_isc,
@@ -41,20 +48,6 @@ from src.analysis.isc import (
     compute_sliding_window_isc as _compute_sliding_window_isc,
 )
 from src.utils.logging_config import LoggerMixin
-
-# ---------------------------------------------------------------------------
-# Module-level constants
-# ---------------------------------------------------------------------------
-
-#: Standard EEG frequency bands used for band-specific ISC analysis.
-#: Each entry maps a :class:`FrequencyBandNames` value to ``(l_freq, h_freq)`` in Hz.
-FREQUENCY_BANDS: dict[str, tuple[float, float]] = {
-    FrequencyBandNames.DELTA.value: (1.0, 4.0),
-    FrequencyBandNames.THETA.value: (4.0, 8.0),
-    FrequencyBandNames.ALPHA.value: (8.0, 13.0),
-    FrequencyBandNames.BETA.value: (13.0, 30.0),
-    FrequencyBandNames.GAMMA.value: (30.0, 70.0),
-}
 
 
 class EEGSummarizedAnalyzer(LoggerMixin):
@@ -122,6 +115,16 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         self.info: Optional[mne.Info] = None
         self.resample_freq: Optional[float] = None
 
+        # Stimulus marker for this experiment (label + marker→onset offset, e.g.
+        # ``fam+`` for ASSR), or ``None`` for experiments without stimulus
+        # annotations. When set, the onset sample positions (identical across
+        # subjects by construction) are extracted during loading and saved next to
+        # the concatenated data.
+        self._stimulus_marker: Optional[StimulusMarker] = resolve_stimulus_marker(
+            experiment_name
+        )
+        self.stimulus_onsets: Optional[np.ndarray] = None
+
     # ------------------------------------------------------------------ #
     #  Data loading                                                         #
     # ------------------------------------------------------------------ #
@@ -167,10 +170,183 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         self._refresh_info(raws[0].info)
         self.resample_freq = resample_freq
 
+        # Stimulus onsets, on the same sample grid as the concatenated data. The
+        # alignment makes the *onsets* identical across subjects, so one recording
+        # is representative — but its annotations must be read with its own offset,
+        # since that is what the alignment removed to put the onsets there.
+        self.stimulus_onsets = self._extract_stimulus_onsets(
+            raws[0], self.filtered_df.iloc[0][SingleDataMetadata.FILENAME]
+        )
+
         self.data = np.array([r.get_data() for r in raws])  # (n_subj, n_ch, n_times)
         self.logger.info(f"Data array shape: {self.data.shape}")
 
         return self.data, self.info
+
+    def _extract_stimulus_onsets(
+        self, raw: mne.io.Raw, filename: str
+    ) -> Optional[np.ndarray]:
+        """
+        Extract the stimulus-onset sample positions mapping onto the time axis of
+        :attr:`data`.
+
+        The stimulus alignment splices every recording so that each onset lands at
+        the same sample index in all participants, so a single (here resampled)
+        recording is representative of the whole group.
+
+        :param raw: A loaded (resampled) recording of the current group.
+        :param filename: Filename *raw* was loaded from. The marker→onset offset is
+            per recording, so reading another recording's annotations with this
+            one's offset would place the onsets tens of milliseconds off.
+        :return: Sorted array of onset sample indices, or ``None`` when the
+            experiment has no stimulus annotations / none are present.
+        """
+        if self._stimulus_marker is None:
+            return None
+
+        onsets = get_stimulus_onset_samples(
+            raw,
+            self._stimulus_marker.label,
+            self._stimulus_marker.onset_offset_for(filename),
+        )
+        if len(onsets) == 0:
+            self.logger.warning(
+                f"No '{self._stimulus_marker.label}' annotations found in the "
+                "loaded recordings; skipping stimulus-onset extraction."
+            )
+            return None
+        return onsets
+
+    def load_pre_alignment_data(
+        self,
+        resample_freq: float = 250.0,
+        n_jobs: int = -1,
+        stimulus_label: Optional[str] = None,
+        keep_tail_sec: float = 0.1,
+        pre_window_sec: Optional[float] = None,
+        post_window_sec: Optional[float] = None,
+    ) -> tuple[list[np.ndarray], StimulusAligner, Optional[mne.Info]]:
+        """
+        Load per-subject ``RAW_AFTER_ICA`` data for pre-wavelet stimulus alignment.
+
+        For stimulus-based experiments (e.g. ASSR), wavelets computed on
+        stimulus-trimmed data suffer from edge artifacts at every splice point.
+        This method returns the full continuous recording per subject so that
+        the wavelet transform can be applied *before* trimming.  After wavelet
+        computation, pass each subject's wavelet array and the corresponding
+        entry in :attr:`~src.preprocessing.stimulus_alignment.StimulusAligner.keep_segments`
+        to :func:`~src.preprocessing.stimulus_alignment.apply_keep_segments_to_array`
+        to reproduce the stimulus alignment on the wavelet output.
+
+        Typical usage::
+
+            arrays, aligner, info = analyzer.load_pre_alignment_data(resample_freq=250)
+            # arrays[i]: (n_channels, n_times_i)  — variable lengths
+            wavelet_aligned = []
+            for arr, segments in zip(arrays, aligner.keep_segments):
+                ad = from_array(arr[np.newaxis], sfreq=250, ...)
+                wd = to_wavelet_power(ad, freqs, keep_frequency_dim=True)
+                # wd.data: (1, n_ch, n_freqs, n_times_i)
+                trimmed = apply_keep_segments_to_array(wd.data[0], segments)
+                # trimmed: (n_ch, n_freqs, aligner.total_length)
+                wavelet_aligned.append(trimmed)
+            data_4d = np.stack(wavelet_aligned)  # (n_subj, n_ch, n_freqs, n_times_aligned)
+
+        :param resample_freq: Target sampling frequency in Hz (default 250).
+            Resampling is applied before constructing the aligner so that the
+            keep-segments are expressed on the same sample grid as the returned
+            arrays.
+        :param n_jobs: Parallel jobs for resampling (``-1`` = all CPUs).
+        :param stimulus_label: Annotation label marking stimulus onsets.
+            Defaults to the experiment's registered label (e.g. ``"fam+"`` for
+            ASSR).
+        :param keep_tail_sec: Continuous data preserved before each onset.
+            Forwarded to :class:`~src.preprocessing.stimulus_alignment.StimulusAligner`.
+        :param pre_window_sec: Cap on the window kept before the first onset.
+            ``None`` keeps the per-subject shortest available lead-in.
+        :param post_window_sec: Cap on the window kept after the last onset.
+            ``None`` keeps the per-subject shortest available lead-out.
+        :return: Tuple ``(arrays, aligner, info)`` where
+
+            * ``arrays`` is a list of ``(n_channels, n_times_i)`` numpy arrays
+              — one per subject, variable length before trimming.
+            * ``aligner`` is the fitted :class:`~src.preprocessing.stimulus_alignment.StimulusAligner`;
+              use ``aligner.keep_segments[i]`` with
+              :func:`~src.preprocessing.stimulus_alignment.apply_keep_segments_to_array`
+              to trim subject *i*'s wavelet output.
+            * ``info`` is the MNE Info object from the first loaded recording.
+
+        :raises ValueError: If the experiment has no registered stimulus label
+            and none is supplied via *stimulus_label*.
+        """
+        registered_label = (
+            self._stimulus_marker.label if self._stimulus_marker is not None else None
+        )
+        label = stimulus_label if stimulus_label is not None else registered_label
+        if label is None:
+            raise ValueError(
+                f"Experiment '{self._experiment_name.value}' has no registered "
+                "stimulus label. Pass stimulus_label explicitly."
+            )
+        # The offset always comes from the experiment's registered marker: an
+        # explicit label override selects *which* annotation to read, not how it
+        # relates in time to the stimulus. It is resolved per recording, since the
+        # marker error differs between recordings.
+        filenames = [
+            row[SingleDataMetadata.FILENAME] for _, row in self.filtered_df.iterrows()
+        ]
+        onset_offsets = (
+            self._stimulus_marker.offsets_for(filenames)
+            if self._stimulus_marker is not None
+            else [0.0] * len(filenames)
+        )
+
+        self.logger.info(
+            f"Loading {len(self.filtered_df)} RAW_AFTER_ICA recording(s) for "
+            f"pre-alignment wavelet computation (resample → {resample_freq} Hz)."
+        )
+
+        raws: list[mne.io.Raw] = []
+        for filename in filenames:
+            raw = (
+                self.dataset_handler.load_data_file(
+                    filename,
+                    is_processed=True,
+                    processed_data_type=PreprocessedDataVariants.RAW_AFTER_ICA,
+                    preload=True,
+                )
+                .pick(["eeg"])
+                .resample(resample_freq, n_jobs=n_jobs)
+            )
+            raws.append(raw)
+
+        # Build the alignment plan from the resampled recordings so that the
+        # keep-segments are expressed on the resampled sample grid.
+        onset_samples = [
+            get_stimulus_onset_samples(raw, label, offset)
+            for raw, offset in zip(raws, onset_offsets)
+        ]
+        recording_lengths = [raw.n_times for raw in raws]
+        aligner = StimulusAligner(
+            onset_samples,
+            recording_lengths,
+            sfreq=resample_freq,
+            keep_tail_sec=keep_tail_sec,
+            pre_window_sec=pre_window_sec,
+            post_window_sec=post_window_sec,
+        )
+
+        arrays = [raw.get_data() for raw in raws]
+
+        self._refresh_info(raws[0].info)
+        self.resample_freq = resample_freq
+
+        self.logger.info(
+            f"Pre-alignment load complete: {len(arrays)} subject(s), "
+            f"lengths {[a.shape[-1] for a in arrays]}, "
+            f"aligned total_length={aligner.total_length} samples."
+        )
+        return arrays, aligner, self.info
 
     def _refresh_info(self, info: mne.Info) -> None:
         """Store an mne.Info copy taken from the first loaded raw object."""
@@ -223,6 +399,14 @@ class EEGSummarizedAnalyzer(LoggerMixin):
 
         np.save(save_path, self.data)
 
+        if self.stimulus_onsets is not None:
+            onsets_path = self._stimulus_onsets_path(save_path)
+            np.save(onsets_path, self.stimulus_onsets)
+            self.logger.info(
+                f"Stimulus onsets saved to {onsets_path} "
+                f"({len(self.stimulus_onsets)} onsets)."
+            )
+
         if self.filtered_df is not None:
             resolved_metadata_path = (
                 Path(metadata_path)
@@ -273,17 +457,42 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         self.data = np.load(load_path)
         self.logger.info(f"Data loaded from {load_path}  (shape={self.data.shape})")
 
+        onsets_path = self._stimulus_onsets_path(load_path)
+        if onsets_path.exists():
+            self.stimulus_onsets = np.load(onsets_path)
+            self.logger.info(
+                f"Stimulus onsets loaded from {onsets_path} "
+                f"({len(self.stimulus_onsets)} onsets)."
+            )
+
         if metadata_path is not None:
-            resolved_metadata_path = Path(metadata_path)
+            candidate_metadata_paths = [Path(metadata_path)]
         else:
-            # Derive metadata path from the resolved load_path (same directory and stem).
-            # This preserves behaviour for the default save path while correctly
-            # handling custom load locations.
-            resolved_metadata_path = load_path.with_suffix(".csv")
-        if resolved_metadata_path.exists():
+            # Derive metadata path from the resolved load_path (same directory and
+            # stem), mirroring :meth:`save_data`, which writes ``<stem>.metadata.csv``.
+            # The bare ``<stem>.csv`` is kept as a fallback for sidecars written
+            # before the suffixes were aligned.
+            candidate_metadata_paths = [
+                load_path.with_suffix(".metadata.csv"),
+                load_path.with_suffix(".csv"),
+            ]
+        resolved_metadata_path = next(
+            (p for p in candidate_metadata_paths if p.exists()), None
+        )
+        if resolved_metadata_path is not None:
             self.filtered_df = pd.read_csv(resolved_metadata_path, index_col=0)
             self._normalize_filtered_df_columns()
             self.logger.info(f"Metadata loaded from {resolved_metadata_path}")
+        else:
+            # Without the sidecar, ``filtered_df`` keeps the freshly-filtered rows
+            # from ``__init__``, which carry no CONCATENATED_PERSON_INDEX — any
+            # subject-index -> participant lookup would silently degrade.
+            self.logger.warning(
+                "No metadata sidecar found for "
+                f"{load_path.name} (looked for "
+                f"{', '.join(p.name for p in candidate_metadata_paths)}); "
+                "filtered_df has no CONCATENATED_PERSON_INDEX mapping."
+            )
 
         if info_filename is not None:
             raw = self.dataset_handler.load_data_file(
@@ -298,6 +507,17 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         self.resample_freq = resample_freq
 
         return self.data, self.info
+
+    @staticmethod
+    def _stimulus_onsets_path(data_path: Path) -> Path:
+        """
+        Build the stimulus-onsets file path for a concatenated data array.
+
+        Same prefix as the data array, with the
+        :attr:`~src.definitions.constants.ProjectPaths.STIMULUS_ONSETS_SUFFIX` suffix
+        (e.g. ``Placebo_ASSR.npy`` -> ``Placebo_ASSR.stimulus_onsets.npy``).
+        """
+        return data_path.parent / (data_path.stem + ProjectPaths.STIMULUS_ONSETS_SUFFIX)
 
     def _default_metadata_save_path(self) -> Path:
         """

@@ -37,15 +37,18 @@ class DatasetFilter:
         :return: Filtered DataFrame containing only rows that match the specified music types, conditions, and exclusion categories.
         """
         # Prepare excluded participants list based on the selected condition and music type and exclusion categories.
-        excluded_participants = DatasetFilter.filter_dataset_by_exclusion_categories(
-            DatasetFilter.filter_dataset_by_music_type(
-                DatasetFilter.filter_dataset_by_condition(
-                    excluded_participants_metadata,
-                    conditions,
-                ),
-                music_types,
+        # A blank (empty/NaN) condition or music type in the excluded-participants
+        # metadata is a wildcard: the exclusion applies to every variant of that
+        # field (e.g. an exclusion with no music type excludes the participant from
+        # all music types). This wildcard handling is specific to exclusions, so the
+        # generic condition/music-type filters are not used here.
+        excluded_participants = DatasetFilter._filter_excluded_by_condition_and_music(
+            DatasetFilter.filter_dataset_by_exclusion_categories(
+                excluded_participants_metadata,
+                exclusion_categories,
             ),
-            exclusion_categories,
+            conditions,
+            music_types,
         )
 
         included_participants_ids = [
@@ -64,6 +67,46 @@ class DatasetFilter:
             ),
             included_participants_ids,
         )
+
+    @staticmethod
+    def _filter_excluded_by_condition_and_music(
+        excluded_participants_metadata: pd.DataFrame,
+        conditions: List[ConditionVariants],
+        music_types: List[MusicTypeVariants],
+    ) -> pd.DataFrame:
+        """
+        Restrict excluded-participants metadata to the requested conditions and music
+        types, treating a blank (empty/NaN) field as a wildcard.
+
+        Unlike the generic condition / music-type filters, a row whose condition (or
+        music type) is unspecified matches *every* requested condition (or music
+        type). This expresses exclusions that apply to a participant across all
+        variants of a field — e.g. an exclusion with no music type drops the
+        participant from every music type of the selected condition(s).
+
+        :param excluded_participants_metadata: Excluded-participants metadata to filter.
+        :param conditions: Requested conditions.
+        :param music_types: Requested music types.
+        :return: Filtered excluded-participants metadata.
+        """
+
+        def matches(column_key, selected) -> pd.Series:
+            key = (
+                column_key
+                if column_key in excluded_participants_metadata
+                else column_key.value
+            )
+            column = excluded_participants_metadata[key]
+            blank = column.isna() | (column.astype(str).str.strip() == "")
+            allowed = {s if isinstance(s, str) else s.value for s in selected} | set(
+                selected
+            )
+            return blank | column.isin(allowed)
+
+        return excluded_participants_metadata[
+            matches(SingleDataMetadata.CONDITION, conditions)
+            & matches(SingleDataMetadata.MUSIC_TYPE, music_types)
+        ]
 
     @staticmethod
     def filter_dataset_by_music_type(

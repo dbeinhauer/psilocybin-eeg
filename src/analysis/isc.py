@@ -12,21 +12,15 @@ from __future__ import annotations
 import numpy as np
 from scipy.stats import pearsonr, spearmanr
 
-from src.definitions.fields import FrequencyBandNames
-
 # ---------------------------------------------------------------------------
 # Module-level constants
 # ---------------------------------------------------------------------------
 
 #: Standard EEG frequency bands used for band-specific ISC analysis.
-#: Each entry maps a :class:`FrequencyBandNames` value to ``(l_freq, h_freq)`` in Hz.
-FREQUENCY_BANDS: dict[str, tuple[float, float]] = {
-    FrequencyBandNames.DELTA.value: (1.0, 4.0),
-    FrequencyBandNames.THETA.value: (4.0, 8.0),
-    FrequencyBandNames.ALPHA.value: (8.0, 13.0),
-    FrequencyBandNames.BETA.value: (13.0, 30.0),
-    FrequencyBandNames.GAMMA.value: (30.0, 70.0),
-}
+#: Re-exported from the single source of truth in :mod:`src.definitions.frequency`
+#: so the long-standing ``from src.analysis.isc import FREQUENCY_BANDS`` keeps
+#: working unchanged.
+from src.definitions.frequency import FREQUENCY_BANDS  # noqa: E402,F401
 
 
 # ---------------------------------------------------------------------------

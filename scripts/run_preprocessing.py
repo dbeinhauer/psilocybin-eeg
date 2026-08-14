@@ -15,6 +15,13 @@ from src.definitions.fields import ExperimentNames, CoordinateSystems
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Model Preprocessing.")
     # Paths and directories:
+    parser.add_argument(
+        "--experiment",
+        type=str,
+        default=ExperimentNames.PSILO_MUSIC.value,
+        choices=[experiment.value for experiment in ExperimentNames],
+        help="Which experiment dataset to preprocess.",
+    )
     parser.set_defaults(raw_processing=False)
     parser.add_argument(
         "--raw_processing",
@@ -37,7 +44,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     data_handler = DatasetHandler(
-        ExperimentNames.PSILO_MUSIC, CoordinateSystems.HYDROGEL_257_NO_FIDUCIALS
+        ExperimentNames(args.experiment),
+        CoordinateSystems.HYDROGEL_257_NO_FIDUCIALS,
     )
 
     if args.raw_processing:

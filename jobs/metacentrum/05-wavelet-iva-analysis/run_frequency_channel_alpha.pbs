@@ -1,0 +1,113 @@
+#!/bin/bash
+#PBS -N PSILO_IVA_FC_05_ALPHA
+#PBS -l walltime=1:00:00
+#PBS -l select=1:ncpus=8:mem=499gb:scratch_local=80gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-05 IVA — frequency × channel independent dimension, ALPHA band only.
+#
+# Reuses the broadband wavelet cache from Stage-03 (run_wavelet_power.pbs)
+# and slices the frequency axis to 8-13 Hz in memory before IVA. Same
+# pipeline / plots as notebooks/05-wavelet-iva-analysis/
+# wavelet_iva_frequency_channel.ipynb (see run_frequency_channel.pbs
+# header for the full plot list), but on the alpha sub-band.
+#
+# A smaller --n_pca is used because the alpha feature dim
+# (C × F_alpha, ≈ 257 × 6 ≈ 1500) is itself much smaller than broadband.
+#
+# Processes Placebo × {CLASSIC, PSYTRANCE} as two **separate Python
+# invocations** inside this single PBS job — the interpreter exits
+# between them, so all per-music-type state is fully released by the
+# OS before the next music type starts.
+#
+# Output:
+#   plots/05-frequency-channel-wavelet-iva-analysis/Placebo_CLASSIC/
+#       bands/iva_frequency_channel/alpha_*_top.png and alpha_*_bottom.png
+#   plots/05-frequency-channel-wavelet-iva-analysis/Placebo_PSYTRANCE/
+#       bands/iva_frequency_channel/alpha_*_top.png and alpha_*_bottom.png
+#
+# Components are ranked by the mean off-diagonal value of the per-component
+# Sigma_N correlation matrix returned by iva_g (the IVA model's own
+# estimate of how strongly the kth SCV couples across subjects); the top
+# N_TOP and bottom N_BOTTOM are then visualised separately so the bottom
+# set serves as a noise / no-alignment contrast.
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+
+WAVELET_DIR="/mnt/data/processed"
+
+COMMON_ARGS=(
+    --condition Placebo
+    --experiment psilo_music
+    --band alpha
+    --n_pca 30
+    --n_top 10
+    --n_bottom 5
+    --random_state 42
+    --iva_opt_approach newton
+    --iva_max_iter 1024
+    --wavelet_data_dir "$WAVELET_DIR"
+    --reuse_wavelets
+    --n_jobs -1
+)
+
+# python /mnt/scripts/run_wavelet_iva_frequency_channel.py \
+#     "${COMMON_ARGS[@]}"
+
+echo "=== CLASSIC at $(date) ==="
+python /mnt/scripts/run_wavelet_iva_frequency_channel.py \
+    --music_type CLASSIC \
+    "${COMMON_ARGS[@]}"
+
+echo "=== PSYTRANCE at $(date) ==="
+python /mnt/scripts/run_wavelet_iva_frequency_channel.py \
+     --music_type PSYTRANCE \
+     "${COMMON_ARGS[@]}"
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch

@@ -1,14 +1,13 @@
-data/raw
-data/processed
-data/interim
-data/excluded_participants
+data/*/
 config/participant_mappings/
 plots/
 results/
 results_db/
 notebooks/03-wavelet-analysis/wavelet_cache/
 src/psilocybin_eeg.egg-info/
-notebooks/preprocessing_jan.ipynb
+*wavelet_cache*
+PSILO_*.o*
+*core*
 
 logs/
 *__pycache__*

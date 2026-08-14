@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -N PSILO_CT_ICA_04
 #PBS -l walltime=2:00:00
-#PBS -l select=1:ncpus=8:mem=350gb:scratch_local=80gb
+#PBS -l select=1:ncpus=8:mem=499gb:scratch_local=80gb
 #PBS -m ae
 #PBS -j oe
 
@@ -55,12 +55,12 @@ cat << 'EOF' > run_inside.sh
 #!/bin/bash
 source /opt/myproject/.venv/bin/activate
 
-WAVELET_DIR="/mnt/data/processed/psilo_music/wavelets"
+WAVELET_DIR="/mnt/data/processed"
 
 python /mnt/scripts/run_wavelet_ica_channel_time.py \
     --condition Placebo \
-    --music_type CLASSIC PSYTRANCE \
-    --n_pca 100 \
+    --experiment psilo_music \
+    --n_pca 150 \
     --n_ica 10 \
     --random_state 42 \
     --wavelet_data_dir "$WAVELET_DIR" \

@@ -79,14 +79,12 @@ from src.analysis.isc import (  # noqa: E402
     compute_sliding_window_isc,
     compute_sliding_window_isc_spearman,
 )
-from src.analysis.results_store import (  # noqa: E402
-    save_loo_isc,
-    save_pairwise_isc,
-)
 from src.definitions.constants import ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
+    SpectrumTypeVariants,
     ConditionVariants,
     ExclusionCategories,
+    ExperimentNames,
     MusicTypeVariants,
 )
 from src.visualization.isc_plots import (  # noqa: E402
@@ -105,11 +103,19 @@ from src.visualization.isc_plots import (  # noqa: E402
 
 _logger = logging.getLogger(__name__)
 
+_STAGE_DIR = "02-isc-broadband-analysis"
+
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run the ISC analysis on preprocessed EEG data.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--experiment",
+        choices=[e.value for e in ExperimentNames],
+        default=ExperimentNames.PSILO_MUSIC.value,
+        help="Which experiment dataset to analyse.",
     )
     parser.add_argument(
         "--condition",
@@ -121,8 +127,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--music_type",
         nargs="+",
         choices=[mt.value for mt in MusicTypeVariants],
-        default=[MusicTypeVariants.CLASSICAL.value, MusicTypeVariants.PSYTRANCE.value],
-        help="One or more music types to analyse.",
+        default=None,
+        help=(
+            "One or more music types to analyse. When omitted, defaults to "
+            "CLASSIC + PSYTRANCE for the psilo_music experiment and ASSR for "
+            "the assr experiment."
+        ),
     )
     parser.add_argument(
         "--isc_threshold",
@@ -181,19 +191,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--save_dir",
         type=Path,
         default=None,
-        help=(
-            "Root directory for output plots. "
-            "Defaults to plots/02-isc-broadband-analysis/."
-        ),
-    )
-    parser.add_argument(
-        "--results_db_dir",
-        type=Path,
-        default=None,
-        help=(
-            "Root directory for the CSV results database (Interactive Explorer). "
-            "Defaults to results_db/02-isc-broadband-analysis/."
-        ),
+        help="Base directory for output plots. Defaults to project plots/ root.",
     )
     parser.add_argument(
         "--verbose",
@@ -213,17 +211,15 @@ def _run_broadband_analysis(
     window_large_sec: float,
     step_sec: float,
     n_ch_subsample: int,
-    *,
-    condition: str = "",
-    music_type: str = "",
-    results_db_dir: Path | None = None,
 ) -> None:
     """Run all broadband ISC sections for one dataset."""
-    loo_isc_dir = save_dir / "broadband" / "loo_isc"
+    loo_isc_dir = save_dir / SpectrumTypeVariants.BROADBAND.value / "loo_isc"
     loo_isc_dir.mkdir(parents=True, exist_ok=True)
-    pairwise_isc_dir = save_dir / "broadband" / "pairwise_isc"
+    pairwise_isc_dir = save_dir / SpectrumTypeVariants.BROADBAND.value / "pairwise_isc"
     pairwise_isc_dir.mkdir(parents=True, exist_ok=True)
-    sliding_window_dir = save_dir / "broadband" / "sliding_window"
+    sliding_window_dir = (
+        save_dir / SpectrumTypeVariants.BROADBAND.value / "sliding_window"
+    )
     sliding_window_dir.mkdir(parents=True, exist_ok=True)
 
     data = ad.data
@@ -276,24 +272,6 @@ def _run_broadband_analysis(
         save_path_distribution=pairwise_isc_dir
         / f"pairwise_isc_distribution_{label}.png",
     )
-
-    # ── Export CSV results for Interactive Explorer ────────────────────────
-    if results_db_dir is not None:
-        db_dir = results_db_dir / "broadband"
-        save_loo_isc(
-            loo_pearson,
-            mean_pearson,
-            db_dir,
-            condition=condition,
-            music_type=music_type,
-            method="pearson",
-        )
-        save_pairwise_isc(
-            pair_pearson,
-            db_dir,
-            condition=condition,
-            music_type=music_type,
-        )
 
     # ── Section 3: Multi-scale sliding-window ISC ─────────────────────────
     _logger.info(f"[{label}] Section 3: Multi-scale sliding-window ISC …")
@@ -351,19 +329,15 @@ def _run_band_analysis(
     window_large_sec: float,
     step_sec: float,
     n_ch_subsample: int,
-    *,
-    condition: str = "",
-    music_type: str = "",
-    results_db_dir: Path | None = None,
 ) -> None:
     """Run all per-band ISC sections for one dataset."""
-    loo_isc_dir = save_dir / "bands" / "loo_isc"
+    loo_isc_dir = save_dir / SpectrumTypeVariants.BANDS.value / "loo_isc"
     loo_isc_dir.mkdir(parents=True, exist_ok=True)
-    pairwise_isc_dir = save_dir / "bands" / "pairwise_isc"
+    pairwise_isc_dir = save_dir / SpectrumTypeVariants.BANDS.value / "pairwise_isc"
     pairwise_isc_dir.mkdir(parents=True, exist_ok=True)
-    sliding_window_dir = save_dir / "bands" / "sliding_window"
+    sliding_window_dir = save_dir / SpectrumTypeVariants.BANDS.value / "sliding_window"
     sliding_window_dir.mkdir(parents=True, exist_ok=True)
-    band_overlap_dir = save_dir / "bands" / "band_overlap"
+    band_overlap_dir = save_dir / SpectrumTypeVariants.BANDS.value / "band_overlap"
     band_overlap_dir.mkdir(parents=True, exist_ok=True)
 
     data = ad.data
@@ -427,29 +401,6 @@ def _run_band_analysis(
         bands=FREQUENCY_BANDS,
         save_path_dir=pairwise_isc_dir,
     )
-
-    # ── Export per-band CSV results for Interactive Explorer ───────────────
-    if results_db_dir is not None:
-        for band, (loo, mean_isc) in band_iscs.items():
-            db_dir = results_db_dir / "bands" / band
-            save_loo_isc(
-                loo,
-                mean_isc,
-                db_dir,
-                condition=condition,
-                music_type=music_type,
-                band=band,
-                method="pearson",
-            )
-        for band, matrix in band_pair_pearson.items():
-            db_dir = results_db_dir / "bands" / band
-            save_pairwise_isc(
-                matrix,
-                db_dir,
-                condition=condition,
-                music_type=music_type,
-                band=band,
-            )
 
     # ── Section 3: Per-band multi-scale sliding-window ISC ───────────────
     _logger.info(f"[{label}] Section 3: per-band multi-scale sliding-window ISC …")
@@ -528,7 +479,7 @@ def _run_mean_field_analysis(
     step_sec: float,
 ) -> None:
     """Run mean-field ISC analysis for one dataset."""
-    mf_dir = save_dir / "broadband" / "mean_field"
+    mf_dir = save_dir / SpectrumTypeVariants.BROADBAND.value / "mean_field"
     mf_dir.mkdir(parents=True, exist_ok=True)
 
     # LOO-ISC
@@ -581,25 +532,24 @@ if __name__ == "__main__":
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
+    experiment_name = ExperimentNames(args.experiment)
     condition = ConditionVariants(args.condition)
-    music_types = [MusicTypeVariants(mt) for mt in args.music_type]
+    if args.music_type is not None:
+        music_types = [MusicTypeVariants(mt) for mt in args.music_type]
+    elif experiment_name == ExperimentNames.ASSR:
+        # ASSR has no music dimension; uses a single placeholder "music type".
+        music_types = [MusicTypeVariants.ASSR]
+    else:
+        music_types = [MusicTypeVariants.CLASSICAL, MusicTypeVariants.PSYTRANCE]
     exclusion_categories = [
         ExclusionCategories.BAD_MUSIC,
         ExclusionCategories.ARTIFACTS,
     ]
-    save_root = (
-        args.save_dir
-        if args.save_dir is not None
-        else ProjectPaths.PLOTS_PATH / "02-isc-broadband-analysis"
-    )
-    results_db_root = (
-        args.results_db_dir
-        if args.results_db_dir is not None
-        else ProjectPaths.RESULTS_DB_PATH / "02-isc-broadband-analysis"
-    )
+    save_root = args.save_dir if args.save_dir is not None else ProjectPaths.PLOTS_PATH
 
     _logger.info(
-        f"Starting ISC analysis: condition={condition.value}, "
+        f"Starting ISC analysis: experiment={experiment_name.value}, "
+        f"condition={condition.value}, "
         f"music_types={[mt.value for mt in music_types]}"
     )
 
@@ -610,6 +560,7 @@ if __name__ == "__main__":
         args.process_and_save,
         n_jobs=args.n_jobs,
         normalize_data=False,
+        experiment_name=experiment_name,
     )
     datasets = analyzers_to_datasets(analyzers)
     print_data_overview(datasets)
@@ -624,9 +575,7 @@ if __name__ == "__main__":
         ad = datasets[dataset_key]
         _logger.info(f"Dataset [{label}]: shape={ad.data.shape}  sfreq={ad.sfreq} Hz")
 
-        save_dir = save_root / dataset_key
-
-        results_db_dir = results_db_root / dataset_key
+        save_dir = save_root / _STAGE_DIR / dataset_key
 
         _run_broadband_analysis(
             ad,
@@ -638,9 +587,6 @@ if __name__ == "__main__":
             window_large_sec=args.window_large_sec,
             step_sec=args.step_sec,
             n_ch_subsample=args.n_ch_subsample,
-            condition=condition.value,
-            music_type=label,
-            results_db_dir=results_db_dir,
         )
 
         _run_band_analysis(
@@ -653,9 +599,6 @@ if __name__ == "__main__":
             window_large_sec=args.window_large_sec,
             step_sec=args.step_sec,
             n_ch_subsample=args.n_ch_subsample,
-            condition=condition.value,
-            music_type=label,
-            results_db_dir=results_db_dir,
         )
 
         _run_mean_field_analysis(

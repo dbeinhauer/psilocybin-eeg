@@ -1,10 +1,26 @@
 #!/bin/bash
-#PBS -N PSILO_EEF_DATASET_PREPROCESSING
-#PBS -l walltime=24:00:00
+#PBS -N ASSR_DATASET_PREPROCESSING
+#PBS -l walltime=12:00:00
 #PBS -l select=1:ncpus=4:mem=100gb:scratch_local=100gb
 
 #PBS -m ae
 #PBS -j oe
+
+# Full preprocessing of the ASSR dataset: coarse crop -> filtering -> bad channel
+# interpolation -> ICA -> RAW_AFTER_ICA.
+#
+# Re-run this after changing the stimulus-marker calibration
+# (config/participant_mappings/assr_time_shift.csv) or AssrEpoch.MARKER_ONSET_OFFSET_S.
+# The stimulus-aware coarse crop trims around the *offset-adjusted* onsets, so
+# recordings cropped under a different offset carry the wrong lead-in and shorten the
+# pre-stimulus baseline for the whole group at the alignment stage.
+#
+# Afterwards, regenerate in this order:
+#   1. run_stimulus_alignment.pbs                       -> RAW_CROPPED
+#   2. ../03-wavelet-analysis/store_assr_wavelets.pbs   -> concatenated + wavelets
+#
+# Same resources as the psilo_music preprocessing job: the pipeline is per-recording
+# and dominated by ICA, which does not scale past a few cores here.
 
 set -e
 
@@ -41,6 +57,7 @@ cat << 'EOF' > run_inside.sh
 #!/bin/bash
 source /opt/myproject/.venv/bin/activate
 python /mnt/scripts/run_preprocessing.py \
+--experiment assr \
 --raw_processing \
 --process_excluded_ic \
 --plot_results \

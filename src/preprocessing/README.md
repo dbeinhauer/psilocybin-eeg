@@ -11,6 +11,60 @@ This package contains the core preprocessing modules for the psilocybin-EEG data
 | `filtering.py` | Notch & bandpass filtering, RANSAC bad channel detection, bad epoch annotation |
 | `ica.py` | ICA decomposition, ICLabel classification, artifact component exclusion |
 | `time_alignment.py` | Cross-correlation–based alignment of recordings using the TAG (stimulus) channel |
+| `stimulus_alignment.py` | Annotation-based alignment of stimulus onsets across participants; resolves each recording's marker→onset offset (`resolve_stimulus_marker`) |
+| `marker_shift.py` | Measures the per-recording stimulus-marker timing error against the `.evt` exports and persists it as a calibration mapping |
+
+## Stimulus-Marker Calibration (ASSR)
+
+The `fam+` annotations read from the raw EDFs are **late** with respect to the sound
+they mark, by a different amount in every recording (measured range 372–455 ms). The
+EDF header can only record the recording start to the nearest whole second, so the
+sub-second remainder is lost and re-appears as a per-recording offset on every
+annotation. The diagnosis is in
+[`notebooks/00-preprocessing/assr_annotation_discrepancy.ipynb`](../../notebooks/00-preprocessing/assr_annotation_discrepancy.ipynb).
+
+The remainder is recoverable from the recording-native `.evt` exports in
+`data/events/`, so it is calibrated once and reused:
+
+```bash
+# Measure every recording -> config/participant_mappings/assr_time_shift.csv
+python scripts/run_stimulus_shift_calibration.py --experiment assr
+
+# Inspect what would be written, without touching the file
+python scripts/run_stimulus_shift_calibration.py --experiment assr --dry_run
+```
+
+Everything that reads stimulus onsets goes through
+`resolve_stimulus_marker(experiment_name)`, which returns the marker label together
+with that calibration; `StimulusMarker.onset_offset_for(filename)` yields one
+recording's offset and `.offsets_for(filenames)` a whole group's. Recordings absent
+from the mapping fall back to `AssrEpoch.MARKER_ONSET_OFFSET_S` (the median of the
+measured shifts) — a stopgap that still leaves them mis-timed by up to ~50 ms.
+
+### Regenerating after a calibration change
+
+Changing the calibration (or the fallback constant) invalidates **every** product
+from the coarse crop onwards. Regenerate in this order:
+
+```bash
+python scripts/run_preprocessing.py --experiment assr --raw_processing   # before_ica / after_ica
+python scripts/run_stimulus_alignment.py --condition Placebo             # -> RAW_CROPPED
+python scripts/run_stimulus_alignment.py --condition Psilocybin
+python scripts/run_analysis.py --analysis wavelet_power --experiment assr \
+    --condition Placebo --process_and_save --n_jobs -1                   # concatenated + wavelets
+```
+
+> **Preprocessing really is included.** It is tempting to assume the offset only
+> matters when annotations are read, but the stimulus-aware coarse crop
+> (`coarse_crop_to_stimulus_span`) trims around the *offset-adjusted* onsets, so its
+> bounds — and hence the lead-in every later stage inherits — depend on the offset.
+> Reusing recordings cropped under a different offset silently shortens the
+> pre-stimulus baseline, and because `StimulusAligner` takes `pre_target` as the
+> group minimum, a single under-cropped recording shortens it for the whole group.
+> No error is raised when it drops below `AssrEpoch.PRE_ONSET_S`.
+>
+> `--process_and_save` forces the concatenated rebuild; without it the stale cache is
+> reused. Omit `--reuse_wavelets` so the wavelet cache is rebuilt too.
 
 ## Preprocessing Pipeline
 

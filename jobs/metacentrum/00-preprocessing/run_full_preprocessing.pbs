@@ -41,6 +41,7 @@ cat << 'EOF' > run_inside.sh
 #!/bin/bash
 source /opt/myproject/.venv/bin/activate
 python /mnt/scripts/run_preprocessing.py \
+--experiment psilo_music \
 --raw_processing \
 --process_excluded_ic \
 --plot_results \

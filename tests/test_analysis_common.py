@@ -7,6 +7,7 @@ from unittest.mock import patch
 import runpy
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import sys
@@ -17,11 +18,23 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from scripts.analysis_common import (
     _wavelet_transform,
     add_common_arguments,
+    participant_label,
+    participant_labels,
+    resolve_wavelet_dir,
     run_wavelet_workflow,
 )
 from src.analysis.data_representations import AnalysisData, DataRepresentation
 from src.definitions.constants import ProjectPaths
-from src.definitions.fields import AnalysisVariants, ExperimentNames
+from src.definitions.fields import (
+    AnalysisVariants,
+    ExperimentNames,
+    SingleDataMetadata,
+)
+from src.definitions.frequency import (
+    WAVELET_FREQ_MAX,
+    WAVELET_FREQ_MIN,
+    WAVELET_N_FREQS,
+)
 
 
 class TestAddCommonArguments:
@@ -92,15 +105,15 @@ class TestAddCommonArguments:
 
     def test_wavelet_freq_min_default(self, parser):
         args = parser.parse_args([])
-        assert args.wavelet_freq_min == pytest.approx(1.0)
+        assert args.wavelet_freq_min == pytest.approx(WAVELET_FREQ_MIN)
 
     def test_wavelet_freq_max_default(self, parser):
         args = parser.parse_args([])
-        assert args.wavelet_freq_max == pytest.approx(40.0)
+        assert args.wavelet_freq_max == pytest.approx(WAVELET_FREQ_MAX)
 
     def test_wavelet_n_freqs_default(self, parser):
         args = parser.parse_args([])
-        assert args.wavelet_n_freqs == 20
+        assert args.wavelet_n_freqs == WAVELET_N_FREQS
 
     def test_wavelet_freq_min_custom(self, parser):
         args = parser.parse_args(["--wavelet_freq_min", "4.0"])
@@ -131,16 +144,14 @@ class TestAddCommonArguments:
         assert args.skip_wavelet_broadband is True
 
     def test_wavelet_data_dir_default(self, parser):
+        # The flag itself defaults to None; the experiment-aware path is built
+        # by resolve_wavelet_dir (see TestResolveWaveletDir).
         args = parser.parse_args([])
-        assert args.wavelet_data_dir == str(
-            ProjectPaths.PROCESSED_DATA_DIR
-            / ExperimentNames.PSILO_MUSIC.value
-            / "wavelets"
-        )
+        assert args.wavelet_data_dir is None
 
     def test_wavelet_data_dir_custom(self, parser):
-        args = parser.parse_args(["--wavelet_data_dir", "/tmp/wavelets"])
-        assert args.wavelet_data_dir == "/tmp/wavelets"
+        args = parser.parse_args(["--wavelet_data_dir", "/tmp/data"])
+        assert args.wavelet_data_dir == "/tmp/data"
 
     def test_reuse_wavelets_flag(self, parser):
         args = parser.parse_args(["--reuse_wavelets"])
@@ -223,6 +234,44 @@ class TestAddCommonArguments:
     def test_n_ch_subsample_zero_disables_subsampling(self, parser):
         args = parser.parse_args(["--n_ch_subsample", "0"])
         assert args.n_ch_subsample == 0
+
+
+class TestResolveWaveletDir:
+    """Test that resolve_wavelet_dir always scopes the cache by experiment."""
+
+    def test_default_base_is_processed_data_dir(self):
+        for experiment in ExperimentNames:
+            assert resolve_wavelet_dir(None, experiment) == (
+                ProjectPaths.PROCESSED_DATA_DIR / experiment.value / "wavelets"
+            )
+
+    def test_custom_base_gets_experiment_suffix(self):
+        result = resolve_wavelet_dir("/tmp/data", ExperimentNames.ASSR)
+        assert result == Path("/tmp/data") / ExperimentNames.ASSR.value / "wavelets"
+
+    def test_experiment_segment_drives_path_not_the_base(self):
+        # Same base, different experiments → different, non-overlapping dirs.
+        psilo = resolve_wavelet_dir("/tmp/data", ExperimentNames.PSILO_MUSIC)
+        assr = resolve_wavelet_dir("/tmp/data", ExperimentNames.ASSR)
+        assert psilo != assr
+        assert ExperimentNames.ASSR.value not in psilo.parts
+        assert ExperimentNames.PSILO_MUSIC.value not in assr.parts
+
+    def test_rejects_experiment_specific_base(self):
+        # A stale '.../psilo_music/wavelets' base must be rejected rather than
+        # silently nesting or mis-routing the cache across experiments.
+        with pytest.raises(ValueError, match="experiment-specific"):
+            resolve_wavelet_dir(
+                "/mnt/data/processed/psilo_music/wavelets",
+                ExperimentNames.ASSR,
+            )
+
+    def test_rejects_any_experiment_name_segment(self):
+        for experiment in ExperimentNames:
+            with pytest.raises(ValueError):
+                resolve_wavelet_dir(
+                    f"/data/{experiment.value}", ExperimentNames.PSILO_MUSIC
+                )
 
 
 class TestRunWaveletWorkflowValidation:
@@ -444,3 +493,60 @@ class TestRunWaveletWorkflowReshapeRaisesInWorkflow:
                 reshape_frequency_dim=True,
                 keep_frequency_dim=True,
             )
+
+
+class TestParticipantLabels:
+    """Subject-index -> 3-digit participant mapping for per-subject plots."""
+
+    @staticmethod
+    def _metadata(participant_ids, person_indices=None):
+        df = pd.DataFrame({SingleDataMetadata.PARTICIPANT_ID: participant_ids})
+        if person_indices is not None:
+            df[SingleDataMetadata.CONCATENATED_PERSON_INDEX] = person_indices
+        return df
+
+    @pytest.mark.parametrize(
+        "participant_id,expected",
+        [
+            ("031", "031"),
+            (31, "031"),  # sidecar round-trip drops the zero padding
+            ("19", "019"),
+            ("PSI019", "019"),  # a PSI prefix on the input is stripped
+            ("PSI019_EEGA_ASSR.edf", "019"),
+        ],
+    )
+    def test_participant_label_formats(self, participant_id, expected):
+        assert participant_label(participant_id) == expected
+
+    def test_uses_concatenated_person_index_not_row_order(self):
+        # Rows deliberately out of index order: the mapping must follow
+        # CONCATENATED_PERSON_INDEX, not the DataFrame's row order.
+        df = self._metadata(["031", "019", "024"], person_indices=[2, 0, 1])
+        assert participant_labels(df, 3) == ["019", "024", "031"]
+
+    def test_subset_returns_only_requested_subjects(self):
+        df = self._metadata(["031", "019", "024"], person_indices=[0, 1, 2])
+        assert participant_labels(df, 2) == ["031", "019"]
+
+    def test_falls_back_to_row_order_without_person_index(self):
+        df = self._metadata(["031", "019"])
+        assert participant_labels(df, 2) == ["031", "019"]
+
+    def test_raises_when_metadata_missing(self):
+        with pytest.raises(ValueError, match="No participant metadata"):
+            participant_labels(None, 2)
+
+    def test_raises_when_participant_id_column_missing(self):
+        df = pd.DataFrame({SingleDataMetadata.CONCATENATED_PERSON_INDEX: [0, 1]})
+        with pytest.raises(ValueError, match="no PARTICIPANT_ID column"):
+            participant_labels(df, 2)
+
+    def test_raises_when_metadata_covers_fewer_subjects_than_data(self):
+        df = self._metadata(["031"], person_indices=[0])
+        with pytest.raises(ValueError, match="covers 1 recording"):
+            participant_labels(df, 2)
+
+    def test_raises_when_person_index_does_not_cover_every_subject(self):
+        df = self._metadata(["031", "019"], person_indices=[0, 5])
+        with pytest.raises(ValueError, match="missing subject index"):
+            participant_labels(df, 2)

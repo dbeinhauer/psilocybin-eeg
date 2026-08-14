@@ -26,6 +26,9 @@ class TestExperimentNames:
     def test_psilo_music_value(self):
         assert ExperimentNames.PSILO_MUSIC.value == "psilo_music"
 
+    def test_assr_value(self):
+        assert ExperimentNames.ASSR.value == "assr"
+
 
 class TestCoordinateSystems:
     def test_hydrogel_257(self):
@@ -78,6 +81,9 @@ class TestMusicTypeVariants:
     def test_psytrance(self):
         assert MusicTypeVariants.PSYTRANCE.value == "PSYTRANCE"
 
+    def test_assr(self):
+        assert MusicTypeVariants.ASSR.value == "ASSR"
+
 
 class TestChannelTypes:
     def test_eeg(self):
@@ -99,7 +105,13 @@ class TestICLabelComponentsClasses:
 
 class TestExclusionCategories:
     def test_all_categories(self):
-        expected = {"bad_music", "bad_power_spectrum", "missing_trials"}
+        expected = {
+            "bad_music",
+            "bad_power_spectrum",
+            "missing_trials",
+            "artifacts",
+            "wrong_condition",
+        }
         values = {c.value for c in ExclusionCategories}
         assert values == expected
 
