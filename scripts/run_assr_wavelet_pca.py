@@ -44,6 +44,15 @@ Pipeline (per subject):
    mean explained variance, the topography-consistency diagnostic and the
    driven-minus-baseline contrast in the ASSR band and across all frequencies —
    the evidence for whether a later component is the better steady-state carrier.
+7. **Unreduced reference** (``--no_unreduced_reference`` to skip). The same
+   trial-averaged power is plotted **before** the reduction, in channel space, as a
+   test reference: channel-mean TF maps, band-limited channel-mean time courses and
+   per-channel driven-minus-baseline topomaps. No polarity alignment is involved —
+   power has a fixed sign convention, so channel averages and the group mean are
+   meaningful directly, which makes them a reference *for* the alignment rather than
+   another thing to diagnose. The summaries are accumulated inside the same
+   streaming pass, while each subject's channel stack is still in memory, so peak
+   memory and IO are unchanged.
 
 Inputs (produced by stimulus alignment + the wavelet store jobs)::
 
@@ -62,11 +71,15 @@ trial average, keeping peak memory to a single subject's channel stack.
 Output plots::
 
     plots/00-preprocessing/assr_wavelet_pca/<Condition>_ASSR/*.png
+
+The unreduced reference figures share that directory under the
+``wavelet_unreduced_*`` prefix.
 """
 
 import argparse
 import sys
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib
@@ -164,6 +177,60 @@ def channel_pca_tf_maps(
     scores = pca.fit_transform(matrix)  # (n_freqs*win, n_components)
     tf_maps = scores.T.reshape(n_components, n_freqs, win)
     return tf_maps, pca.components_, pca.explained_variance_ratio_
+
+
+@dataclass
+class UnreducedReference:
+    """Channel-space summaries of the trial-averaged power, before any reduction.
+
+    Accumulated inside the streaming pass while each subject's channel stack is
+    still in memory, so the full ``(n_subjects, n_channels, n_freqs, win)`` tensor
+    never has to be held. Only the reductions the reference figures need are kept:
+    the channel-mean TF plane, and the per-channel driven / baseline band profiles
+    from which any band's contrast can be formed afterwards.
+
+    Attributes:
+        chan_mean_tf: ``(n_subjects, n_freqs, win)`` channel-mean TF maps. Averaging
+            over channels is a weaker reduction than the PCA, not a better one: a
+            response confined to a few electrodes is diluted here, but never
+            sign-cancelled.
+        chan_stim_mean: ``(n_subjects, n_channels, n_freqs)`` mean power per channel
+            and frequency over the driven interval.
+        chan_base_mean: ``(n_subjects, n_channels, n_freqs)`` the same over the
+            pre-onset baseline.
+    """
+
+    chan_mean_tf: np.ndarray
+    chan_stim_mean: np.ndarray
+    chan_base_mean: np.ndarray
+
+    def reordered(self, order: list[int]) -> "UnreducedReference":
+        """Return a copy with subjects reordered by *order* (e.g. into PID order)."""
+        return UnreducedReference(
+            self.chan_mean_tf[order],
+            self.chan_stim_mean[order],
+            self.chan_base_mean[order],
+        )
+
+    def channel_contrast(self, freq_mask: np.ndarray) -> np.ndarray:
+        """Per-channel driven-minus-baseline power contrast inside a frequency band.
+
+        Deliberately *not* divided by each channel's own standard deviation (unlike
+        :func:`driven_contrast` for the components): that normalisation would flatten
+        exactly the spatial amplitude pattern a topomap exists to show, and the
+        z-scoring already put channels on a common scale.
+
+        Args:
+            freq_mask: Boolean mask over frequencies to average within.
+
+        Returns:
+            ``(n_subjects, n_channels)`` contrasts. The contrast is linear in the
+            power, so the group panel is simply the mean of these rows — identical to
+            contrasting the across-participant mean of the trial averages.
+        """
+        stim = self.chan_stim_mean[:, :, freq_mask].mean(axis=2)
+        base = self.chan_base_mean[:, :, freq_mask].mean(axis=2)
+        return stim - base
 
 
 def driven_contrast(
@@ -290,9 +357,11 @@ def stream_wavelet_pca(
     pre: int,
     post: int,
     n_components: int,
+    stim_mask: np.ndarray,
+    base_mask: np.ndarray,
     *,
     zscore_vs_recording: bool = True,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int, UnreducedReference]:
     """Stream the whole wavelet cache once, reducing each subject to its TF maps.
 
     ``savez_compressed`` writes ``data.npy`` (shape ``(n_subj, n_channels*n_freqs,
@@ -304,6 +373,10 @@ def stream_wavelet_pca(
     n_freqs, win)`` array, not the full multi-GB tensor. Keeping more components
     costs one PCA fit per subject either way — the streaming read dominates.
 
+    The unreduced channel-space summaries (see :class:`UnreducedReference`) are taken
+    from the same live stack, so the no-PCA reference figures cost no second pass and
+    no extra memory beyond a few small arrays.
+
     Args:
         npz_path: Path to the ``*__wavelet_power__*__freqdim1.npz`` cache.
         n_channels: Number of EEG channels in the cache.
@@ -312,15 +385,18 @@ def stream_wavelet_pca(
         pre: Samples before each onset.
         post: Samples after each onset.
         n_components: Number of leading components to keep per subject.
+        stim_mask: Boolean mask selecting the driven samples of the epoch.
+        base_mask: Boolean mask selecting the pre-onset baseline samples.
         zscore_vs_recording: Z-score each channel's per-frequency power against the
             whole recording before epoching (removes the 1/f tilt).
 
     Returns:
-        Tuple ``(tf_maps, loadings, explained, n_times)``, component-major:
-        ``tf_maps`` is ``(n_components, n_subj, n_freqs, win)``, ``loadings`` is
-        ``(n_components, n_subj, n_channels)`` channel topographies, ``explained``
-        is ``(n_components, n_subj)`` variance ratios and ``n_times`` is the wavelet
-        time length. Signs are left arbitrary here and aligned across participants,
+        Tuple ``(tf_maps, loadings, explained, n_times, reference)``,
+        component-major: ``tf_maps`` is ``(n_components, n_subj, n_freqs, win)``,
+        ``loadings`` is ``(n_components, n_subj, n_channels)`` channel topographies,
+        ``explained`` is ``(n_components, n_subj)`` variance ratios, ``n_times`` is
+        the wavelet time length and ``reference`` holds the unreduced channel-space
+        summaries. Signs are left arbitrary here and aligned across participants,
         per component, by the caller.
     """
     win = pre + post
@@ -344,6 +420,10 @@ def stream_wavelet_pca(
             tf_maps = np.zeros((n_components, n_subj, n_freqs, win), dtype=np.float64)
             loadings = np.zeros((n_components, n_subj, n_channels), dtype=np.float64)
             explained = np.zeros((n_components, n_subj), dtype=np.float64)
+            # Unreduced channel-space summaries, taken from the same live stack.
+            chan_mean_tf = np.zeros((n_subj, n_freqs, win), dtype=np.float64)
+            chan_stim_mean = np.zeros((n_subj, n_channels, n_freqs), dtype=np.float64)
+            chan_base_mean = np.zeros((n_subj, n_channels, n_freqs), dtype=np.float64)
             for subj in range(n_subj):
                 stack = np.empty((n_channels, n_freqs, win), dtype=np.float64)
                 for chan in range(n_channels):
@@ -360,6 +440,10 @@ def stream_wavelet_pca(
                     loadings[:, subj],
                     explained[:, subj],
                 ) = channel_pca_tf_maps(stack, n_components)
+                # No-PCA reference summaries, while the stack is still alive.
+                chan_mean_tf[subj] = stack.mean(axis=0)
+                chan_stim_mean[subj] = stack[:, :, stim_mask].mean(axis=2)
+                chan_base_mean[subj] = stack[:, :, base_mask].mean(axis=2)
                 del stack
                 ev_summary = ", ".join(
                     f"PC{c + 1} {explained[c, subj] * 100:.1f}%"
@@ -369,7 +453,8 @@ def stream_wavelet_pca(
                     f"  reduced subject {subj + 1}/{n_subj} ({ev_summary})",
                     flush=True,
                 )
-    return tf_maps, loadings, explained, n_times
+    reference = UnreducedReference(chan_mean_tf, chan_stim_mean, chan_base_mean)
+    return tf_maps, loadings, explained, n_times, reference
 
 
 # --------------------------------------------------------------------------- #
@@ -647,6 +732,214 @@ def plot_pca_group(
 
 
 # --------------------------------------------------------------------------- #
+#  Plotting — unreduced (no-PCA) reference                                     #
+# --------------------------------------------------------------------------- #
+def plot_unreduced_tf_maps(
+    chan_mean_tf: np.ndarray,
+    epoch_times: np.ndarray,
+    freqs: np.ndarray,
+    labels: list[str],
+    assr_freq: float,
+    power_unit: str,
+    title_suffix: str,
+    plots_dir: Path,
+) -> None:
+    """Channel-mean TF maps per participant plus the group mean, before any PCA.
+
+    The unreduced counterpart of a component score map, on the same axes and colour
+    convention. One scale is shared by every panel, so participants are comparable.
+
+    Args:
+        chan_mean_tf: ``(n_subjects, n_freqs, win)`` channel-mean maps, PID-ordered.
+        epoch_times: ``(win,)`` epoch time axis in seconds, 0 at onset.
+        freqs: ``(n_freqs,)`` wavelet frequencies.
+        labels: Participant labels, aligned with *chan_mean_tf*.
+        assr_freq: Steady-state frequency (Hz), marked with a horizontal line.
+        power_unit: Colour-bar unit description.
+        title_suffix: Group description appended to the title.
+        plots_dir: Directory the figure is written to.
+    """
+    panels = [(labels[s], chan_mean_tf[s]) for s in range(chan_mean_tf.shape[0])]
+    panels.append(
+        (f"group mean (n={chan_mean_tf.shape[0]})", chan_mean_tf.mean(axis=0))
+    )
+
+    vmax = float(np.abs(chan_mean_tf).max())
+    if vmax == 0.0:
+        vmax = 1e-12
+    extent = [epoch_times[0], epoch_times[-1], freqs[0], freqs[-1]]
+
+    nrows, ncols = grid_shape(len(panels))
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(3.4 * ncols, 2.9 * nrows), squeeze=False
+    )
+    flat = axes.flatten()
+    im = None
+    for ax, (label, tf_map) in zip(flat, panels):
+        im = ax.imshow(
+            tf_map,
+            aspect="auto",
+            origin="lower",
+            extent=extent,
+            cmap="RdBu_r",
+            vmin=-vmax,
+            vmax=vmax,
+        )
+        ax.axvline(0.0, color="k", ls="--", lw=0.7)
+        ax.axhline(assr_freq, color="green", ls=":", lw=0.9)
+        ax.set_title(label, fontsize=9)
+        ax.set_xlabel("Time rel. onset (s)")
+        ax.set_ylabel("Frequency (Hz)")
+    for ax in flat[len(panels) :]:
+        ax.axis("off")
+    fig.colorbar(
+        im,
+        ax=axes.ravel().tolist(),
+        shrink=0.6,
+        label=f"Channel-mean power ({power_unit})",
+    )
+    fig.suptitle(f"Unreduced channel-mean TF map — {title_suffix}", y=1.0)
+    fig.savefig(
+        plots_dir / "wavelet_unreduced_tf_channel_mean.png",
+        dpi=150,
+        bbox_inches="tight",
+    )
+    plt.close(fig)
+
+
+def plot_unreduced_band_timecourses(
+    chan_mean_tf: np.ndarray,
+    freqs: np.ndarray,
+    band_mask: np.ndarray,
+    epoch_times: np.ndarray,
+    labels: list[str],
+    power_unit: str,
+    stim_end: float,
+    title_suffix: str,
+    plots_dir: Path,
+) -> None:
+    """Channel-mean power in the ASSR band and broadband, as time courses.
+
+    Read the two rows against each other like the ASSR/broadband columns of the
+    comparison table: a response equally visible in both is a broad onset/arousal
+    response, while an ASSR-band rise without a broadband one is frequency-specific.
+
+    Args:
+        chan_mean_tf: ``(n_subjects, n_freqs, win)`` channel-mean maps, PID-ordered.
+        freqs: ``(n_freqs,)`` wavelet frequencies.
+        band_mask: Boolean mask over frequencies selecting the ASSR band.
+        epoch_times: ``(win,)`` epoch time axis in seconds, 0 at onset.
+        labels: Participant labels, aligned with *chan_mean_tf*.
+        power_unit: Amplitude unit for the axis labels.
+        stim_end: End of the driven interval (s), shaded.
+        title_suffix: Group description appended to the title.
+        plots_dir: Directory the figure is written to.
+    """
+    rows = [
+        (
+            chan_mean_tf[:, band_mask].mean(axis=1),
+            f"ASSR band {freqs[band_mask].min():.0f}–{freqs[band_mask].max():.0f} Hz",
+        ),
+        (
+            chan_mean_tf.mean(axis=1),
+            f"Broadband {freqs[0]:.0f}–{freqs[-1]:.0f} Hz",
+        ),
+    ]
+    fig, axes = plt.subplots(
+        len(rows), 1, figsize=(11, 4.0 * len(rows)), sharex=True, squeeze=False
+    )
+    for (time_courses, title), ax in zip(rows, axes[:, 0]):
+        for subj, label in enumerate(labels):
+            ax.plot(epoch_times, time_courses[subj], lw=1.1, alpha=0.75, label=label)
+        ax.plot(
+            epoch_times,
+            time_courses.mean(axis=0),
+            lw=2.6,
+            color="black",
+            label="group mean",
+        )
+        ax.axvspan(0.0, stim_end, color="grey", alpha=0.12, lw=0)
+        ax.axvline(0.0, color="red", ls="--", lw=1)
+        ax.set_title(f"{title} — channel-mean power", fontsize=10)
+        ax.set_ylabel(f"Power ({power_unit})")
+    axes[0, 0].legend(loc="upper right", fontsize=7, ncol=3)
+    axes[-1, 0].set_xlabel("Time relative to onset (s)")
+    fig.suptitle(f"Unreduced channel-mean power time courses — {title_suffix}", y=1.0)
+    fig.tight_layout()
+    fig.savefig(
+        plots_dir / "wavelet_unreduced_band_timecourses.png",
+        dpi=150,
+        bbox_inches="tight",
+    )
+    plt.close(fig)
+
+
+def plot_unreduced_channel_topomaps(
+    per_subject: np.ndarray,
+    topo_info: mne.Info,
+    info_order: list[int],
+    labels: list[str],
+    measure: str,
+    cbar_label: str,
+    filename: str,
+    title_suffix: str,
+    plots_dir: Path,
+) -> None:
+    """Per-channel contrast topomaps per participant plus the group (nb05 convention).
+
+    The map each component loading should be compared against: a loading resembling
+    the ASSR-band contrast is carrying the steady-state, one resembling the broadband
+    contrast is carrying the onset response, and one resembling neither is a mode the
+    PCA found in the channel covariance with no stimulus-locked counterpart.
+
+    Args:
+        per_subject: ``(n_subjects, n_channels)`` contrasts, PID-ordered. The group
+            panel is their mean, which equals the contrast of the across-participant
+            mean because the contrast is linear in the power.
+        topo_info: Montage info supplying the electrode positions.
+        info_order: Indices mapping the canonical channel order onto *topo_info*.
+        labels: Participant labels, aligned with *per_subject*.
+        measure: Measure name for the title.
+        cbar_label: Colour-bar label.
+        filename: Output file name inside *plots_dir*.
+        title_suffix: Group description appended to the title.
+        plots_dir: Directory the figure is written to.
+    """
+    n_subj = per_subject.shape[0]
+    panels = [(labels[s], per_subject[s][info_order]) for s in range(n_subj)]
+    panels.append((f"group mean (n={n_subj})", per_subject.mean(axis=0)[info_order]))
+
+    # Symmetric shared scale (nb05 convention): 99th percentile of |contrast|.
+    vlim = float(np.percentile(np.abs(np.concatenate([v for _, v in panels])), 99))
+    if vlim == 0.0:
+        vlim = 1e-12
+
+    nrows, ncols = grid_shape(len(panels))
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(2.7 * ncols, 2.9 * nrows), squeeze=False
+    )
+    flat = axes.flatten()
+    im = None
+    for ax, (label, vals) in zip(flat, panels):
+        im, _ = mne.viz.plot_topomap(
+            vals,
+            topo_info,
+            axes=ax,
+            show=False,
+            cmap="RdBu_r",
+            vlim=(-vlim, vlim),
+            contours=4,
+        )
+        ax.set_title(label, fontsize=9)
+    for ax in flat[len(panels) :]:
+        ax.axis("off")
+    fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.6, label=cbar_label)
+    fig.suptitle(f"Unreduced per-channel {measure} — {title_suffix}", y=1.0)
+    fig.savefig(plots_dir / filename, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+# --------------------------------------------------------------------------- #
 #  Orchestration                                                              #
 # --------------------------------------------------------------------------- #
 def run_pca(args: argparse.Namespace) -> None:
@@ -731,7 +1024,7 @@ def run_pca(args: argparse.Namespace) -> None:
 
     # ---- Wavelet: single streaming pass, PCA per subject --------------------
     print(f"Streaming wavelet cache ({wavelet_path.name}) ...", flush=True)
-    tf_maps, loadings, explained, n_times_wav = stream_wavelet_pca(
+    tf_maps, loadings, explained, n_times_wav, reference = stream_wavelet_pca(
         wavelet_path,
         n_channels,
         n_freqs,
@@ -739,6 +1032,8 @@ def run_pca(args: argparse.Namespace) -> None:
         pre,
         post,
         n_components,
+        stim_mask,
+        base_mask,
         zscore_vs_recording=args.zscore_vs_recording,
     )
     n_subj = tf_maps.shape[1]
@@ -756,6 +1051,7 @@ def run_pca(args: argparse.Namespace) -> None:
     tf_maps = tf_maps[:, order]
     loadings = loadings[:, order]
     explained = explained[:, order]
+    reference = reference.reordered(order)
     labels = [f"PSI{idx_to_pid.get(s, '???')}" for s in order]
 
     # ---- Align polarity across participants, per component -------------------
@@ -871,6 +1167,74 @@ def run_pca(args: argparse.Namespace) -> None:
         flush=True,
     )
     print(comparison.round(3).to_string(), flush=True)
+
+    # ---- Unreduced reference (no PCA) ----------------------------------------
+    # The same trial-averaged power before the channel reduction, accumulated during
+    # the streaming pass. No polarity alignment is involved: power has a fixed sign
+    # convention, so channel averages and the group mean are meaningful directly,
+    # which is what makes this a reference for the alignment above. Structure a
+    # component map shows that is absent here comes from the reduction; structure
+    # here that no component reproduces is what the reduction discarded.
+    if args.unreduced_reference:
+        power_unit = "z vs recording" if args.zscore_vs_recording else "power (a.u.)"
+        all_freqs = np.ones_like(band_mask, dtype=bool)
+        stim_end = AssrEpoch.STIMULUS_DURATION_S
+
+        plot_unreduced_tf_maps(
+            reference.chan_mean_tf,
+            epoch_times,
+            freqs,
+            labels,
+            args.assr_freq,
+            power_unit,
+            title_suffix,
+            plots_dir,
+        )
+        plot_unreduced_band_timecourses(
+            reference.chan_mean_tf,
+            freqs,
+            band_mask,
+            epoch_times,
+            labels,
+            power_unit,
+            stim_end,
+            title_suffix,
+            plots_dir,
+        )
+        for measure, freq_mask, filename in (
+            (
+                f"ASSR-band ({args.assr_freq:.0f} ± {args.assr_halfwidth:.0f} Hz) "
+                f"contrast",
+                band_mask,
+                "wavelet_unreduced_topomap_assr_contrast.png",
+            ),
+            (
+                "broadband contrast",
+                all_freqs,
+                "wavelet_unreduced_topomap_broadband_contrast.png",
+            ),
+        ):
+            per_subject = reference.channel_contrast(freq_mask)
+            plot_unreduced_channel_topomaps(
+                per_subject,
+                topo_info,
+                info_order,
+                labels,
+                measure,
+                f"driven − baseline ({power_unit})",
+                filename,
+                title_suffix,
+                plots_dir,
+            )
+            group_values = per_subject.mean(axis=0)
+            top = np.argsort(group_values)[::-1][:5]
+            print(
+                f"Unreduced reference, {measure}: strongest channels on the group "
+                f"mean — "
+                + ", ".join(f"{channel_names[i]} {group_values[i]:+.3f}" for i in top),
+                flush=True,
+            )
+
     print(f"[DONE] {label}: plots written to {plots_dir}", flush=True)
 
 
@@ -958,6 +1322,16 @@ def build_parser() -> argparse.ArgumentParser:
         "per-frequency power against the whole recording.",
     )
     parser.set_defaults(zscore_vs_recording=True)
+    parser.add_argument(
+        "--no_unreduced_reference",
+        dest="unreduced_reference",
+        action="store_false",
+        help="Skip the unreduced (no-PCA) channel-space reference figures: "
+        "channel-mean TF maps, band-limited channel-mean time courses and "
+        "per-channel driven-minus-baseline topomaps. They are the test reference the "
+        "component panels are checked against, and cost no extra pass over the cache.",
+    )
+    parser.set_defaults(unreduced_reference=True)
     parser.add_argument(
         "--save_dir",
         type=str,

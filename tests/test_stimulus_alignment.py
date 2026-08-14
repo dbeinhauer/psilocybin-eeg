@@ -11,10 +11,13 @@ from src.preprocessing.stimulus_alignment import (
     DEFAULT_STIMULUS_LABEL,
     EXPERIMENT_STIMULUS_MARKERS,
     StimulusAligner,
+    StimulusMarker,
     get_stimulus_onset_samples,
     coarse_crop_to_stimulus_span,
     align_raws,
     apply_keep_segments_to_array,
+    resolve_per_recording_offsets,
+    resolve_stimulus_marker,
 )
 
 SFREQ = 1000.0  # 1 ms per sample -> sample index == milliseconds
@@ -259,7 +262,7 @@ class TestMarkerOnsetOffset:
         with pytest.raises(ValueError, match="outside the recording"):
             get_stimulus_onset_samples(raw, "fam+", onset_offset_s=0.4)
 
-    def test_assr_marker_is_registered_with_the_paradigm_offset(self):
+    def test_assr_marker_is_registered_with_the_fallback_offset(self):
         marker = EXPERIMENT_STIMULUS_MARKERS[ExperimentNames.ASSR]
         assert marker.label == DEFAULT_STIMULUS_LABEL
         assert marker.onset_offset_s == AssrEpoch.MARKER_ONSET_OFFSET_S
@@ -289,6 +292,84 @@ class TestMarkerOnsetOffset:
         assert plain.interval_targets.tolist() == shifted.interval_targets.tolist()
         # pre_target shrinks by the 400-sample offset, so onsets land 400 earlier.
         assert plain.pre_target - shifted.pre_target == 400
+
+
+class TestPerRecordingOffsets:
+    """
+    The offset is per recording, not per experiment.
+
+    Two recordings whose markers are late by different amounts must still end up
+    aligned on the *stimulus*. A shared constant would align them on their markers
+    instead, leaving each mis-timed by its own error — the bug this replaces.
+    """
+
+    def test_resolved_assr_marker_carries_the_shipped_calibration(self):
+        marker = resolve_stimulus_marker(ExperimentNames.ASSR)
+        assert marker.label == DEFAULT_STIMULUS_LABEL
+        assert marker.onset_offset_s == AssrEpoch.MARKER_ONSET_OFFSET_S
+        if not marker.per_recording_offsets:
+            pytest.skip("No ASSR calibration checked in.")
+        # Resolution must actually differ per recording — a table that collapsed
+        # to one value would silently be the constant-offset bug again.
+        assert len(set(marker.per_recording_offsets.values())) > 1
+
+    def test_experiment_without_stimuli_resolves_to_nothing(self):
+        assert resolve_stimulus_marker(ExperimentNames.PSILO_MUSIC) is None
+
+    def test_marker_falls_back_when_a_recording_is_not_calibrated(self):
+        marker = StimulusMarker("fam+", -0.4, {"rec_a": -0.42})
+        assert marker.onset_offset_for("rec_a") == -0.42
+        assert marker.onset_offset_for("unknown") == -0.4
+
+    def test_marker_lookup_ignores_the_file_extension(self):
+        marker = StimulusMarker("fam+", -0.4, {"rec_a": -0.42})
+        assert marker.onset_offset_for("rec_a.edf") == -0.42
+
+    def test_marker_without_a_recording_uses_the_fallback(self):
+        marker = StimulusMarker("fam+", -0.4, {"rec_a": -0.42})
+        assert marker.onset_offset_for(None) == -0.4
+
+    def test_offsets_for_preserves_group_order(self):
+        marker = StimulusMarker("fam+", -0.4, {"rec_a": -0.42, "rec_b": -0.38})
+        assert marker.offsets_for(["rec_b", "rec_a", "rec_c"]) == [-0.38, -0.42, -0.4]
+
+    def test_scalar_offset_is_broadcast_to_every_recording(self):
+        assert resolve_per_recording_offsets(-0.4, 3) == [-0.4, -0.4, -0.4]
+
+    def test_sequence_offsets_are_passed_through(self):
+        assert resolve_per_recording_offsets([-0.4, -0.42], 2) == [-0.4, -0.42]
+
+    def test_mismatched_offset_count_is_rejected(self):
+        # Recycling or truncating would misalign the group by hundreds of ms
+        # without any visible failure, so it must be an error.
+        with pytest.raises(ValueError, match="must correspond one-to-one"):
+            resolve_per_recording_offsets([-0.4, -0.42], 3)
+
+    def test_differing_offsets_align_the_group_on_the_stimulus(self):
+        # Two recordings with identical marker positions but markers that are late
+        # by 400 ms and 300 ms. Their true onsets are therefore 100 ms apart, and
+        # the aligner must absorb that difference: the spliced outputs must have
+        # the same length and the same aligned onset positions.
+        raws = [_make_raw_with_onsets([1000, 2000], 3000) for _ in range(2)]
+        aligned, aligner = align_raws(
+            raws, "fam+", keep_tail_sec=0.1, onset_offset_s=[-0.4, -0.3]
+        )
+        assert len({raw.n_times for raw in aligned}) == 1
+        # The shortest available lead-in wins: recording 0's onset sits at
+        # 1000-400=600, recording 1's at 1000-300=700, so pre_target is 600.
+        assert aligner.pre_target == 600
+        assert aligner.aligned_onset_samples[0] == 600
+
+    def test_each_recording_keeps_its_own_marker_to_onset_distance(self):
+        # After the splice the *onsets* coincide, so the annotations must NOT:
+        # each marker still sits its own offset after the onset it marks.
+        raws = [_make_raw_with_onsets([1000, 2000], 3000) for _ in range(2)]
+        aligned, aligner = align_raws(
+            raws, "fam+", keep_tail_sec=0.1, onset_offset_s=[-0.4, -0.3]
+        )
+        onset = int(aligner.aligned_onset_samples[0])
+        assert int(get_stimulus_onset_samples(aligned[0], "fam+")[0]) == onset + 400
+        assert int(get_stimulus_onset_samples(aligned[1], "fam+")[0]) == onset + 300
 
 
 class TestCoarseCrop:

@@ -21,6 +21,8 @@ EGI, Placebo/Psilocybin × CLASSIC/PSYTRANCE) and the **ASSR** dataset (annotate
 | `time_alignment.ipynb` | Run and verify cross-correlation time alignment (music dataset, TAG channel) |
 | `stimulus_alignment.ipynb` | Run and verify two-stage stimulus alignment (ASSR dataset, `fam+` markers) |
 | `assr_data_inspection.ipynb` | Inspect ASSR annotation labels, counts, and stimulus-onset timing |
+| `assr_annotation_discrepancy.ipynb` | Diagnose why the MNE-read `fam+` markers disagree with the `.evt` event exports |
+| `assr_stimulus_timing_verification.ipynb` | Acceptance test: verify from the data alone that the stimulus onsets of the aligned products are not shifted |
 
 ## What each notebook does
 
@@ -78,3 +80,52 @@ their counts per recording, and analyses stimulus-onset timing — consecutive
 orphan `bgin` markers not followed by a `fam+`.
 
 > Parameters in the *Configuration* cell.
+
+### `assr_annotation_discrepancy.ipynb` — Why the markers are late
+
+Checks the `fam+` annotations MNE reads from the raw EDF against the
+recording-native `.evt` exports in `data/events/` (microsecond event times, one
+file per recording), and asks whether the known marker error is *systematic* or
+*random*. Walks one recording event by event, then scans all 38: per-recording
+shift, within-recording residual, `bgin` as a cross-check, the mechanism, and
+whether any preprocessing stage adds to it.
+
+**Finding.** Fully systematic and exactly recoverable. Within a recording the
+markers are one constant shift late (residual ≤ 2 µs); across recordings the shift
+is a per-recording constant of 372–455 ms that equals the offset between the two
+files' time origins — the EDF header stores the recording start only to the nearest
+whole second, and the `.evt` wall-clock anchor recovers the dropped remainder. This
+is the exact source of the ≈ −0.4 s lag that `assr_stimulus_onset_offset.ipynb`
+measured by ITC and froze into `AssrEpoch.MARKER_ONSET_OFFSET_S`; the global
+constant leaves a per-subject residual spanning 83 ms (> 3 cycles at 40 Hz).
+
+> Needs `data/events/*.evt`. Diagnostic only — changes nothing on disk.
+
+### `assr_stimulus_timing_verification.ipynb` — Are the stored onsets right?
+
+Acceptance test for the stimulus-aligned ASSR products (`concatenated/` +
+`.stimulus_onsets.npy`, and the wavelet cache) after the per-recording marker
+correction. Verifies **from the data alone** — ignoring the annotations — that
+the driven response sits where the stored onsets claim, using two complementary
+read-outs: the 40 Hz **inter-trial coherence envelope** (absolute, ~±50 ms) and
+the 40 Hz **evoked phase clustering across recordings** (relative, ~±3 ms,
+because a 25 ms cycle turns a timing error into a phase rotation). Covers a
+global shift, every pair of recordings, the two halves of one recording's
+stimulus sequence, and the two sessions of a participant; includes positive
+controls that re-inject the pre-fix error to show the tests can fail.
+
+**Finding.** The response spans **[+32, +532] ms** relative to the stored onsets
+— the paradigm's 500 ms train, delayed by the auditory transmission latency
+only. Recordings agree with one another to **≤ 5 ms** (a single global offset
+would leave ~22 ms), the deviations no longer track the calibration residual,
+and the placebo/psilocybin sessions of a participant differ by **+0.3 ms** on
+average. Side finding: the wavelet cache and the concatenated array are built by
+two independent alignment plans and are **not exactly sample-registered** — the
+offset wanders over ~28 ms peak-to-peak along a recording. Harmless for wavelet
+*power* (its 40 Hz kernel smears by ±80 ms), but it matters for any future
+onset-locked analysis of wavelet *phase*.
+
+> Runs on the products under test plus `RAW_AFTER_ICA` for the session-pair
+> step. ~20 min end to end (streaming the 52 GB wavelet cache dominates); set
+> `RUN_WAVELET_CHECK` / `RUN_SESSION_PAIR_CHECK` to `False` to skip the heavy
+> steps. Diagnostic only — changes nothing on disk.

@@ -23,7 +23,7 @@ from scipy.stats import zscore
 
 from src.preprocessing.pipeline import DatasetHandler
 from src.preprocessing.stimulus_alignment import (
-    EXPERIMENT_STIMULUS_MARKERS,
+    resolve_stimulus_marker,
     StimulusAligner,
     StimulusMarker,
     get_stimulus_onset_samples,
@@ -120,8 +120,8 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         # annotations. When set, the onset sample positions (identical across
         # subjects by construction) are extracted during loading and saved next to
         # the concatenated data.
-        self._stimulus_marker: Optional[StimulusMarker] = (
-            EXPERIMENT_STIMULUS_MARKERS.get(experiment_name)
+        self._stimulus_marker: Optional[StimulusMarker] = resolve_stimulus_marker(
+            experiment_name
         )
         self.stimulus_onsets: Optional[np.ndarray] = None
 
@@ -171,16 +171,21 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         self.resample_freq = resample_freq
 
         # Stimulus onsets, on the same sample grid as the concatenated data. The
-        # alignment makes them identical across subjects, so the first recording is
-        # representative.
-        self.stimulus_onsets = self._extract_stimulus_onsets(raws[0])
+        # alignment makes the *onsets* identical across subjects, so one recording
+        # is representative — but its annotations must be read with its own offset,
+        # since that is what the alignment removed to put the onsets there.
+        self.stimulus_onsets = self._extract_stimulus_onsets(
+            raws[0], self.filtered_df.iloc[0][SingleDataMetadata.FILENAME]
+        )
 
         self.data = np.array([r.get_data() for r in raws])  # (n_subj, n_ch, n_times)
         self.logger.info(f"Data array shape: {self.data.shape}")
 
         return self.data, self.info
 
-    def _extract_stimulus_onsets(self, raw: mne.io.Raw) -> Optional[np.ndarray]:
+    def _extract_stimulus_onsets(
+        self, raw: mne.io.Raw, filename: str
+    ) -> Optional[np.ndarray]:
         """
         Extract the stimulus-onset sample positions mapping onto the time axis of
         :attr:`data`.
@@ -190,6 +195,9 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         recording is representative of the whole group.
 
         :param raw: A loaded (resampled) recording of the current group.
+        :param filename: Filename *raw* was loaded from. The marker→onset offset is
+            per recording, so reading another recording's annotations with this
+            one's offset would place the onsets tens of milliseconds off.
         :return: Sorted array of onset sample indices, or ``None`` when the
             experiment has no stimulus annotations / none are present.
         """
@@ -199,7 +207,7 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         onsets = get_stimulus_onset_samples(
             raw,
             self._stimulus_marker.label,
-            self._stimulus_marker.onset_offset_s,
+            self._stimulus_marker.onset_offset_for(filename),
         )
         if len(onsets) == 0:
             self.logger.warning(
@@ -282,11 +290,15 @@ class EEGSummarizedAnalyzer(LoggerMixin):
             )
         # The offset always comes from the experiment's registered marker: an
         # explicit label override selects *which* annotation to read, not how it
-        # relates in time to the stimulus.
-        onset_offset_s = (
-            self._stimulus_marker.onset_offset_s
+        # relates in time to the stimulus. It is resolved per recording, since the
+        # marker error differs between recordings.
+        filenames = [
+            row[SingleDataMetadata.FILENAME] for _, row in self.filtered_df.iterrows()
+        ]
+        onset_offsets = (
+            self._stimulus_marker.offsets_for(filenames)
             if self._stimulus_marker is not None
-            else 0.0
+            else [0.0] * len(filenames)
         )
 
         self.logger.info(
@@ -295,10 +307,10 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         )
 
         raws: list[mne.io.Raw] = []
-        for _, row in self.filtered_df.iterrows():
+        for filename in filenames:
             raw = (
                 self.dataset_handler.load_data_file(
-                    row[SingleDataMetadata.FILENAME],
+                    filename,
                     is_processed=True,
                     processed_data_type=PreprocessedDataVariants.RAW_AFTER_ICA,
                     preload=True,
@@ -311,7 +323,8 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         # Build the alignment plan from the resampled recordings so that the
         # keep-segments are expressed on the resampled sample grid.
         onset_samples = [
-            get_stimulus_onset_samples(raw, label, onset_offset_s) for raw in raws
+            get_stimulus_onset_samples(raw, label, offset)
+            for raw, offset in zip(raws, onset_offsets)
         ]
         recording_lengths = [raw.n_times for raw in raws]
         aligner = StimulusAligner(

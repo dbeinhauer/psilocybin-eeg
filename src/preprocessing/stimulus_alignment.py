@@ -25,6 +25,10 @@ capped so it never reaches a recording's first surplus onset — preventing an
 unaligned stimulus from being spliced into the output.
 
 Key pieces:
+    - ``resolve_stimulus_marker``: the experiment's marker label plus its
+      per-recording marker→onset calibration (see
+      :mod:`src.preprocessing.marker_shift`). Every consumer of an offset should
+      start here.
     - ``get_stimulus_onset_samples``: extract onset sample indices from a Raw.
     - ``StimulusAligner``: pure planner — from per-recording onset samples computes
       the keep-segments and the aligned onset positions (no MNE dependency).
@@ -32,13 +36,17 @@ Key pieces:
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
+from functools import lru_cache
+from pathlib import Path
+from typing import Mapping, Sequence
 
 import numpy as np
 import mne
 
-from src.definitions.constants import AssrEpoch
+from src.definitions.constants import AssrEpoch, ProjectPaths
 from src.definitions.fields import ExperimentNames
+from src.preprocessing.marker_shift import load_marker_shift_table
 from src.utils.logging_config import LoggerMixin
 
 _logger = logging.getLogger(__name__)
@@ -55,23 +63,91 @@ class StimulusMarker:
     The label and the offset belong together: reading the annotations without
     applying the offset silently mis-times every onset-locked analysis, so they
     are resolved as one object rather than from two parallel registries.
+
+    The offset is resolved **per recording**. In the ASSR dataset the marker error
+    is a file-format artefact that differs from recording to recording (see
+    :mod:`src.preprocessing.marker_shift`), so a single constant cannot describe
+    it; :attr:`onset_offset_s` is only the fallback for recordings the calibration
+    does not cover. Always go through :meth:`onset_offset_for` — reading
+    :attr:`onset_offset_s` directly re-introduces the constant-offset bug for every
+    calibrated recording.
     """
 
     # Annotation description marking a stimulus (case-insensitive).
     label: str
-    # Seconds added to the marker time to obtain the true stimulus onset.
-    # Negative means the marker lags the stimulus. 0.0 = the marker *is* the onset.
+    # Fallback seconds added to the marker time to obtain the true stimulus onset,
+    # used for recordings absent from `per_recording_offsets`. Negative means the
+    # marker lags the stimulus. 0.0 = the marker *is* the onset.
     onset_offset_s: float = 0.0
+    # Calibrated per-recording offsets, keyed by recording file stem.
+    per_recording_offsets: Mapping[str, float] = field(default_factory=dict)
+
+    def onset_offset_for(self, filename: str | None) -> float:
+        """
+        The marker→onset offset to apply to one recording.
+
+        :param filename: Recording filename, with or without extension. ``None``
+            (no recording in hand) yields the fallback.
+        :return: Seconds to add to this recording's marker times.
+        """
+        if filename is None:
+            return self.onset_offset_s
+        return self.per_recording_offsets.get(Path(filename).stem, self.onset_offset_s)
+
+    def offsets_for(self, filenames: Sequence[str | None]) -> list[float]:
+        """
+        Per-recording offsets for a group, in the order given.
+
+        :param filenames: Recording filenames of the group.
+        :return: One offset per filename.
+        """
+        return [self.onset_offset_for(filename) for filename in filenames]
 
 
 # Per-experiment stimulus marker. Experiments listed here use a stimulus-aware
 # coarse crop during preprocessing; others fall back to the fixed start/end crop.
+#
+# These entries carry the *fallback* offset only. Use `resolve_stimulus_marker` to
+# obtain a marker with the per-recording calibration attached; read this registry
+# directly only to test whether an experiment has stimulus annotations at all.
 EXPERIMENT_STIMULUS_MARKERS = {
     ExperimentNames.ASSR: StimulusMarker(
         label=DEFAULT_STIMULUS_LABEL,
         onset_offset_s=AssrEpoch.MARKER_ONSET_OFFSET_S,
     ),
 }
+
+
+@lru_cache(maxsize=None)
+def resolve_stimulus_marker(
+    experiment_name: ExperimentNames,
+) -> StimulusMarker | None:
+    """
+    The stimulus marker of an experiment, with its per-recording calibration loaded.
+
+    This is the single entry point every consumer should use. The calibration CSV
+    is read once per experiment and cached, so the many places that need an offset
+    do not each pay for a file read — and, more importantly, cannot each decide
+    differently whether to apply one.
+
+    :param experiment_name: Experiment whose marker is requested.
+    :return: The marker with :attr:`StimulusMarker.per_recording_offsets` populated,
+        or ``None`` for experiments without stimulus annotations.
+    """
+    marker = EXPERIMENT_STIMULUS_MARKERS.get(experiment_name)
+    if marker is None:
+        return None
+
+    offsets = load_marker_shift_table(
+        ProjectPaths.get_marker_shift_mapping_path(experiment_name)
+    )
+    if offsets:
+        _logger.info(
+            f"Loaded per-recording stimulus-marker offsets for "
+            f"{len(offsets)} {experiment_name.value} recording(s); recordings "
+            f"without an entry fall back to {marker.onset_offset_s:+.4f} s."
+        )
+    return replace(marker, per_recording_offsets=offsets)
 
 
 def get_stimulus_onset_samples(
@@ -444,13 +520,39 @@ def apply_keep_segments_to_array(
     return np.concatenate(pieces, axis=-1)
 
 
+def resolve_per_recording_offsets(
+    onset_offset_s: float | Sequence[float],
+    n_recordings: int,
+) -> list[float]:
+    """
+    Expand an offset argument into one offset per recording.
+
+    :param onset_offset_s: A single offset shared by every recording, or one
+        offset per recording in the same order.
+    :param n_recordings: Number of recordings the offsets must cover.
+    :return: List of ``n_recordings`` offsets.
+    :raises ValueError: If a sequence is given whose length does not match. Silently
+        recycling or truncating it would misalign the group by hundreds of
+        milliseconds without any visible failure.
+    """
+    if isinstance(onset_offset_s, (int, float, np.floating, np.integer)):
+        return [float(onset_offset_s)] * n_recordings
+    offsets = [float(offset) for offset in onset_offset_s]
+    if len(offsets) != n_recordings:
+        raise ValueError(
+            f"Got {len(offsets)} onset offsets for {n_recordings} recordings; "
+            "they must correspond one-to-one and in the same order."
+        )
+    return offsets
+
+
 def align_raws(
     raws: list[mne.io.Raw],
     stimulus_label: str = DEFAULT_STIMULUS_LABEL,
     keep_tail_sec: float = 0.1,
     pre_window_sec: float | None = None,
     post_window_sec: float | None = None,
-    onset_offset_s: float = 0.0,
+    onset_offset_s: float | Sequence[float] = 0.0,
 ) -> tuple[list[mne.io.Raw], StimulusAligner]:
     """
     Align stimulus onsets across a group of recordings by trimming inter-stimulus
@@ -466,12 +568,19 @@ def align_raws(
         ``None`` keeps the per-subject shortest available lead-out.
     :param onset_offset_s: Marker→onset offset, see
         :func:`get_stimulus_onset_samples`. The splice is planned around the true
-        onsets, so ``keep_tail_sec`` really is the pre-stimulus baseline.
+        onsets, so ``keep_tail_sec`` really is the pre-stimulus baseline. Pass one
+        offset per recording (same order as *raws*) when the marker error differs
+        between recordings, which is what makes their onsets land on a common
+        acoustic time rather than a common *marker* time — see
+        :class:`StimulusMarker`.
     :return: Tuple of (aligned recordings, the fitted :class:`StimulusAligner`).
+    :raises ValueError: If a sequence of offsets does not match the recording count.
     """
     sfreq = raws[0].info["sfreq"]
+    offsets = resolve_per_recording_offsets(onset_offset_s, len(raws))
     onset_samples = [
-        get_stimulus_onset_samples(raw, stimulus_label, onset_offset_s) for raw in raws
+        get_stimulus_onset_samples(raw, stimulus_label, offset)
+        for raw, offset in zip(raws, offsets)
     ]
     recording_lengths = [raw.n_times for raw in raws]
 

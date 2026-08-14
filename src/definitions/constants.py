@@ -26,25 +26,43 @@ class AssrEpoch:
     POST_STIMULUS_S = 0.5  # Interval kept after stimulus offset.
     POST_ONSET_S = 1.0  # Total post-onset span (stimulus + post-stimulus).
 
-    # Offset added to a stimulus marker annotation (``fam+``) to obtain the
-    # acoustic onset of the train. Negative: the marker LAGS the sound, landing
-    # near the end of the 500 ms train, so every window above is defined relative
-    # to ``marker_time + MARKER_ONSET_OFFSET_S``, not to the marker itself.
+    # FALLBACK offset added to a stimulus marker annotation (``fam+``) to obtain
+    # the acoustic onset of the train, used only for recordings absent from the
+    # per-recording calibration. Negative: the marker LAGS the sound, so every
+    # window above is defined relative to ``marker_time + offset``, not to the
+    # marker itself.
     #
-    # This is a property of the paradigm, not of the analysis. It was measured
-    # from 40 Hz inter-trial phase coherence over all 38 ASSR recordings — the
-    # driven response spans [-370, +100] ms around the marker (per-recording
-    # median lag -380 ms, IQR [-398, -360]); see
-    # ``notebooks/00-preprocessing/assr_stimulus_onset_offset.ipynb``. Rounded to
-    # -0.4 s pending confirmation from the paradigm documentation.
+    # The offset is NOT a property of the paradigm — it is a per-recording
+    # file-format artefact. The EDF header stores the recording start only to the
+    # nearest whole second, so annotations come back late by the sub-second
+    # remainder, which differs per recording (measured range 372-455 ms over all
+    # 38 ASSR recordings). The exact per-recording values are calibrated against
+    # the ``.evt`` exports by ``scripts/run_stimulus_shift_calibration.py`` and
+    # stored in ``config/participant_mappings/<experiment>_time_shift.csv``; the
+    # pipeline reads them through
+    # :func:`~src.preprocessing.stimulus_alignment.resolve_stimulus_marker`.
+    # See ``notebooks/00-preprocessing/assr_annotation_discrepancy.ipynb``.
     #
-    # Change this single value to re-time every onset-locked ASSR analysis. Doing
-    # so invalidates the stimulus-aligned products on disk (RAW_CROPPED, the
-    # concatenated array with its ``.stimulus_onsets.npy``, and the wavelet
-    # cache): they must be regenerated, in that order, before any onset-locked
-    # analysis is re-run. Recordings up to and including RAW_AFTER_ICA are
-    # unaffected — the offset is applied when annotations are read, never stored.
-    MARKER_ONSET_OFFSET_S = -0.4
+    # This value is the median of those measurements, i.e. the best single guess
+    # for a recording that has no calibration entry. It is a stopgap: a recording
+    # relying on it is still mis-timed by up to ~50 ms (> 2 cycles at 40 Hz).
+    #
+    # Changing this value, or the calibration CSV, re-times every onset-locked
+    # ASSR analysis and invalidates EVERY product on disk from the coarse crop
+    # onwards. Regenerate, in this order: RAW_BEFORE_ICA / RAW_AFTER_ICA (i.e.
+    # re-run preprocessing), RAW_CROPPED, the concatenated array with its
+    # ``.stimulus_onsets.npy``, and the wavelet cache.
+    #
+    # Preprocessing is included on purpose, and this is easy to get wrong: the
+    # stimulus-aware coarse crop
+    # (:func:`~src.preprocessing.stimulus_alignment.coarse_crop_to_stimulus_span`)
+    # trims around the *offset-adjusted* onsets, so its bounds — and hence the
+    # lead-in every later stage inherits — depend on this value. Reusing
+    # recordings cropped under a different offset silently shortens the
+    # pre-stimulus baseline: ``StimulusAligner`` takes ``pre_target`` as the group
+    # minimum, so one under-cropped recording shortens it for everyone, and the
+    # result can fall below :attr:`PRE_ONSET_S` without any error being raised.
+    MARKER_ONSET_OFFSET_S = -0.4245
 
     @staticmethod
     def pre_onset_samples(sfreq: float) -> int:
@@ -103,6 +121,9 @@ class ProjectPaths:
     DATA_DIR = PROJECT_ROOT / "data"  # Directory where all data is stored.
     COORDINATES_DIR = CONFIG_DIR / "coordinates"  # Directory for all coordinate files.
     RAW_DATA_DIR = DATA_DIR / "raw"  # Directory for all raw data files.
+    EVENTS_DIR = (
+        DATA_DIR / "events"
+    )  # Directory with the recording-native `.evt` event exports (microsecond event times in the acquisition software's own time base; one file per recording, same stem as the raw file).
     INTERIM_DATA_DIR = (
         DATA_DIR / "interim"
     )  # Directory for intermediate products (before ICA, etc.).
@@ -117,6 +138,7 @@ class ProjectPaths:
     )  # Directory where excluded electrodes from processing are stored (we want to typically omit the boundary electrodes).
     EXCLUDED_ICS_FILENAME_MAPPING = "excluded_ics_mapping.csv"  # Filename where the mapping of all ICs selected for exclusion are stored alongside with their category.
     STIMULUS_ONSETS_SUFFIX = ".stimulus_onsets.npy"  # Filename suffix for the stimulus-onset sample positions saved next to a concatenated data array (same prefix as the array).
+    MARKER_SHIFT_MAPPING_SUFFIX = "_time_shift.csv"  # Filename suffix, appended to the experiment name, of the per-recording stimulus-marker shift mapping in `PARTICIPANT_MAPPING_DIR`.
     PLOTS_PATH = PROJECT_ROOT / "plots"  # Path to all project plots.
     RESULTS_DB_PATH = (
         PROJECT_ROOT / "results_db"
@@ -153,6 +175,24 @@ class ProjectPaths:
         )
 
         return data_dir, participant_mapping_path
+
+    @staticmethod
+    def get_marker_shift_mapping_path(experiment_name: ExperimentNames) -> Path:
+        """
+        Get path to the per-recording stimulus-marker shift mapping of an experiment.
+
+        The file is written by ``scripts/run_stimulus_shift_calibration.py`` and
+        read by
+        :func:`~src.preprocessing.stimulus_alignment.resolve_stimulus_marker`. It
+        need not exist — an experiment without one falls back to the registered
+        constant offset.
+
+        :param experiment_name: Experiment whose mapping is requested.
+        :return: Path to the mapping CSV.
+        """
+        return ProjectPaths.PARTICIPANT_MAPPING_DIR / (
+            experiment_name.value + ProjectPaths.MARKER_SHIFT_MAPPING_SUFFIX
+        )
 
     @staticmethod
     def get_experiment_interim_dir(experiment_name: ExperimentNames) -> Path:

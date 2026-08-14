@@ -118,7 +118,9 @@ class TestAssrEpochTiming:
         assert AssrEpoch.PRE_ONSET_S == 0.1
         assert AssrEpoch.STIMULUS_DURATION_S == 0.5
         assert AssrEpoch.POST_STIMULUS_S == 0.5
-        assert AssrEpoch.MARKER_ONSET_OFFSET_S == -0.4
+        # The fallback offset for recordings without a per-recording calibration:
+        # the median of the 38 measured ASSR shifts.
+        assert AssrEpoch.MARKER_ONSET_OFFSET_S == -0.4245
 
     def test_marker_offset_is_a_lag_shorter_than_the_train(self):
         # The `fam+` marker lags the acoustic onset, landing inside the train.

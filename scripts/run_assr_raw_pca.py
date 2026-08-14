@@ -38,6 +38,13 @@ Pipeline (per subject):
    mean explained variance, the topography-consistency diagnostic and the ASSR-band
    SNR of the driven interval (per-subject median and group-mean waveform) — the
    evidence for whether a later component is the better steady-state carrier.
+6. **Unreduced reference** (``--no_unreduced_reference`` to skip). The same
+   trial-averaged data is plotted **before** the reduction, in channel space, as a
+   test reference: the component panels are only trustworthy insofar as they
+   reproduce what channel space already shows. Nothing here needs polarity
+   alignment — the evoked voltage has a physical sign, so the across-participant
+   mean is meaningful directly, which is what makes it a reference *for* the
+   alignment rather than another thing to diagnose.
 
 Inputs (produced by stimulus alignment + the wavelet store jobs)::
 
@@ -54,6 +61,9 @@ touched.
 Output plots::
 
     plots/00-preprocessing/assr_raw_pca/<Condition>_ASSR/*.png
+
+The unreduced reference figures share that directory under the
+``raw_unreduced_*`` prefix.
 """
 
 import argparse
@@ -96,6 +106,10 @@ mne.set_log_level("ERROR")
 _PID_COL = "SingleDataMetadata.PARTICIPANT_ID"
 _PIDX_COL = "SingleDataMetadata.CONCATENATED_PERSON_INDEX"
 _FNAME_COL = "SingleDataMetadata.FILENAME"
+
+# Spacing of the unreduced group-mean topomap series (s). Latencies snap to the
+# nearest sample, and each panel title reports the latency it actually shows.
+_LATENCY_STEP_S = 0.05
 
 
 # --------------------------------------------------------------------------- #
@@ -196,6 +210,54 @@ def assr_snr(
     )
     floor = float(np.median(side)) if side.size else float("nan")
     return float(power[peak] / floor) if floor > 0 else float("nan")
+
+
+def global_field_power(evoked: np.ndarray) -> np.ndarray:
+    """Root mean square across channels, i.e. the global field power.
+
+    One unsigned amplitude trace, insensitive to the dipolar sign structure that
+    makes individual channel waveforms hard to compare.
+
+    Args:
+        evoked: Array whose last two axes are ``(n_channels, win)``, e.g. a single
+            ``(n_channels, win)`` evoked map or a ``(n_subjects, n_channels, win)``
+            stack.
+
+    Returns:
+        The input with the channel axis collapsed, e.g. ``(win,)`` or
+        ``(n_subjects, win)``.
+    """
+    return np.sqrt((np.asarray(evoked, dtype=float) ** 2).mean(axis=-2))
+
+
+def channel_assr_snr(
+    evoked: np.ndarray,
+    stim_mask: np.ndarray,
+    sfreq: float,
+    assr_freq: float,
+) -> np.ndarray:
+    """Steady-state SNR of every channel of an *unreduced* evoked map.
+
+    The measure of :func:`assr_snr` applied to raw channels instead of component
+    scores, so the resulting map localises the steady-state in channel space without
+    assuming that any component carries it — the reference a component loading can be
+    checked against.
+
+    Args:
+        evoked: ``(n_channels, win)`` trial-averaged evoked response.
+        stim_mask: Boolean mask selecting the driven samples of the epoch.
+        sfreq: Sampling rate (Hz).
+        assr_freq: Steady-state frequency (Hz).
+
+    Returns:
+        ``(n_channels,)`` per-channel SNR.
+    """
+    return np.array(
+        [
+            assr_snr(channel, stim_mask, sfreq, assr_freq)
+            for channel in np.asarray(evoked, dtype=float)
+        ]
+    )
 
 
 def component_comparison(
@@ -476,6 +538,279 @@ def plot_topomaps(
 
 
 # --------------------------------------------------------------------------- #
+#  Plotting — unreduced (no-PCA) reference                                     #
+# --------------------------------------------------------------------------- #
+def plot_unreduced_butterfly_per_participant(
+    evoked_all: np.ndarray,
+    gfp: np.ndarray,
+    epoch_times: np.ndarray,
+    labels: list[str],
+    unit: str,
+    stim_end: float,
+    n_used: int,
+    title_suffix: str,
+    plots_dir: Path,
+) -> None:
+    """Per-participant butterfly (all channels) with the GFP drawn on top.
+
+    The unreduced counterpart of the per-component time-course grid: a 40 Hz ripple
+    in a component's score should be visible in these channels.
+
+    Args:
+        evoked_all: ``(n_subjects, n_channels, win)`` trial averages, PID-ordered.
+        gfp: ``(n_subjects, win)`` global field power of the same subjects.
+        epoch_times: ``(win,)`` epoch time axis in seconds, 0 at onset.
+        labels: Participant labels, aligned with *evoked_all*.
+        unit: Amplitude unit for the axis label.
+        stim_end: End of the driven interval (s), shaded.
+        n_used: Stimuli averaged per participant (for the title).
+        title_suffix: Group description appended to the title.
+        plots_dir: Directory the figure is written to.
+    """
+    n_subj, n_channels, _ = evoked_all.shape
+    nrows, ncols = grid_shape(n_subj)
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(3.6 * ncols, 2.7 * nrows),
+        sharex=True,
+        sharey=True,
+        squeeze=False,
+    )
+    flat = axes.flatten()
+    for ax, subj in zip(flat, range(n_subj)):
+        ax.plot(epoch_times, evoked_all[subj].T, lw=0.4, color="steelblue", alpha=0.45)
+        ax.plot(epoch_times, gfp[subj], lw=1.8, color="black")
+        ax.axvspan(0.0, stim_end, color="grey", alpha=0.12, lw=0)
+        ax.axvline(0.0, color="red", ls="--", lw=0.8)
+        ax.set_title(
+            f"{labels[subj]}  (GFP max {gfp[subj].max():.2f})",
+            fontsize=9,
+        )
+    for ax in flat[n_subj:]:
+        ax.axis("off")
+    fig.supxlabel("Time relative to onset (s)")
+    fig.supylabel(f"Evoked voltage, all {n_channels} channels ({unit})")
+    fig.suptitle(
+        f"Unreduced per-participant evoked response, butterfly + GFP (black) — "
+        f"{title_suffix}, {n_used} stimuli averaged",
+        y=1.0,
+    )
+    fig.tight_layout()
+    fig.savefig(
+        plots_dir / "raw_unreduced_butterfly_per_participant.png",
+        dpi=150,
+        bbox_inches="tight",
+    )
+    plt.close(fig)
+
+
+def plot_unreduced_group_timecourse(
+    evoked_all: np.ndarray,
+    gfp: np.ndarray,
+    epoch_times: np.ndarray,
+    labels: list[str],
+    unit: str,
+    stim_end: float,
+    title_suffix: str,
+    plots_dir: Path,
+) -> None:
+    """Per-participant GFPs beside the group-mean evoked response.
+
+    The two black traces answer different questions: the mean of the GFPs measures
+    amplitude regardless of phase, while the GFP of the group mean only survives if
+    participants are phase-consistent. Their ratio (printed by the caller) is the
+    reference for whether a group average is worth reading at all.
+
+    Args:
+        evoked_all: ``(n_subjects, n_channels, win)`` trial averages, PID-ordered.
+        gfp: ``(n_subjects, win)`` global field power of the same subjects.
+        epoch_times: ``(win,)`` epoch time axis in seconds, 0 at onset.
+        labels: Participant labels, aligned with *evoked_all*.
+        unit: Amplitude unit for the axis labels.
+        stim_end: End of the driven interval (s), shaded.
+        title_suffix: Group description appended to the title.
+        plots_dir: Directory the figure is written to.
+    """
+    group_evoked = evoked_all.mean(axis=0)
+    group_gfp = global_field_power(group_evoked)
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4.4), sharex=True)
+
+    ax = axes[0]
+    for subj, label in enumerate(labels):
+        ax.plot(epoch_times, gfp[subj], lw=1.1, alpha=0.75, label=label)
+    ax.plot(epoch_times, gfp.mean(axis=0), lw=2.6, color="black", label="mean of GFPs")
+    ax.set_title("Per-participant GFP (unsigned amplitude)", fontsize=10)
+    ax.set_ylabel(f"GFP ({unit})")
+    ax.legend(loc="upper right", fontsize=7, ncol=3)
+
+    ax = axes[1]
+    ax.plot(epoch_times, group_evoked.T, lw=0.4, color="steelblue", alpha=0.45)
+    ax.plot(epoch_times, group_gfp, lw=2.2, color="black", label="GFP of group mean")
+    ax.set_title(
+        f"Group-mean evoked response, all {group_evoked.shape[0]} channels",
+        fontsize=10,
+    )
+    ax.set_ylabel(f"Evoked voltage ({unit})")
+    ax.legend(loc="upper right", fontsize=8)
+
+    for ax in axes:
+        ax.axvspan(0.0, stim_end, color="grey", alpha=0.12, lw=0)
+        ax.axvline(0.0, color="red", ls="--", lw=1)
+        ax.set_xlabel("Time relative to onset (s)")
+    fig.suptitle(f"Unreduced group-level evoked response — {title_suffix}", y=1.02)
+    fig.tight_layout()
+    fig.savefig(
+        plots_dir / "raw_unreduced_group_butterfly_gfp.png",
+        dpi=150,
+        bbox_inches="tight",
+    )
+    plt.close(fig)
+
+
+def plot_unreduced_topomap_latencies(
+    group_evoked: np.ndarray,
+    epoch_times: np.ndarray,
+    topo_info: mne.Info,
+    info_order: list[int],
+    unit: str,
+    stim_end: float,
+    title_suffix: str,
+    plots_dir: Path,
+    step_s: float = _LATENCY_STEP_S,
+) -> None:
+    """Group-mean evoked topography at a series of latencies (nb05 convention).
+
+    What a component's single loading map summarises into one picture: a component
+    whose loading resembles the topography around the latency where its time course
+    peaks is describing a real spatial mode.
+
+    Args:
+        group_evoked: ``(n_channels, win)`` across-participant mean evoked map, in
+            the canonical channel order.
+        epoch_times: ``(win,)`` epoch time axis in seconds, 0 at onset.
+        topo_info: Montage info supplying the electrode positions.
+        info_order: Indices mapping the canonical channel order onto *topo_info*.
+        unit: Amplitude unit for the colour-bar label.
+        stim_end: End of the driven interval (s); those panels are starred.
+        title_suffix: Group description appended to the title.
+        plots_dir: Directory the figure is written to.
+        step_s: Spacing of the latency series (s); latencies snap to samples.
+    """
+    start = max(float(epoch_times[0]), -step_s)
+    latencies = np.arange(start, float(epoch_times[-1]) + 1e-9, step_s)
+    lat_idx = [int(np.argmin(np.abs(epoch_times - t))) for t in latencies]
+
+    # Symmetric shared scale (nb05 convention): 99th percentile of |voltage|.
+    vlim = float(np.percentile(np.abs(group_evoked[:, lat_idx]), 99))
+    if vlim == 0.0:
+        vlim = 1e-12
+
+    nrows, ncols = grid_shape(len(lat_idx), max_cols=6)
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(2.3 * ncols, 2.5 * nrows), squeeze=False
+    )
+    flat = axes.flatten()
+    im = None
+    for ax, time_idx in zip(flat, lat_idx):
+        im, _ = mne.viz.plot_topomap(
+            group_evoked[info_order, time_idx],
+            topo_info,
+            axes=ax,
+            show=False,
+            cmap="RdBu_r",
+            vlim=(-vlim, vlim),
+            contours=4,
+        )
+        driven = " *" if 0.0 <= epoch_times[time_idx] <= stim_end else ""
+        ax.set_title(f"{epoch_times[time_idx] * 1000:+.0f} ms{driven}", fontsize=9)
+    for ax in flat[len(lat_idx) :]:
+        ax.axis("off")
+    fig.colorbar(
+        im, ax=axes.ravel().tolist(), shrink=0.6, label=f"Evoked voltage ({unit})"
+    )
+    fig.suptitle(
+        f"Unreduced group-mean evoked topography over time (* = driven interval) — "
+        f"{title_suffix}",
+        y=1.0,
+    )
+    fig.savefig(
+        plots_dir / "raw_unreduced_group_topomap_latencies.png",
+        dpi=150,
+        bbox_inches="tight",
+    )
+    plt.close(fig)
+
+
+def plot_unreduced_summary_topomaps(
+    per_subject: np.ndarray,
+    group_values: np.ndarray,
+    topo_info: mne.Info,
+    info_order: list[int],
+    labels: list[str],
+    measure: str,
+    cbar_label: str,
+    filename: str,
+    title_suffix: str,
+    plots_dir: Path,
+) -> None:
+    """Per-participant + group topomaps of one *unsigned* per-channel summary.
+
+    Unsigned quantities use a sequential scale from 0 rather than the symmetric
+    ``RdBu_r`` convention used for loadings, which would spend half its range on
+    values that cannot occur.
+
+    Args:
+        per_subject: ``(n_subjects, n_channels)`` values, PID-ordered.
+        group_values: ``(n_channels,)`` group panel, computed on the group-mean
+            evoked response rather than as the mean of *per_subject* — for SNR the
+            two differ, and this version is the one that says whether the response
+            survives averaging.
+        topo_info: Montage info supplying the electrode positions.
+        info_order: Indices mapping the canonical channel order onto *topo_info*.
+        labels: Participant labels, aligned with *per_subject*.
+        measure: Measure name for the title.
+        cbar_label: Colour-bar label.
+        filename: Output file name inside *plots_dir*.
+        title_suffix: Group description appended to the title.
+        plots_dir: Directory the figure is written to.
+    """
+    panels = [
+        (labels[subj], per_subject[subj][info_order])
+        for subj in range(per_subject.shape[0])
+    ]
+    panels.append(("group-mean evoked", group_values[info_order]))
+
+    vmax = float(np.percentile(np.concatenate([v for _, v in panels]), 99))
+    if not np.isfinite(vmax) or vmax <= 0.0:
+        vmax = 1e-12
+
+    nrows, ncols = grid_shape(len(panels))
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(2.7 * ncols, 2.9 * nrows), squeeze=False
+    )
+    flat = axes.flatten()
+    im = None
+    for ax, (label, vals) in zip(flat, panels):
+        im, _ = mne.viz.plot_topomap(
+            vals,
+            topo_info,
+            axes=ax,
+            show=False,
+            cmap="Reds",
+            vlim=(0.0, vmax),
+            contours=4,
+        )
+        ax.set_title(label, fontsize=9)
+    for ax in flat[len(panels) :]:
+        ax.axis("off")
+    fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.6, label=cbar_label)
+    fig.suptitle(f"Unreduced per-channel {measure} — {title_suffix}", y=1.0)
+    fig.savefig(plots_dir / filename, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+# --------------------------------------------------------------------------- #
 #  Orchestration                                                              #
 # --------------------------------------------------------------------------- #
 def run_pca(args: argparse.Namespace) -> None:
@@ -567,11 +902,15 @@ def run_pca(args: argparse.Namespace) -> None:
     time_courses = np.zeros((n_components, n_subj, pre + post), dtype=np.float64)
     loadings = np.zeros((n_components, n_subj, n_channels), dtype=np.float64)
     explained = np.zeros((n_components, n_subj), dtype=np.float64)
+    # Unreduced channel-space evoked responses, kept for the no-PCA reference
+    # figures (small: n_subj x n_channels x win floats).
+    evoked_all = np.zeros((n_subj, n_channels, pre + post), dtype=np.float64)
     for subj in range(n_subj):
         sig = np.asarray(raw_mm[subj])  # (n_ch, n_times)
         if args.zscore_per_channel:
             sig = zscore(sig, axis=1)  # equal electrode influence (correlation-PCA)
         evoked, n_used = epoch_average(sig, onsets, pre, post)  # (n_ch, win)
+        evoked_all[subj] = evoked
         (
             time_courses[:, subj],
             loadings[:, subj],
@@ -595,6 +934,7 @@ def run_pca(args: argparse.Namespace) -> None:
     time_courses = time_courses[:, order]
     loadings = loadings[:, order]
     explained = explained[:, order]
+    evoked_all = evoked_all[order]
     labels = [f"PSI{idx_to_pid.get(s, '???')}" for s in order]
 
     # ---- Align polarity across participants, per component -------------------
@@ -705,6 +1045,115 @@ def run_pca(args: argparse.Namespace) -> None:
         flush=True,
     )
     print(comparison.round(3).to_string(), flush=True)
+
+    # ---- Unreduced reference (no PCA) ----------------------------------------
+    # The same trial averages before the channel reduction. No polarity alignment
+    # is involved: the evoked voltage has a physical sign, so the group mean is
+    # meaningful directly, which is what makes this a reference for the alignment
+    # above. Structure a component shows that is absent here comes from the
+    # reduction; structure here that no component reproduces is what it discarded.
+    if args.unreduced_reference:
+        gfp = global_field_power(evoked_all)  # (n_subj, win)
+        group_evoked = evoked_all.mean(axis=0)  # (n_channels, win)
+        group_gfp = global_field_power(group_evoked)  # (win,)
+
+        plot_unreduced_butterfly_per_participant(
+            evoked_all,
+            gfp,
+            epoch_times,
+            labels,
+            unit,
+            stim_end,
+            n_used,
+            title_suffix,
+            plots_dir,
+        )
+        plot_unreduced_group_timecourse(
+            evoked_all,
+            gfp,
+            epoch_times,
+            labels,
+            unit,
+            stim_end,
+            title_suffix,
+            plots_dir,
+        )
+        plot_unreduced_topomap_latencies(
+            group_evoked,
+            epoch_times,
+            topo_info,
+            info_order,
+            unit,
+            stim_end,
+            title_suffix,
+            plots_dir,
+        )
+
+        # Per-channel summaries: overall driven amplitude, and where the
+        # steady-state actually is in channel space.
+        chan_rms = np.sqrt((evoked_all[:, :, stim_mask] ** 2).mean(axis=2))
+        group_chan_rms = np.sqrt((group_evoked[:, stim_mask] ** 2).mean(axis=1))
+        chan_snr = np.array(
+            [
+                channel_assr_snr(evoked_all[subj], stim_mask, sfreq, args.assr_freq)
+                for subj in range(n_subj)
+            ]
+        )
+        group_chan_snr = channel_assr_snr(
+            group_evoked, stim_mask, sfreq, args.assr_freq
+        )
+
+        plot_unreduced_summary_topomaps(
+            chan_rms,
+            group_chan_rms,
+            topo_info,
+            info_order,
+            labels,
+            "driven-interval RMS",
+            f"RMS ({unit})",
+            "raw_unreduced_topomap_driven_rms.png",
+            title_suffix,
+            plots_dir,
+        )
+        plot_unreduced_summary_topomaps(
+            chan_snr,
+            group_chan_snr,
+            topo_info,
+            info_order,
+            labels,
+            f"{args.assr_freq:.0f} Hz SNR",
+            "SNR (a.u.)",
+            "raw_unreduced_topomap_assr_snr.png",
+            title_suffix,
+            plots_dir,
+        )
+
+        # A ratio near 1 means the response averages cleanly across participants;
+        # near 1/sqrt(n) means they are essentially independent and the group mean
+        # is averaging noise.
+        phase_ratio = float(
+            group_gfp[stim_mask].mean() / gfp.mean(axis=0)[stim_mask].mean()
+        )
+        top_snr = np.argsort(group_chan_snr)[::-1][:5]
+        group_component_snr = comparison[f"{args.assr_freq:.0f}Hz_SNR_group_mean"]
+        print(
+            f"Unreduced reference: driven-interval GFP of group mean / mean of GFPs "
+            f"= {phase_ratio:.2f} (1.00 = fully phase-consistent across "
+            f"participants, {1 / np.sqrt(n_subj):.2f} = 1/sqrt(n), independent).",
+            flush=True,
+        )
+        print(
+            f"  top channels by {args.assr_freq:.0f} Hz SNR on the group-mean "
+            f"evoked: "
+            + ", ".join(f"{channel_names[i]} {group_chan_snr[i]:.1f}" for i in top_snr),
+            flush=True,
+        )
+        print(
+            f"  best-channel SNR {np.nanmax(group_chan_snr):.1f} vs components: "
+            + ", ".join(f"{pc} {group_component_snr[pc]:.1f}" for pc in pc_labels),
+            flush=True,
+        )
+
     print(f"[DONE] {label}: plots written to {plots_dir}", flush=True)
 
 
@@ -789,6 +1238,16 @@ def build_parser() -> argparse.ArgumentParser:
         "influence).",
     )
     parser.set_defaults(zscore_per_channel=True)
+    parser.add_argument(
+        "--no_unreduced_reference",
+        dest="unreduced_reference",
+        action="store_false",
+        help="Skip the unreduced (no-PCA) channel-space reference figures: "
+        "per-participant butterfly + GFP, group-mean topography over time, and "
+        "per-channel driven RMS / ASSR SNR topomaps. They are the test reference "
+        "the component panels are checked against, and cost no extra data read.",
+    )
+    parser.set_defaults(unreduced_reference=True)
     parser.add_argument(
         "--save_dir",
         type=str,

@@ -37,6 +37,15 @@
 # channel order), never its multi-GB data stream. Runtime is dominated by the
 # per-subject PCA, not IO.
 #
+# The job also writes an UNREDUCED (no-PCA) channel-space reference from the same
+# trial averages — the test reference the component panels are checked against:
+# per-participant butterfly + GFP, the group-mean evoked topography over time, and
+# per-channel driven-RMS / 40 Hz-SNR topomaps. Nothing there needs polarity
+# alignment (the evoked voltage has a physical sign), which is what makes it a
+# reference FOR the alignment rather than another thing to diagnose. It reuses the
+# trial averages already in memory, so it adds no data read. Disable with:
+#     qsub -v UNREDUCED_REFERENCE=0 run_assr_raw_pca.pbs
+#
 # Requires (per condition), produced by the stimulus alignment + wavelet store:
 #   data/processed/assr/concatenated/<Condition>_ASSR.npy
 #   data/processed/assr/concatenated/<Condition>_ASSR.stimulus_onsets.npy
@@ -45,10 +54,11 @@
 # A condition whose inputs are absent (e.g. Psilocybin not yet generated) is
 # skipped cleanly rather than failing the job.
 #
-# Output (one time-course + one topomap figure per component, plus the shared
-# overlay figure):
+# Output (one time-course + one topomap figure per component, the shared overlay
+# figure, and the unreduced reference set):
 #   plots/00-preprocessing/assr_raw_pca/<Condition>_ASSR/raw_pca_pc<N>_*.png
 #   plots/00-preprocessing/assr_raw_pca/<Condition>_ASSR/raw_pca_timecourse_overlay.png
+#   plots/00-preprocessing/assr_raw_pca/<Condition>_ASSR/raw_unreduced_*.png
 # ---------------------------------------------------------------------------
 
 set -e
@@ -86,10 +96,17 @@ cd "$SCRATCHDIR"
 N_COMPONENTS="${N_COMPONENTS:-3}"
 echo "Components: $N_COMPONENTS"
 
-# The runner heredoc below is quoted, so N_COMPONENTS is read from the container
+# Whether to also write the unreduced (no-PCA) channel-space reference figures.
+# 1 = write them (default), 0 = skip. Override with: qsub -v UNREDUCED_REFERENCE=0 ...
+UNREDUCED_REFERENCE="${UNREDUCED_REFERENCE:-1}"
+echo "Unreduced reference: $UNREDUCED_REFERENCE"
+
+# The runner heredoc below is quoted, so these are read from the container
 # environment at run time rather than substituted here.
 export SINGULARITYENV_N_COMPONENTS="$N_COMPONENTS"
 export APPTAINERENV_N_COMPONENTS="$N_COMPONENTS"
+export SINGULARITYENV_UNREDUCED_REFERENCE="$UNREDUCED_REFERENCE"
+export APPTAINERENV_UNREDUCED_REFERENCE="$UNREDUCED_REFERENCE"
 
 # Create the runner script for inside the container
 cat << 'EOF' > run_inside.sh
@@ -97,16 +114,25 @@ cat << 'EOF' > run_inside.sh
 source /opt/myproject/.venv/bin/activate
 
 N_COMPONENTS="${N_COMPONENTS:-3}"
+UNREDUCED_REFERENCE="${UNREDUCED_REFERENCE:-1}"
+
+# Left unquoted below on purpose: empty means "pass no flag at all".
+REFERENCE_FLAG=""
+if [ "$UNREDUCED_REFERENCE" = "0" ]; then
+  REFERENCE_FLAG="--no_unreduced_reference"
+fi
 
 echo "=== Placebo at $(date) ==="
 python /mnt/scripts/run_assr_raw_pca.py \
     --condition Placebo \
-    --n_components "$N_COMPONENTS"
+    --n_components "$N_COMPONENTS" \
+    $REFERENCE_FLAG
 
 # echo "=== Psilocybin at $(date) ==="
 # python /mnt/scripts/run_assr_raw_pca.py \
 #     --condition Psilocybin \
-#     --n_components "$N_COMPONENTS"
+#     --n_components "$N_COMPONENTS" \
+#     $REFERENCE_FLAG
 EOF
 
 chmod +x run_inside.sh
