@@ -11,11 +11,15 @@ from src.definitions.fields import (
     ExcludedICsMetadata,
     EEGConditions,
     ConditionVariants,
+    JOINED_CONDITIONS,
+    REAL_CONDITIONS,
     MusicTypeVariants,
     ChannelTypes,
     ICLabelComponentsClasses,
     ExclusionCategories,
     AnalysisVariants,
+    IvaComponentArrays,
+    IvaVariants,
     PreprocessedDataVariants,
     RAW_DATA_VARIANTS,
     INTERIM_DATA_VARIANTS,
@@ -72,6 +76,24 @@ class TestConditionVariants:
 
     def test_psilocybin(self):
         assert ConditionVariants.PSILOCYBIN.value == "Psilocybin"
+
+    def test_joined(self):
+        assert ConditionVariants.JOINED.value == "Joined"
+
+    def test_joined_tracks(self):
+        assert ConditionVariants.JOINED_TRACKS.value == "JoinedTracks"
+
+    def test_joined_conditions_are_exactly_the_virtual_ones(self):
+        assert set(JOINED_CONDITIONS) == set(ConditionVariants) - set(REAL_CONDITIONS)
+
+    def test_real_conditions_excludes_the_virtual_one(self):
+        # JOINED selects over the real conditions, so anything mapping a *recording*
+        # to a condition must iterate REAL_CONDITIONS rather than the whole enum.
+        assert REAL_CONDITIONS == (
+            ConditionVariants.PLACEBO,
+            ConditionVariants.PSILOCYBIN,
+        )
+        assert ConditionVariants.JOINED not in REAL_CONDITIONS
 
 
 class TestMusicTypeVariants:
@@ -165,3 +187,47 @@ class TestInterimDataVariants:
         assert PreprocessedDataVariants.RAW_AFTER_ICA not in INTERIM_DATA_VARIANTS
         assert PreprocessedDataVariants.RAW_CROPPED not in INTERIM_DATA_VARIANTS
         assert PreprocessedDataVariants.CONCATENATED not in INTERIM_DATA_VARIANTS
+
+
+class TestIvaVariants:
+    def test_values_are_the_canonical_output_subdirectory_names(self):
+        assert {v.value for v in IvaVariants} == {
+            "iva_channel",
+            "iva_frequency_channel",
+            "iva_time",
+            "iva_channel_joined",
+            "iva_channel_joined_tracks",
+        }
+
+    def test_every_value_is_filename_and_path_safe(self):
+        """The values are used verbatim as directory names and filename tokens."""
+        for variant in IvaVariants:
+            assert variant.value.replace("_", "").isalnum()
+
+    def test_the_two_joins_are_distinct_from_the_single_condition_channel_run(self):
+        """Their figures and stored components share a stage; the names must differ."""
+        assert (
+            len(
+                {
+                    IvaVariants.CHANNEL.value,
+                    IvaVariants.CHANNEL_JOINED.value,
+                    IvaVariants.CHANNEL_JOINED_TRACKS.value,
+                }
+            )
+            == 3
+        )
+
+
+class TestIvaComponentArrays:
+    def test_contains_the_expected_component_products(self):
+        assert {v.value for v in IvaComponentArrays} == {
+            "tf_map",
+            "channel_pattern",
+            "timecourse",
+            "spectral_profile",
+            "frequency_channel_pattern",
+        }
+
+    def test_every_name_is_a_valid_npz_key_component(self):
+        for array in IvaComponentArrays:
+            assert array.value.replace("_", "").isalnum()

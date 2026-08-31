@@ -1211,6 +1211,7 @@ if __name__ == "__main__":
             freqs=freqs,
             wavelet_dir=(wavelet_dir / SpectrumTypeVariants.BROADBAND.value),
             reuse_wavelets=args.reuse_wavelets,
+            analyzer=analyzer,
         )
 
         if band_name is None:

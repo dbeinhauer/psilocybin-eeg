@@ -23,6 +23,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 from src.definitions.fields import (
+    REAL_CONDITIONS,
     SpectrumTypeVariants,
     MusicTypeVariants,
     ConditionVariants,
@@ -184,6 +185,53 @@ def add_wavelet_grid_args(parser: argparse.ArgumentParser) -> None:
         help="Number of Morlet frequency steps. Defaults to the project-wide "
         "wavelet grid size (src.definitions.frequency.WAVELET_N_FREQS), giving "
         "≈ 1 Hz resolution over the default range.",
+    )
+
+
+def add_iva_store_args(parser: argparse.ArgumentParser) -> None:
+    """Add the CLI arguments controlling the IVA component store.
+
+    Storing is opt-in rather than automatic because the dominant product is the
+    ``(recordings, components, frequencies, times)`` time-frequency map: at the full
+    time axis that is gigabytes per run, which is not something a plotting run
+    should write to a shared filesystem without being asked.
+
+    :param parser: Parser to extend.
+    """
+    parser.add_argument(
+        "--store_components",
+        action="store_true",
+        default=False,
+        help=(
+            "Store the recovered IVA components (time-frequency maps, channel "
+            "topographies and the marginals the variant produces) under "
+            "data/processed/<experiment>/iva_results/<Condition>/, together with "
+            "the participant label and condition of every row. Off by default: "
+            "the maps are large. See src/io/iva_store.py."
+        ),
+    )
+    parser.add_argument(
+        "--store_dir",
+        type=str,
+        default=None,
+        help=(
+            "Processed-data root the component store is resolved against. The "
+            "'<experiment>/iva_results/<Condition>' suffix is appended "
+            "automatically, so pass a data root (e.g. data/processed), NOT an "
+            "experiment-specific path. Defaults to the project's data/processed."
+        ),
+    )
+    parser.add_argument(
+        "--store_dtype",
+        type=str,
+        default="float32",
+        choices=["float32", "float64"],
+        help=(
+            "Floating precision the stored component arrays are cast to. "
+            "'float32' (default) halves the store and is well past what any "
+            "downstream read-out of these maps resolves; 'float64' keeps the "
+            "computed values bit-exact."
+        ),
     )
 
 
@@ -520,6 +568,147 @@ def participant_labels(filtered_df, n_subjects: int) -> list[str]:
     )
     ids = filtered_df[SingleDataMetadata.PARTICIPANT_ID].tolist()
     return [participant_label(pid) for pid in ids[:n_subjects]]
+
+
+def _ordered_metadata_column(
+    filtered_df,
+    column: SingleDataMetadata,
+    n_subjects: int,
+    description: str,
+) -> list:
+    """Read one metadata column in concatenated-subject order.
+
+    Shares :func:`participant_labels`' contract: the subject axis is ordered by
+    :attr:`~src.definitions.fields.SingleDataMetadata.CONCATENATED_PERSON_INDEX` when
+    the sidecar provides it, and by metadata row order (which *is* the concatenation
+    order) otherwise.
+
+    :param filtered_df: The analyser's ``filtered_df`` metadata table.
+    :param column: Metadata column to read.
+    :param n_subjects: Number of subjects on the data's first axis.
+    :param description: Human-readable column name for error messages.
+    :return: ``n_subjects`` values, ordered by subject index.
+    :raises ValueError: If the metadata is missing, empty, lacks *column*, or covers
+        fewer than *n_subjects* rows.
+    """
+    if filtered_df is None or len(filtered_df) == 0:
+        raise ValueError("No participant metadata available (filtered_df is empty).")
+    if column not in filtered_df.columns:
+        raise ValueError(
+            f"Participant metadata has no {description} column; available: "
+            f"{list(filtered_df.columns)}"
+        )
+    if len(filtered_df) < n_subjects:
+        raise ValueError(
+            f"Participant metadata covers {len(filtered_df)} recording(s) but the "
+            f"data has {n_subjects} subject(s)."
+        )
+
+    if SingleDataMetadata.CONCATENATED_PERSON_INDEX in filtered_df.columns:
+        by_index = dict(
+            zip(
+                filtered_df[SingleDataMetadata.CONCATENATED_PERSON_INDEX],
+                filtered_df[column],
+            )
+        )
+        missing = [s for s in range(n_subjects) if s not in by_index]
+        if missing:
+            raise ValueError(
+                f"CONCATENATED_PERSON_INDEX is missing subject index/indices "
+                f"{missing}; cannot map them to {description}."
+            )
+        return [by_index[s] for s in range(n_subjects)]
+
+    return filtered_df[column].tolist()[:n_subjects]
+
+
+def subject_conditions(filtered_df, n_subjects: int) -> list[str]:
+    """Map each concatenated subject index to its condition.
+
+    Needed whenever the dataset pools both conditions
+    (:attr:`~src.definitions.fields.ConditionVariants.JOINED`), where the subject axis
+    holds every participant twice and the array alone cannot say which half is which.
+
+    :param filtered_df: The analyser's ``filtered_df`` metadata table.
+    :param n_subjects: Number of subjects on the data's first axis.
+    :return: ``n_subjects`` condition values (e.g. ``"Placebo"``), ordered by subject
+        index.
+    :raises ValueError: If the metadata cannot supply the mapping.
+    """
+    values = _ordered_metadata_column(
+        filtered_df, SingleDataMetadata.CONDITION, n_subjects, "CONDITION"
+    )
+    return [v if isinstance(v, str) else v.value for v in values]
+
+
+def condition_index_mask(
+    filtered_df,
+    n_subjects: int,
+    condition: ConditionVariants,
+) -> np.ndarray:
+    """Boolean mask selecting the subjects recorded under *condition*.
+
+    Prefer this over slicing by position: it keeps downstream code correct regardless
+    of how the subject axis happens to be ordered.
+
+    :param filtered_df: The analyser's ``filtered_df`` metadata table.
+    :param n_subjects: Number of subjects on the data's first axis.
+    :param condition: Condition to select.
+    :return: Boolean array of length *n_subjects*.
+    :raises ValueError: If the metadata cannot supply the mapping.
+    """
+    conditions = subject_conditions(filtered_df, n_subjects)
+    return np.asarray([c == condition.value for c in conditions], dtype=bool)
+
+
+def participant_condition_labels(filtered_df, n_subjects: int) -> list[str]:
+    """Label each concatenated subject index with participant *and* condition.
+
+    In a pooled dataset every participant appears twice, so
+    :func:`participant_labels` alone produces duplicate plot labels.
+
+    :param filtered_df: The analyser's ``filtered_df`` metadata table.
+    :param n_subjects: Number of subjects on the data's first axis.
+    :return: ``n_subjects`` labels of the form ``031 Placebo``.
+    :raises ValueError: If the metadata cannot supply the mapping.
+    """
+    participants = participant_labels(filtered_df, n_subjects)
+    conditions = subject_conditions(filtered_df, n_subjects)
+    return [f"{p} {c}" for p, c in zip(participants, conditions)]
+
+
+def paired_subject_index(filtered_df, n_subjects: int) -> np.ndarray:
+    """Map each subject index to the index of the same participant's other condition.
+
+    Lets paired (within-subject) statistics index directly into the subject axis
+    without re-deriving the pairing. In a
+    :attr:`~src.definitions.fields.ConditionVariants.JOINED` dataset every participant
+    contributes exactly two recordings, so every entry is a valid partner index.
+
+    :param filtered_df: The analyser's ``filtered_df`` metadata table.
+    :param n_subjects: Number of subjects on the data's first axis.
+    :return: Integer array of length *n_subjects*; entry *k* is the partner of subject
+        *k*, or ``-1`` where the participant has no second recording.
+    :raises ValueError: If the metadata cannot supply the mapping, or a participant
+        appears more than twice.
+    """
+    participants = participant_labels(filtered_df, n_subjects)
+    partners = np.full(n_subjects, -1, dtype=int)
+
+    positions: dict[str, list[int]] = {}
+    for index, participant in enumerate(participants):
+        positions.setdefault(participant, []).append(index)
+
+    for participant, indices in positions.items():
+        if len(indices) > 2:
+            raise ValueError(
+                f"Participant {participant} appears {len(indices)} times on the "
+                "subject axis; a paired dataset allows at most two recordings."
+            )
+        if len(indices) == 2:
+            first, second = indices
+            partners[first], partners[second] = second, first
+    return partners
 
 
 def analyzers_to_datasets(analyzers: dict) -> dict[str, AnalysisData]:
@@ -908,6 +1097,146 @@ def wavelet_transform(
 _wavelet_transform = wavelet_transform
 
 
+def _wavelet_cache_path(
+    wavelet_dir: Path,
+    label: str,
+    representation: str,
+    freqs: np.ndarray,
+) -> Path:
+    """Cache filename for one label/representation/frequency-grid combination.
+
+    Mirrors the naming used by :func:`wavelet_transform` and
+    :func:`precompute_pre_alignment_wavelet_cache` so all three agree.
+
+    :param wavelet_dir: Cache directory.
+    :param label: Dataset label, e.g. ``"Placebo_ASSR"``.
+    :param representation: ``"power"`` or ``"phase"``.
+    :param freqs: Morlet frequencies (Hz).
+    :return: Path to the ``.npz`` cache file.
+    """
+    safe_label = re.sub(r"[^A-Za-z0-9_-]", "_", label).strip("_")
+    if not safe_label:
+        safe_label = f"dataset_{hashlib.sha256(label.encode()).hexdigest()[:8]}"
+    freq_sig = f"{freqs[0]:.3f}_{freqs[-1]:.3f}_{len(freqs)}"
+    return wavelet_dir / (
+        f"{safe_label}__wavelet_{representation}__{freq_sig}__freqdim1.npz"
+    )
+
+
+def assemble_condition_track_wavelets(
+    analyzer: "EEGSummarizedAnalyzer",
+    music_type: MusicTypeVariants,
+    freqs: np.ndarray,
+    representation: str,
+    wavelet_dir: Path,
+) -> AnalysisData:
+    """Assemble ``JoinedTracks`` wavelets from the per-condition caches, in memory.
+
+    There is deliberately **no** ``JoinedTracks`` wavelet cache on disk. Since the
+    alignment is fitted once over every recording of both conditions, the two
+    per-condition caches already share a time base and carry the same stimuli, so the
+    joined dataset is just a selection plus a concatenation — cheap enough to redo per
+    run and not worth another ~85 GB of storage.
+
+    Each track is z-scored on its own before concatenation. Both segments then have
+    mean 0 and unit variance per ``(subject, channel, frequency)``, so the pooled
+    series does too, which makes a downstream
+    :func:`~src.analysis.wavelet_ica.zscore_by_time` an exact identity — every existing
+    consumer works on this unchanged.
+
+    :param analyzer: A ``JOINED_TRACKS`` analyser, used for the participant cohorts.
+    :param music_type: Music type, needed to derive the per-condition cache labels.
+    :param freqs: Morlet frequencies (Hz).
+    :param representation: ``"power"`` or ``"phase"``.
+    :param wavelet_dir: Directory holding the per-condition caches.
+    :return: The concatenated 4-D ``(n_pairs, n_channels, n_freqs, n_times)`` dataset.
+    :raises FileNotFoundError: If a per-condition cache is missing. Build it first by
+        running the same workflow for that single condition.
+    """
+    from src.analysis.condition_tracks import concatenate_condition_tracks
+
+    wavelet_dir = Path(wavelet_dir)
+    joined_label = f"{ConditionVariants.JOINED_TRACKS.value}_{music_type.value}"
+
+    tracks: dict[ConditionVariants, AnalysisData] = {}
+    participants: dict[ConditionVariants, list[str]] = {}
+    for condition in REAL_CONDITIONS:
+        label = f"{condition.value}_{music_type.value}"
+        source = _wavelet_cache_path(wavelet_dir, label, representation, freqs)
+        if not source.exists():
+            raise FileNotFoundError(
+                f"Per-condition wavelet cache {source} is missing, so the "
+                f"{joined_label} dataset cannot be assembled. Run the same workflow "
+                f"with --condition {condition.value} first."
+            )
+        _logger.info(f"[{joined_label}] loading {source.name} …")
+        loaded = np.load(source)
+        feature_names = (
+            loaded["feature_names"].tolist()
+            if loaded["has_feature_names"].item() and loaded["feature_names"].size > 0
+            else None
+        )
+        data = loaded["data"]
+        # The cache is stored flattened as (subjects, channels*freqs, times).
+        n_subjects, n_flat, n_times = data.shape
+        n_freqs = len(loaded["freqs"])
+        tracks[condition] = AnalysisData(
+            data=data.reshape(n_subjects, n_flat // n_freqs, n_freqs, n_times),
+            sfreq=float(loaded["sfreq"]),
+            representation=(
+                DataRepresentation.WAVELET_PHASE
+                if representation == "phase"
+                else DataRepresentation.WAVELET_POWER
+            ),
+            label=label,
+            feature_names=feature_names,
+            metadata={"freqs": loaded["freqs"], "n_cycles": loaded["n_cycles"]},
+        )
+        participants[condition] = _condition_participants(analyzer, condition)
+
+    paired = concatenate_condition_tracks(
+        tracks,
+        participants,
+        conditions=REAL_CONDITIONS,
+        zscore_mode="per_condition",
+        label=joined_label,
+    )
+    _logger.info(
+        f"[{joined_label}] assembled {paired.n_pairs} pair(s): "
+        f"{paired.data.data.shape}, segments {paired.segment_lengths}."
+    )
+    return paired.data
+
+
+def _condition_participants(
+    analyzer: "EEGSummarizedAnalyzer",
+    condition: ConditionVariants,
+) -> list[str]:
+    """Participant labels describing one per-condition cache's subject axis.
+
+    These must match the cache being read, **not** the paired cohort. A
+    single-condition cache spans that condition's full cohort (e.g. 15 Placebo ASSR
+    subjects), which is a superset of the ones that pair up;
+    :func:`~src.analysis.condition_tracks.concatenate_condition_tracks` does the
+    matching itself and needs a label for every row it might select.
+
+    :param analyzer: A ``JOINED_TRACKS`` analyser, used for the dataset metadata,
+        music types and exclusion categories.
+    :param condition: Condition whose cohort is wanted.
+    :return: Participant labels ordered by that condition's cache subject axis.
+    """
+    from src.filtering.dataset_filter import DatasetFilter
+
+    frame = DatasetFilter.filter_dataset_by_all_categories(
+        analyzer.dataset_handler.dataset_metadata,
+        analyzer.dataset_handler.excluded_participants_metadata,
+        analyzer.music_types,
+        [condition],
+        analyzer.exclusion_categories,
+    )
+    return [participant_label(pid) for pid in frame[SingleDataMetadata.PARTICIPANT_ID]]
+
+
 def precompute_pre_alignment_wavelet_cache(
     analyzers: dict[str, "EEGSummarizedAnalyzer"],
     freqs: np.ndarray,
@@ -969,7 +1298,10 @@ def precompute_pre_alignment_wavelet_cache(
                 "loading RAW_AFTER_ICA per subject …"
             )
 
-            arrays, aligner, info = analyzer.load_pre_alignment_data(
+            # `segments` is indexed by this analyser's selection; `aligner` is fitted
+            # over the whole alignment cohort, so its own keep_segments must not be
+            # zipped with `arrays`.
+            arrays, segments, aligner, info = analyzer.load_pre_alignment_data(
                 resample_freq=resample_freq,
                 n_jobs=n_jobs,
             )
@@ -979,9 +1311,7 @@ def precompute_pre_alignment_wavelet_cache(
             cache_label: str | None = None
             cache_feature_names: list[str] | None = None
 
-            for subj_idx, (subj_arr, segments) in enumerate(
-                zip(arrays, aligner.keep_segments)
-            ):
+            for subj_idx, (subj_arr, keep) in enumerate(zip(arrays, segments)):
                 _logger.info(
                     f"  [{label}] subject {subj_idx + 1}/{len(arrays)} "
                     f"({subj_arr.shape[-1]} samples) …"
@@ -1000,7 +1330,7 @@ def precompute_pre_alignment_wavelet_cache(
                     wd = to_wavelet_phase(ad_subj, freqs, keep_frequency_dim=True)
 
                 # wd.data: (1, n_ch*n_freqs, n_times_full) — trim the time axis.
-                trimmed = apply_keep_segments_to_array(wd.data[0], segments)
+                trimmed = apply_keep_segments_to_array(wd.data[0], keep)
                 # trimmed: (n_ch*n_freqs, n_times_aligned)
                 wavelet_aligned.append(trimmed)
 
@@ -1052,13 +1382,25 @@ def _broadband_wavelet_4d(
     freqs: np.ndarray,
     wavelet_dir: Path | None,
     reuse_wavelets: bool,
+    analyzer: "EEGSummarizedAnalyzer | None" = None,
 ) -> AnalysisData:
     """Return a 4D wavelet ``AnalysisData`` for ``ad``.
 
     Forces ``keep_frequency_dim=True`` and ``reshape_frequency_dim=True`` so
     callers can index the result as ``(n_subjects, n_channels, n_freqs, n_times)``
     for the notebook-parity broadband plots.
+
+    :param analyzer: The analyser *ad* came from, when available. A
+        :attr:`~src.definitions.fields.ConditionVariants.JOINED_TRACKS` dataset must
+        have its cache assembled from the per-condition caches rather than transformed
+        from its own spliced time-domain array, and this is how that is detected. Pass
+        ``None`` for ordinary single-condition datasets.
     """
+    if getattr(analyzer, "concatenates_condition_tracks", False):
+        return assemble_condition_track_wavelets(
+            analyzer, analyzer.music_types[0], freqs, representation, wavelet_dir
+        )
+
     transformed = wavelet_transform(
         {label: ad},
         freqs,

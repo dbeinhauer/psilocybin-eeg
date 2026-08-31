@@ -244,9 +244,7 @@ def _make_mock_raw(n_channels: int, n_times: int, sfreq: float, onset_sec: list[
 class TestLoadPreAlignmentData:
     @patch("src.analysis.summary.DatasetFilter.filter_dataset_by_all_categories")
     @patch("src.analysis.summary.DatasetHandler")
-    def test_returns_list_aligner_and_info(
-        self, mock_dataset_handler_cls, mock_filter
-    ):
+    def test_returns_list_aligner_and_info(self, mock_dataset_handler_cls, mock_filter):
         sfreq = 250.0
         filtered_df = pd.DataFrame(
             {SingleDataMetadata.FILENAME: ["subj1.fif", "subj2.fif"]},
@@ -272,7 +270,7 @@ class TestLoadPreAlignmentData:
             exclusion_categories=[],
         )
 
-        arrays, aligner, info = analyzer.load_pre_alignment_data(
+        arrays, segments, aligner, info = analyzer.load_pre_alignment_data(
             resample_freq=sfreq, n_jobs=1
         )
 

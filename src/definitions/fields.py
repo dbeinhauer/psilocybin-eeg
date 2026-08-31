@@ -12,7 +12,7 @@ class ExperimentNames(Enum):
 
     # Experiment with placebo and psilocybin, with music listening.
     PSILO_MUSIC = "psilo_music"
-    # Auditory steady-state response experiment (no music, Placebo only).
+    # Auditory steady-state response experiment (no music, both conditions).
     ASSR = "assr"
 
 
@@ -74,10 +74,43 @@ class EEGConditions(Enum):
 class ConditionVariants(Enum):
     """
     All variants of experimental conditions, values are ids from filenames.
+
+    :attr:`JOINED` and :attr:`JOINED_TRACKS` are *virtual* conditions: no recording
+    ever carries either. Both select both real conditions at once, restricted to
+    participants that contribute a recording to both (see
+    :meth:`~src.filtering.dataset_filter.DatasetFilter.filter_dataset_by_all_categories`),
+    so both are balanced within-subject designs. Use them wherever a single condition
+    is expected.
+
+    Neither requires any extra preprocessing. The alignment is fitted **once** over
+    every recording of both conditions, so all conditions already share one time base
+    and carry the same stimuli; selecting a condition — or any custom participant
+    subset — is pure filtering on top of that. The two differ only in *which axis* the
+    conditions are pooled along:
+
+    * :attr:`JOINED` pools on the **subject** axis: every recording is one subject, so
+      a participant appears twice. Products are named ``Joined_<MusicType>``; recover a
+      condition with a subject-axis mask
+      (:func:`~scripts.analysis_common.condition_index_mask`).
+    * :attr:`JOINED_TRACKS` pools on the **time** axis: each participant is one subject
+      whose recording is their Placebo track followed by their Psilocybin track.
+      Products are named ``JoinedTracks_<MusicType>``; recover a condition with
+      :meth:`~src.analysis.condition_tracks.PairedConditionTracks.condition_track`.
     """
 
     PLACEBO = "Placebo"
     PSILOCYBIN = "Psilocybin"
+    JOINED = "Joined"
+    JOINED_TRACKS = "JoinedTracks"
+
+
+# The conditions a recording can actually carry. The virtual conditions are excluded:
+# they are selectors over these, never values found in dataset metadata.
+REAL_CONDITIONS = (ConditionVariants.PLACEBO, ConditionVariants.PSILOCYBIN)
+
+# Conditions that select both real conditions and restrict to complete participant
+# pairs. They differ only in the axis the two conditions are pooled along.
+JOINED_CONDITIONS = (ConditionVariants.JOINED, ConditionVariants.JOINED_TRACKS)
 
 
 class MusicTypeVariants(Enum):
@@ -139,6 +172,24 @@ class ExclusionCategories(Enum):
     ORPHAN_BGIN = "orphan_bgin"  # `bgin` annotation label without corresponding stimulus label (fam+ in ASSR).
 
 
+# Exclusion categories applied when *fitting* an alignment, per experiment.
+#
+# Deliberately minimal, and not the same thing as the exclusions an analysis applies.
+# A recording dropped here can never be selected later, because it will not have been
+# aligned; and because the alignment trims to group minima, one bad recording degrades
+# the result for everyone. Only categories that would corrupt the fit belong here:
+# BAD_MUSIC (a wrong TAG channel wrecks the cross-correlation) and WRONG_CONDITION
+# (the recording is not what its metadata claims).
+#
+# Both the alignment scripts and
+# :meth:`~src.analysis.summary.EEGSummarizedAnalyzer.load_pre_alignment_data` read this,
+# so the stored crops and the wavelet cache are guaranteed to describe the same splice.
+ALIGNMENT_EXCLUSIONS: dict[ExperimentNames, tuple[ExclusionCategories, ...]] = {
+    ExperimentNames.PSILO_MUSIC: (ExclusionCategories.BAD_MUSIC,),
+    ExperimentNames.ASSR: (ExclusionCategories.WRONG_CONDITION,),
+}
+
+
 class FrequencyBandNames(Enum):
     """
     Standard EEG frequency band names used for band-specific analyses.
@@ -175,6 +226,65 @@ class SpectrumTypeVariants(Enum):
     BANDS = "bands"  # Per-frequency-band outputs (each band in its own subdir).
 
 
+class IvaVariants(Enum):
+    """
+    All IVA decomposition variants, values are the canonical subdirectory names
+    shared by the plot layout and by the stored component products
+    (:mod:`src.io.iva_store`).
+
+    The value names *which axis the decomposition treats as the mixing
+    (independent) dimension* and how the conditions are pooled, because that pair
+    of choices decides the shape of every product a variant can offer:
+
+    * :attr:`CHANNEL` — mixing = channels, samples = time x frequency. Each
+      component is a shared spectro-temporal source ``(F, T)`` plus a per-recording
+      channel topography ``(C,)``.
+    * :attr:`FREQUENCY_CHANNEL` — mixing = channel x frequency, samples = time. Each
+      component is a timecourse ``(T,)`` plus a spectro-spatial pattern ``(F, C)``;
+      there is no per-component time-frequency map.
+    * :attr:`TIME` — mixing = time, samples = channel x frequency. The transposed
+      companion of :attr:`FREQUENCY_CHANNEL`: a temporal pattern ``(T,)`` plus a
+      spectro-spatial score map ``(F, C)``.
+    * :attr:`CHANNEL_JOINED` — :attr:`CHANNEL` run on the subject-axis join
+      (:attr:`ConditionVariants.JOINED`): every recording is one dataset, so a
+      participant occupies one row per condition.
+    * :attr:`CHANNEL_JOINED_TRACKS` — :attr:`CHANNEL` run on the time-axis join
+      (:attr:`ConditionVariants.JOINED_TRACKS`): one dataset per participant, whose
+      time axis carries both condition tracks end to end, so the row is shared by
+      the conditions and the split is a slice of the time axis.
+    """
+
+    CHANNEL = "iva_channel"
+    FREQUENCY_CHANNEL = "iva_frequency_channel"
+    TIME = "iva_time"
+    CHANNEL_JOINED = "iva_channel_joined"
+    CHANNEL_JOINED_TRACKS = "iva_channel_joined_tracks"
+
+
+class IvaComponentArrays(Enum):
+    """
+    Canonical names of the per-component arrays kept in the IVA results store.
+
+    Every array is indexed ``(recording, component, ...)`` — the leading two axes
+    are the same for all of them, so per-recording bookkeeping (the participant and
+    condition of each row) applies unchanged to any of them. Which arrays a run
+    writes depends on its :class:`IvaVariants`; a reader must therefore ask for a
+    name rather than assume it is present.
+
+    * :attr:`TF_MAP` — ``(S, K, F, T)`` per-recording time-frequency source map.
+    * :attr:`CHANNEL_PATTERN` — ``(S, K, C)`` forward (mixing) channel topography.
+    * :attr:`TIMECOURSE` — ``(S, K, T)`` temporal profile of the component.
+    * :attr:`SPECTRAL_PROFILE` — ``(S, K, F)`` spectral profile of the component.
+    * :attr:`FREQUENCY_CHANNEL_PATTERN` — ``(S, K, F, C)`` spectro-spatial pattern.
+    """
+
+    TF_MAP = "tf_map"
+    CHANNEL_PATTERN = "channel_pattern"
+    TIMECOURSE = "timecourse"
+    SPECTRAL_PROFILE = "spectral_profile"
+    FREQUENCY_CHANNEL_PATTERN = "frequency_channel_pattern"
+
+
 class PreprocessedDataVariants(Enum):
     """
     All variants of possible data stored during preprocessing (for quality of the preprocessing analysis).
@@ -190,7 +300,7 @@ class PreprocessedDataVariants(Enum):
     RAW_EXCLUDED_IC = (
         "raw_excluded_ic"  # Raw dataseries of excluded component selected by ICA.
     )
-    RAW_CROPPED = "cropped"  # Raw dataseries after cropping to the common time window across all participants (after time alignment).
+    RAW_CROPPED = "cropped"  # Raw dataseries after cropping to the common time window across all participants (after time alignment). The alignment is fitted once over every recording of both conditions, so all conditions share one time base and any participant subset can be selected afterwards without re-aligning.
     CONCATENATED = "concatenated"  # Concatenated data across all participants (after stacking into one array).
 
 
