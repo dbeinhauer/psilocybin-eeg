@@ -1,0 +1,267 @@
+#!/bin/bash
+#PBS -N PSILO_IVA_TRACKS_06
+#PBS -l walltime=1:00:00
+#PBS -l select=1:ncpus=8:mem=499gb:scratch_local=80gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-06 IVA — condition comparison on the JOINED_TRACKS (time-concatenated) join.
+#
+# Runs the same pipeline as
+# notebooks/06-iva-condition-comparison/wavelet_iva_channel_joined_tracks.ipynb
+# on full data (no channel/time subset). The companion of
+# run_condition_comparison.pbs: identical pipeline, identical participants, the
+# conditions pooled along a different axis.
+#
+#   subject k  ->  [ ---- Placebo track ---- | ---- Psilocybin track ---- ]
+#
+# Each participant is ONE subject whose recording is their Placebo track followed
+# by their Psilocybin one, so K = P participants (not 2P recordings), IVA mixing
+# = channels, samples = the joint time × frequency axis with time spanning both
+# conditions. After IVA the time axis is split back into the two segments and the
+# comparison is read off the sources.
+#
+# WHAT THIS VARIANT CAN AND CANNOT SHOW. The mixing is estimated once per
+# participant over the whole concatenated recording, so IVA returns a SINGLE set
+# of components covering both conditions — the contrast needs no
+# component-matching step and cannot compare the wrong pair. The price is that
+# there is ONE channel topography per (participant, component), SHARED by both
+# conditions: there is no per-condition topography to compare, so the topography
+# figures are emitted with a single row rather than two identical rows and a
+# zero difference. For a topography contrast use run_condition_comparison.pbs,
+# where every recording gets its own mixing matrix.
+#
+# Only participants recorded under BOTH conditions are kept (12 of the ASSR set:
+# 15 Placebo and 16 Psilocybin recordings, 7 unpaired), so the design is a
+# balanced within-participant one.
+#
+# Z-scoring happens BEFORE the concatenation (--zscore_mode per_condition): each
+# condition is standardised on its own and the standardised tracks are then laid
+# end to end, so each enters the decomposition exactly as in a single-condition
+# run. Consequence, the same trade-off the subject-axis variant makes: an overall
+# power difference between the conditions is normalised away, so what is compared
+# is temporal and spectral STRUCTURE, not amplitude. Pass
+# --zscore_mode joint to keep the amplitude contrast instead.
+#
+# NO new wavelet cache is written: the concatenation consumes the two existing
+# per-condition caches. Unlike the subject-axis join it does NOT need them to
+# share a time base — each condition keeps its own alignment, used only within
+# that condition — so the two tracks may even differ in length. Stage-03
+# (store_assr_wavelets.pbs) must have produced those two caches first.
+#
+# Sign handling: iva_g fixes each component's sign only per participant;
+# align_iva_component_signs resolves it from Sigma_N; align_tf_pc1_signs then
+# re-decides it from PC1 of the per-participant (F, T) maps. All three run BEFORE
+# the split, deliberately — a sign belongs to a (participant, component) pair, so
+# flipping a participant's two segments differently would destroy the one
+# property this variant is built on. A "dataset" here is one participant with
+# both tracks, so no flip can invert their Placebo segment relative to their
+# Psilocybin one.
+#
+# Plots:
+#   - shared_mean_topomaps           the shared topographies, ONE row
+#   - condition_mean_tf_maps         rows = conditions + difference,
+#   - condition_mean_tf_maps_onset   columns = components; the second averaged
+#                                    over stimuli, each condition epoched with
+#                                    ITS OWN onsets on its own segment
+#   - participants/shared_condition_topomap_ic<k>_participants_*
+#   - participants/condition_tf_ic<k>_participants_*
+#   - participants/onset_condition_tf_ic<k>_participants_*
+#         one figure per component: Placebo on the first row, Psilocybin on the
+#         second, one column per participant ordered by ID, so a participant's
+#         two segments are vertically paired. The pairing is tighter than in the
+#         subject-axis variant: the two panels of a column are two halves of ONE
+#         decomposition of ONE recording, same mixing matrix, same sign.
+#
+# Output:
+#   plots/06-iva-condition-comparison/JoinedTracks_ASSR/
+#       broadband/iva_channel_joined_tracks/pca_10/*.png
+#       broadband/iva_channel_joined_tracks/pca_10/participants/*.png
+#   data/processed/assr/iva_results/JoinedTracks/
+#       iva_channel_joined_tracks__ASSR__broadband__pca<N>.npz
+#
+# STORED COMPONENTS (--store_components). The run also keeps what it recovered,
+# not only the figures drawn from it: the sign-aligned TF maps and the channel
+# topographies, with the participant label of every row. They go in UNSPLIT, on
+# the concatenated time axis, together with the segment order and lengths, so the
+# file answers both questions — the whole recording, and either condition via
+# IvaComponentResults.condition_track. The shared topography is stored ONCE per
+# participant rather than duplicated per condition, matching what the model
+# actually estimated. Read it back with src.io.iva_store.load_iva_components.
+#
+# Written as float32 to the HOME filesystem (not scratch), so it counts against
+# the quota there: ~0.7 GB at --n_pca 3 and ~2.3 GB at --n_pca 10 for the full
+# ASSR extent, dominated entirely by the TF maps. A rerun of the same
+# (condition, variant, music type, band, n_pca) tuple replaces its own entry.
+#
+# NB --zscore_mode is NOT part of that tuple, so a "joint" run OVERWRITES the
+# "per_condition" entry of the same --n_pca. The mode is recorded inside the file
+# (extras["zscore_mode"]), so a stored entry is never ambiguous about which it
+# was — but if you want both on disk at once, give one of them its own
+# --store_dir, the way the joint block below already gives itself its own
+# --save_dir.
+#
+# MEMORY. Tighter than the subject-axis job, because the concatenation transiently
+# holds the two per-condition tensors AND the standardised segments AND the
+# concatenated result. For the full ASSR extent that peaks around ~290 GB
+# (against ~230 GB for run_condition_comparison.pbs). It fits mem=499gb; it does
+# NOT fit a smaller node, so do not reduce mem without also setting --n_times.
+#
+# NB --subset_cache is deliberately NOT passed here. At the full extent the
+# "subset" is the whole cache written back uncompressed, i.e. ~110 GB of disk per
+# condition for no saving. It pays off only for a channel/time subset — see the
+# commented exploration block below.
+#
+# NB --n_times is applied PER CONDITION (per segment), so the concatenated sample
+# axis is n_freqs × 2 × --n_times. --n_pca reduces the CHANNEL axis, so it must
+# be <= the number of channels (~195 after preprocessing).
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+
+WAVELET_DIR="/mnt/data/processed"
+# Root the component store resolves against; the
+# '<experiment>/iva_results/<Condition>' suffix is appended by the script. Passed
+# explicitly rather than left to the default so the destination does not depend on
+# where PROJECT_ROOT lands inside the container bind mount.
+STORE_DIR="/mnt/data/processed"
+
+# Everything except --n_pca and --zscore_mode, so the variants below can vary them.
+# An argument repeated on one command line takes its LAST value, so a flag that also
+# lives in this array cannot be overridden by prefixing it — it has to be left out.
+# --store_dir is here for the same reason the header gives: a run wanting its own
+# store has to be spelled out separately rather than prefixed.
+COMMON_ARGS=(
+    --experiment assr
+    --conditions Placebo Psilocybin
+    --random_state 42
+    --iva_opt_approach newton
+    --iva_max_iter 1024
+    --wavelet_data_dir "$WAVELET_DIR"
+    --reuse_wavelets
+    --store_components
+    --store_dir "$STORE_DIR"
+    --n_jobs -1
+)
+
+echo "=== full extent at $(date) ==="
+python /mnt/scripts/run_iva_condition_tracks.py \
+    --n_pca 5 \
+    --zscore_mode per_condition \
+    "${COMMON_ARGS[@]}"
+
+# --- Exploration sweep -----------------------------------------------------
+# A channel/time subset instead of the full extent. This is where
+# --subset_cache earns its keep: the first run writes the trimmed tensor to
+# notebooks/03-wavelet-analysis/wavelet_cache/<experiment>/, every later run at
+# the SAME extent reads it back and never decompresses the ~50 GB source cache.
+# The cache is keyed by condition and extent, not by workflow, so the 03/04/05
+# notebooks and run_condition_comparison.pbs read the very same entries.
+#
+# echo "=== subset sweep at $(date) ==="
+# for N_PCA in 10 20; do
+#     python /mnt/scripts/run_iva_condition_tracks.py \
+#         --n_pca "$N_PCA" \
+#         --zscore_mode per_condition \
+#         --n_channels 32 \
+#         --n_times 3000 \
+#         --subset_cache \
+#         "${COMMON_ARGS[@]}"
+# done
+
+# --- Keep the amplitude contrast -------------------------------------------
+# "joint" z-scores over the whole concatenated recording instead of per track, so
+# an overall power difference between the conditions survives as a mean offset
+# between the segments. Writes to the same paths, so run it into its own
+# --save_dir AND its own --store_dir if you want both side by side. COMMON_ARGS is
+# expanded last and would win, so this variant spells the store out itself rather
+# than inheriting it.
+#
+# python /mnt/scripts/run_iva_condition_tracks.py \
+#     --experiment assr \
+#     --conditions Placebo Psilocybin \
+#     --n_pca 10 \
+#     --zscore_mode joint \
+#     --save_dir /mnt/plots/joint_zscore \
+#     --store_components \
+#     --store_dir /mnt/data/processed_joint_zscore \
+#     --random_state 42 \
+#     --iva_opt_approach newton \
+#     --iva_max_iter 1024 \
+#     --wavelet_data_dir "$WAVELET_DIR" \
+#     --reuse_wavelets \
+#     --n_jobs -1
+
+# --- Per-band runs ---------------------------------------------------------
+# Slices the concatenated tensor to one band before IVA; plots land under bands/
+# with a '<band>_' prefix, so they never collide with the broadband set.
+#
+# for BAND in alpha gamma; do
+#     echo "=== band $BAND at $(date) ==="
+#     python /mnt/scripts/run_iva_condition_tracks.py \
+#         --n_pca 10 \
+#         --zscore_mode per_condition \
+#         --band "$BAND" \
+#         "${COMMON_ARGS[@]}"
+# done
+
+# --- psilo_music ------------------------------------------------------------
+# Both music types, each its own run. Note this variant does NOT need the two
+# conditions to share a time base, so it works even where the subject-axis join
+# would not.
+#
+# python /mnt/scripts/run_iva_condition_tracks.py \
+#     --experiment psilo_music \
+#     --music_type CLASSIC PSYTRANCE \
+#     --conditions Placebo Psilocybin \
+#     --zscore_mode per_condition \
+#     --n_pca 10 \
+#     --wavelet_data_dir "$WAVELET_DIR" \
+#     --reuse_wavelets \
+#     --n_jobs -1
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch

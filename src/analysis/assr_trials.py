@@ -223,6 +223,81 @@ def project_channels(filters: np.ndarray, track: np.ndarray) -> np.ndarray:
     return np.tensordot(filters, track, axes=([1], [0]))
 
 
+def pca_reconstruction_projectors(
+    channel_patterns: np.ndarray,
+    spatial_filters: np.ndarray,
+    *,
+    tolerance: float = 1e-5,
+) -> np.ndarray:
+    """Per-recording orthogonal PCA project-and-reconstruct operators.
+
+    The IVA components live in a per-recording PCA subspace of the channel space. The
+    orthogonal projector onto that subspace, in channel coordinates, is recoverable
+    **exactly** from the arrays already in hand: with orthonormal-row PCA loadings ``P``
+    and filter ``U = W P``, the stored pattern is ``A = pinv(U) = P^T W^-1``, so::
+
+        A @ U = P^T P  ==  channel_patterns[s].T @ spatial_filters[s]
+
+    The whitening ``W`` cancels and what remains is ``P^T P`` — the same PCA the
+    decomposition used. It is checked rather than trusted: an orthogonal projector is
+    idempotent and symmetric.
+
+    :param channel_patterns: ``(rows, components, channels)`` stored forward patterns.
+    :param spatial_filters: ``(rows, components, channels)`` from
+        :func:`recover_spatial_filters`.
+    :param tolerance: Largest tolerated idempotency / symmetry residual.
+    :return: ``(rows, channels, channels)`` projectors, one per recording.
+    :raises ValueError: On a shape mismatch, or a residual above *tolerance* (the stored
+        patterns and filters are then inconsistent).
+    """
+    patterns = np.asarray(channel_patterns, dtype=float)
+    filters = np.asarray(spatial_filters, dtype=float)
+    if patterns.shape != filters.shape or patterns.ndim != 3:
+        raise ValueError(
+            f"channel_patterns {patterns.shape} and spatial_filters {filters.shape} "
+            "must be the same (rows, components, channels) shape."
+        )
+    projectors = np.stack(
+        [patterns[s].T @ filters[s] for s in range(patterns.shape[0])]
+    )
+    idempotency = max(float(np.abs(p @ p - p).max()) for p in projectors)
+    symmetry = max(float(np.abs(p - p.T).max()) for p in projectors)
+    if max(idempotency, symmetry) > tolerance:
+        raise ValueError(
+            f"The recovered PCA projector is not an orthogonal projector (idempotency "
+            f"{idempotency:.2e}, symmetry {symmetry:.2e}, tolerance {tolerance:.1e}); "
+            "the stored patterns and filters are inconsistent."
+        )
+    return projectors
+
+
+def pca_mask_rows(binary_filter: np.ndarray, projectors: np.ndarray) -> np.ndarray:
+    """The binary mask carried into each recording's PCA subspace: ``mask @ P^T P``.
+
+    The same fronto-central electrode average as the full mask, but reading only the
+    part of the signal the PCA reduction kept — the apples-to-apples reference for the
+    learned components, which can also see only that subspace. Unlike the full mask this
+    is **per recording** and **signed**: projecting a non-negative electrode average onto
+    a subspace can turn it negative.
+
+    :param binary_filter: ``(channels,)`` fixed weighting from
+        :func:`binary_filter_weights`.
+    :param projectors: ``(rows, channels, channels)`` from
+        :func:`pca_reconstruction_projectors`.
+    :return: ``(rows, channels)`` per-recording channel weightings.
+    :raises ValueError: If the channel axes disagree.
+    """
+    binary = np.asarray(binary_filter, dtype=float)
+    proj = np.asarray(projectors, dtype=float)
+    if binary.ndim != 1 or proj.ndim != 3 or proj.shape[-1] != binary.size:
+        raise ValueError(
+            f"binary_filter {binary.shape} and projectors {proj.shape} disagree; want "
+            "(channels,) and (rows, channels, channels)."
+        )
+    # (C,) @ (rows, C, C) -> (rows, C): binary @ projectors[s] for every recording s.
+    return binary @ proj
+
+
 # ---------------------------------------------------------------------------
 # Polarity anchoring
 # ---------------------------------------------------------------------------

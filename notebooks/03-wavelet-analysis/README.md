@@ -17,6 +17,62 @@ Two representations are explored:
 - **Phase** — the instantaneous angle (−π, π] of the oscillation, capturing
   *timing* independently of amplitude.
 
+## Wavelet caches
+
+Two caches back every wavelet workflow in the project, and they are not
+interchangeable:
+
+| | Source-of-truth cache | Subset cache |
+|---|---|---|
+| Path | `data/processed/<experiment>/wavelets/<band>/` | `notebooks/03-wavelet-analysis/wavelet_cache/<experiment>/<band>/` |
+| Resolver | `resolve_wavelet_dir(None, experiment)` | `resolve_notebook_wavelet_cache_dir(experiment)` |
+| Extent | full cohort, all channels, whole aligned time axis | exactly the extent that was asked for |
+| Written by | the preprocessing / pre-alignment precompute | `compute_wavelet_datasets(..., subset_cache_dir=...)` |
+| Format | compressed (`savez_compressed`) | uncompressed, written atomically |
+| Size (ASSR broadband) | ~49 GB Placebo, ~52 GB Psilocybin | whatever the requested extent needs |
+
+The source-of-truth cache is the authority, but reading it means decompressing all of
+it — even to take a 32-channel, 3000-sample slice. The subset cache stores that slice
+instead, so the first run at a given extent pays the full cost and every run after it
+reads back only what it uses.
+
+**The subset cache lives here because this is the notebook that owns the Morlet
+transform, but nothing about it is stage-03-specific — it is meant to be shared.** Its
+entries are keyed by dataset label, representation, frequency grid, extent and the
+frequency-axis flags, *not* by the notebook that wrote them, so a subset stored by an
+04/05/06 run is picked up unchanged by an 03 run at the same extent, and vice versa.
+Since the Placebo and Psilocybin caches are the ones every workflow reads, filling
+them in once pays off across all of them.
+
+To opt a workflow in, pass the directory through:
+
+```python
+from scripts.notebook_helpers import (
+    compute_wavelet_datasets,
+    resolve_notebook_wavelet_cache_dir,
+    resolve_wavelet_dir,
+)
+
+WAVELET_DIR = resolve_wavelet_dir(None, EXPERIMENT_NAME) / "broadband"
+WAVELET_SUBSET_CACHE_DIR = (
+    resolve_notebook_wavelet_cache_dir(EXPERIMENT_NAME) / "broadband"
+)
+
+broadband_datasets = compute_wavelet_datasets(
+    datasets=datasets,
+    analyzers=analyzers,
+    ...,
+    wavelet_dir=WAVELET_DIR,
+    subset_cache_dir=WAVELET_SUBSET_CACHE_DIR,  # first run writes, later runs read
+)
+```
+
+`subset_cache_dir` defaults to `None` (cache disabled), so call-sites that do not pass
+it are unaffected. Pass `reuse_subset_cache=False` to recompute and overwrite an entry
+— the escape hatch if the source-of-truth cache was rebuilt under the same extent.
+`load_joined_condition_wavelets` and `load_paired_condition_wavelets` forward both
+arguments per condition.
+
 ## Notebooks
 
 | Notebook | Scope | Key analyses |

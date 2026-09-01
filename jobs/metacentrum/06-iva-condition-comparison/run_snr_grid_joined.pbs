@@ -1,0 +1,125 @@
+#!/bin/bash
+#PBS -N PSILO_SNR_GRID_JOINED_06
+#PBS -l walltime=1:00:00
+#PBS -l select=1:ncpus=4:mem=100gb:scratch_local=10gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-06 — full-recording ASSR SNR / condition-contrast GRID, SUBJECT-axis join.
+#
+# Runs scripts/run_assr_snr_grid.py for the CHANNEL_JOINED decomposition: the whole
+# current workflow of
+# notebooks/06-iva-condition-comparison/iva_component_analysis_joined.ipynb on the
+# FULL wavelet cache, sweeping the frequency-selection x stimulus-window grid.
+#
+# HOW THIS DIFFERS FROM run_snr_grid_tracks.pbs. Only the decomposition. The
+# subject-axis join estimates ONE mixing matrix PER RECORDING, so a participant's
+# Placebo and Psilocybin rows do NOT share a filter, a topography or a PCA subspace.
+# run_assr_snr_grid.py handles that: it resolves the filter, the PCA-mask operator
+# AND the polarity anchor per (participant, condition) through results.row. (This is
+# exactly the assumption the older run_assr_trial_stats.py could not make, which is
+# why that script is time-axis only.) Everything else — the two references, the two
+# signal variants, the three test families, the grid — is identical.
+#
+# THE GRID this job runs at once:
+#   --halfwidths 0 5            -> 40 Hz single bin AND 35-45 Hz band mean
+#   --stimulus_intervals        -> 0-500 ms AND 200-500 ms test windows
+# crossed with both signal variants -> 2 x 2 x 2 = 8 cells, all in one CSV.
+#
+# RESOURCES. I/O bound, one streamed pass over the ~50 GB DEFLATE cache per
+# condition (~13 min each). mem=32gb holds the stored tf_maps (~2 GB for the 2P-row
+# subject-axis store) plus the kept-frequency projections; ncpus=4 because the
+# decompression is single-threaded.
+#
+# NEEDS ON DISK (all from earlier stages):
+#   data/processed/assr/iva_results/Joined/iva_*__pca<N>.npz          (the store)
+#   data/processed/assr/wavelets/broadband/<Cond>_ASSR__wavelet_power__*__freqdim1.npz
+#   data/processed/assr/concatenated/<Cond>_ASSR.stimulus_onsets.npy
+#   data/processed/assr/concatenated/<Cond>_ASSR.metadata.csv
+#
+# WRITES:
+#   results/assr/assr_snr_grid__iva_channel_joined__pca<N>.csv         (all cells)
+#   plots/06-iva-condition-comparison/Joined_ASSR/broadband/assr_snr_grid/
+#       pca_<N>/{pvalue_summary,snr_by_condition}__<variant>__<sel>__<window>.png
+#
+# The time-axis counterpart is run_snr_grid_tracks.pbs.
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+
+DATA_DIR="/mnt/data/processed"
+
+python /mnt/scripts/run_assr_snr_grid.py \
+    --experiment assr \
+    --variant iva_channel_joined \
+    --store_condition Joined \
+    --music_type ASSR \
+    --conditions Placebo Psilocybin \
+    --n_pca 5 \
+    --halfwidths 0 5 \
+    --stimulus_intervals 0:0.5 0.2:0.5 \
+    --signal_variants zscored prestim \
+    --contrast_alternative greater \
+    --snr_alternative less \
+    --store_dir "$DATA_DIR" \
+    --wavelet_data_dir "$DATA_DIR" \
+    --results_dir /mnt/results/assr \
+    --save_dir /mnt/plots
+
+# --- Other component counts ------------------------------------------------
+# for N_PCA in 3 10; do
+#     echo "=== pca $N_PCA at $(date) ==="
+#     python /mnt/scripts/run_assr_snr_grid.py \
+#         --experiment assr --variant iva_channel_joined \
+#         --store_condition Joined --music_type ASSR \
+#         --conditions Placebo Psilocybin --n_pca "$N_PCA" \
+#         --halfwidths 0 5 --stimulus_intervals 0:0.5 0.2:0.5 \
+#         --store_dir "$DATA_DIR" --wavelet_data_dir "$DATA_DIR" \
+#         --results_dir /mnt/results/assr --save_dir /mnt/plots
+# done
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch

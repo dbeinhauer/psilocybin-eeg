@@ -1,0 +1,201 @@
+#!/bin/bash
+#PBS -N PSILO_TRIAL_STATS_06
+#PBS -l walltime=4:00:00
+#PBS -l select=1:ncpus=4:mem=32gb:scratch_local=10gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-06 — per-trial 40 Hz ASSR extraction and the participant-level tests.
+#
+# Runs scripts/run_assr_trial_stats.py, which is Steps 6-11 of
+# notebooks/06-iva-condition-comparison/iva_component_analysis_joined_tracks.ipynb
+# on the FULL recording instead of the stage-03 subset caches.
+#
+# WHY THIS IS A JOB AT ALL, and why it asks for so little. Everything downstream
+# of the projection is tiny — the extracted trials are a few MB and the tests run
+# in under a second. The cost is one pass over the source-of-truth wavelet cache
+# under data/processed/<experiment>/wavelets/, which is ~50 GB of
+# DEFLATE-compressed float64 per condition. That entry cannot be memory-mapped
+# (it is compressed) and cannot be loaded (it is 55 GB uncompressed), so
+# src.io.loading.stream_wavelet_cache_subjects decompresses it once, subject by
+# subject, holding only one channel's frequency block at a time.
+#
+# The run is therefore I/O bound, not memory bound:
+#   - decompression measured at ~70 MB/s, so ~13 min per condition, ~30 min total
+#   - peak RSS a few hundred MB: one subject's kept-frequency buffer is
+#     195 channels x 11 bins x 46976 samples x 8 B = ~0.8 GB at the widest, and the
+#     projected result is ~0.3 GB per condition
+#   - single-threaded; extra cores buy nothing, so this asks for 4, not 32
+#
+# mem=32gb and ncpus=4 are deliberate. Do NOT copy the 499gb/8cpu header from
+# run_condition_tracks.pbs — that job holds whole wavelet tensors in RAM; this one
+# never does.
+#
+# WHAT IT NEEDS ON DISK, all produced by earlier stages:
+#   data/processed/<exp>/iva_results/<StoreCondition>/iva_*__pca<N>.npz
+#       the stored decomposition, from run_condition_tracks.pbs --store_components
+#   data/processed/<exp>/wavelets/broadband/<Cond>_<Music>__wavelet_power__*__freqdim1.npz
+#       the source cache, from 03-wavelet-analysis/store_assr_wavelets.pbs
+#   data/processed/<exp>/concatenated/<Cond>_<Music>.stimulus_onsets.npy
+#   data/processed/<exp>/concatenated/<Cond>_<Music>.metadata.csv
+#       the onsets and the subject-index -> participant mapping. The onsets are NOT
+#       in the component store (a run written before onsets were stored has none),
+#       and the concatenated array is what the wavelets were computed on, so its
+#       sidecar indexes exactly the axis the projected tracks live on.
+#
+# WHAT IT WRITES:
+#   data/processed/<exp>/assr_trials/assr_trials__<variant>__<music>__<sel>__pca<N>.npz
+#       (participants x sources x trials x samples), raw power plus both per-trial
+#       normalisations, with every axis needed to interpret them. A rerun of the
+#       same (variant, music, selection, n_pca) replaces its own entry.
+#   results/<exp>/assr_trial_stats__<sel>__pca<N>.csv
+#   plots/06-iva-condition-comparison/<StoreCondition>_<Music>/broadband/
+#       assr_trial_stats/pca_<N>/{trial_course_by_source,pvalue_summary}_<sel>.png
+#
+# NB these filenames collide with what the notebook writes, deliberately: they are
+# the same product, and the full-recording version supersedes the 9-trial demo one.
+# Point --trials_dir somewhere else to keep both.
+#
+# THE TESTS. Participants are the unit (n = 12 on the ASSR set), exact Wilcoxon
+# signed-rank, no multiplicity correction:
+#   contrast       - is Psilocybin lower than Placebo, per source. One-sided
+#                    ("greater" on Placebo - Psilocybin) because the direction was
+#                    fixed in advance, which is only meaningful because component
+#                    polarity is first anchored to the ASSR electrodes.
+#   discrimination - does a component separate the conditions BETTER than the fixed
+#                    electrode mask. An interaction, not a within-condition
+#                    comparison; 0 means "exactly as good as the mask". Every
+#                    component is tested and none is selected by its own effect
+#                    size, which would bias the comparison.
+#
+# The floor matters more than the effect size here: with 12 participants no p can
+# fall below 0.00049 two-sided (0.00024 one-sided), and that needs all 12 pointing
+# the same way. More TRIALS barely helps — variance of a participant's summary is
+# sigma_b^2 + sigma_w^2/m, and past m ~ 50 only sigma_b^2/12 remains. The binding
+# constraint is the number of participants.
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+
+# Roots passed explicitly rather than left to the default, so the destinations do
+# not depend on where PROJECT_ROOT lands inside the container bind mount.
+DATA_DIR="/mnt/data/processed"
+
+COMMON_ARGS=(
+    --experiment assr
+    --variant iva_channel_joined_tracks
+    --store_condition JoinedTracks
+    --music_type ASSR
+    --conditions Placebo Psilocybin
+    --store_dir "$DATA_DIR"
+    --wavelet_data_dir "$DATA_DIR"
+    --trials_dir "$DATA_DIR/assr/assr_trials"
+    --results_dir /mnt/results/assr
+    --save_dir /mnt/plots
+)
+
+echo "=== full extent at $(date) ==="
+python /mnt/scripts/run_assr_trial_stats.py \
+    --n_pca 5 \
+    --halfwidths 0 5 \
+    --test_selection 40hz \
+    --response_measure stimulus \
+    --contrast_alternative greater \
+    "${COMMON_ARGS[@]}"
+
+# --- The other response measure --------------------------------------------
+# "stimulus_minus_rest" subtracts the rest of the epoch from the driven interval,
+# which cancels whatever offset the per-trial normalisation left behind because
+# both halves carry it equally. It gave visibly different effect sizes on the demo
+# cache, so it is a genuine fork — pick ONE before reading any p-value rather than
+# running both and choosing afterwards. Give it its own --results_dir so the two
+# never overwrite each other.
+#
+# python /mnt/scripts/run_assr_trial_stats.py \
+#     --n_pca 5 \
+#     --halfwidths 0 5 \
+#     --response_measure stimulus_minus_rest \
+#     --contrast_alternative greater \
+#     --results_dir /mnt/results/assr_minus_rest \
+#     --save_dir /mnt/plots/minus_rest \
+#     --skip_trial_files \
+#     "${COMMON_ARGS[@]:0:12}"
+
+# --- The wider band as the tested selection --------------------------------
+# Both selections are extracted either way; this only moves which one the tests
+# and figures use. At 20 cycles the 40 Hz wavelet's frequency spread is +-2 Hz, so
+# 35-45 Hz is essentially the peak rather than its neighbourhood — expect the two
+# to agree, and treat a disagreement as a sign the response is not where it should
+# be rather than as a result.
+#
+# python /mnt/scripts/run_assr_trial_stats.py \
+#     --n_pca 5 \
+#     --halfwidths 0 5 \
+#     --test_selection 35-45hz \
+#     "${COMMON_ARGS[@]}"
+
+# --- Other component counts ------------------------------------------------
+# Needs the matching --store_components run to exist first; the script reads the
+# store, it does not decompose. Each --n_pca is its own pass over the cache, so a
+# sweep costs ~30 min per value — raise walltime accordingly.
+#
+# for N_PCA in 3 10; do
+#     echo "=== pca $N_PCA at $(date) ==="
+#     python /mnt/scripts/run_assr_trial_stats.py \
+#         --n_pca "$N_PCA" \
+#         --halfwidths 0 5 \
+#         "${COMMON_ARGS[@]}"
+# done
+
+# --- The subject-axis join -------------------------------------------------
+# ConditionVariants.JOINED estimates a mixing matrix PER RECORDING, so a
+# participant's two conditions do NOT share a filter. The polarity anchoring here
+# assumes they do — it flips by a pattern shared between conditions, which is what
+# makes the flip symmetric and the paired test valid. Do not point this script at
+# a JOINED store without rethinking that step.
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch

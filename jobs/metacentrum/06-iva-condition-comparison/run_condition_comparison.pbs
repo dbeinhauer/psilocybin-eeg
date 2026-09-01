@@ -1,0 +1,208 @@
+#!/bin/bash
+#PBS -N PSILO_IVA_JOINED_06
+#PBS -l walltime=1:00:00
+#PBS -l select=1:ncpus=8:mem=499gb:scratch_local=80gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-06 IVA — condition comparison on the JOINED condition.
+#
+# Runs the same pipeline as
+# notebooks/06-iva-condition-comparison/wavelet_iva_channel_joined.ipynb
+# on full data (no channel/time subset). Placebo and Psilocybin are pooled on
+# the SUBJECT axis, so every recording is one IVA dataset: K = 2P recordings,
+# IVA mixing = channels, samples = the joint time × frequency axis, per-
+# recording PCA over channels → IVA-G. The spectro-temporal sources (F, T) are
+# therefore shared by both conditions while the channel topographies (C,) stay
+# per recording, which is what makes the per-condition contrast meaningful.
+#
+# Only participants recorded under BOTH conditions are kept, so the design is
+# a balanced within-participant one.
+#
+# NO new wavelet cache is written: the pooled tensor is assembled in memory
+# from the two existing per-condition caches (the alignment was fitted over
+# every recording of both conditions, so they already share one time base).
+# Stage-03 (store_assr_wavelets.pbs) must have produced those two caches first.
+#
+# Sign handling, in order: iva_g fixes each component's sign only per
+# recording; align_iva_component_signs resolves it from Sigma_N; then
+# align_tf_pc1_signs re-decides it from PC1 of the per-recording (F, T) maps —
+# the quantity the figures draw — and has the final say. This is not cosmetic
+# on a pooled dataset: the flips fall arbitrarily across the two condition
+# blocks, so an unresolved sign MANUFACTURES a condition difference. The signs
+# are applied to the channel patterns as well as the maps.
+#
+# Plots, three views (condition means, per participant, and the same averaged
+# over stimuli):
+#   - condition_mean_topomaps          rows = conditions + difference,
+#   - condition_mean_tf_maps           columns = components
+#   - condition_mean_tf_maps_onset     the stimulus-averaged epoch (ASSR only)
+#   - participants/condition_topomap_ic<k>_participants_*
+#   - participants/condition_tf_ic<k>_participants_*
+#   - participants/onset_condition_tf_ic<k>_participants_*
+#         one figure per component: Placebo on the first row, Psilocybin on the
+#         second, one column per participant ordered by ID, so a participant's
+#         two recordings are vertically paired.
+#
+# Each column of a condition-mean grid is on its own symmetric scale shared by
+# the condition rows; per-participant figures share one limit across the whole
+# grid. Every participant is put on a common scale first, so neither the colour
+# limit nor the condition means are driven by the loudest few recordings.
+#
+# Output:
+#   plots/06-iva-condition-comparison/Joined_ASSR/
+#       broadband/iva_channel_joined/pca_10/*.png
+#       broadband/iva_channel_joined/pca_10/participants/*.png
+#   data/processed/assr/iva_results/Joined/
+#       iva_channel_joined__ASSR__broadband__pca<N>.npz
+#
+# STORED COMPONENTS (--store_components). The figures are lossy summaries — a
+# condition-mean grid cannot be re-split per participant and a plotted TF map
+# cannot be correlated against anything — so the run also keeps what it actually
+# recovered: the sign-aligned (recordings, components, freqs, times) TF maps and
+# the (recordings, components, channels) topographies, with the participant AND
+# condition of every row. That bookkeeping is the point: this join puts one row
+# per (participant, condition), so a bare participant label addresses two rows
+# and the subject axis is unreadable without it. Read it back with
+# src.io.iva_store.load_iva_components, which resolves rows by label.
+#
+# Written as float32 to the HOME filesystem (not scratch), so it counts against
+# the quota there: ~0.9 GB at --n_pca 3 and ~2.9 GB at --n_pca 10 for the full
+# ASSR extent, dominated entirely by the TF maps. A rerun of the same
+# (condition, variant, music type, band, n_pca) tuple replaces its own entry, so
+# a repeated job does not accumulate copies — but a --n_pca or --band sweep
+# stores one entry per setting, so a 3-value sweep costs 3x the above.
+#
+# MEMORY. The dominant term is the pooled tensor and its z-scored copy:
+# 2P recordings × 195 channels × 50 freqs × T samples × 8 B, twice. For the
+# full ASSR extent (31 recordings, T = 46976) that is ~114 GB each, and the
+# assembly transiently holds both per-condition blocks as well, peaking around
+# ~230 GB. That fits mem=499gb; it does NOT fit a smaller node, so do not
+# reduce mem without also setting --n_times.
+#
+# NB --subset_cache is deliberately NOT passed here. At the full extent the
+# "subset" is the whole cache written back uncompressed, i.e. ~110 GB of disk
+# for no saving. It pays off only for a channel/time subset — see the
+# commented exploration block below, which is what to use when sweeping.
+#
+# NB --n_pca reduces the CHANNEL axis, so it must be <= the number of channels
+# (~195 after preprocessing).
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+
+WAVELET_DIR="/mnt/data/processed"
+# Root the component store resolves against; the
+# '<experiment>/iva_results/<Condition>' suffix is appended by the script. Passed
+# explicitly rather than left to the default so the destination does not depend on
+# where PROJECT_ROOT lands inside the container bind mount.
+STORE_DIR="/mnt/data/processed"
+
+# Everything except --n_pca, so the sweep below can vary it without having to
+# strip an element out of the array.
+COMMON_ARGS=(
+    --experiment assr
+    --conditions Placebo Psilocybin
+    --random_state 42
+    --iva_opt_approach newton
+    --iva_max_iter 1024
+    --wavelet_data_dir "$WAVELET_DIR"
+    --reuse_wavelets
+    --store_components
+    --store_dir "$STORE_DIR"
+    --n_jobs -1
+)
+
+echo "=== full extent at $(date) ==="
+python /mnt/scripts/run_iva_condition_comparison.py \
+    --n_pca 5 \
+    "${COMMON_ARGS[@]}"
+
+# --- Exploration sweep -----------------------------------------------------
+# A channel/time subset instead of the full extent. This is where
+# --subset_cache earns its keep: the first run writes the trimmed tensor to
+# notebooks/03-wavelet-analysis/wavelet_cache/<experiment>/, every later run at
+# the SAME extent reads it back and never decompresses the ~50 GB source cache.
+# The cache is keyed by condition and extent, not by workflow, so the 03/04/05
+# notebooks read the very same entries.
+#
+# echo "=== subset sweep at $(date) ==="
+# for N_PCA in 10 20; do
+#     python /mnt/scripts/run_iva_condition_comparison.py \
+#         --n_pca "$N_PCA" \
+#         --n_channels 32 \
+#         --n_times 3000 \
+#         --subset_cache \
+#         "${COMMON_ARGS[@]}"
+# done
+
+# --- Per-band runs ---------------------------------------------------------
+# Slices the pooled broadband tensor to one band before IVA; plots land under
+# bands/ with a '<band>_' prefix, so they never collide with the broadband set.
+#
+# for BAND in alpha gamma; do
+#     echo "=== band $BAND at $(date) ==="
+#     python /mnt/scripts/run_iva_condition_comparison.py \
+#         --n_pca 10 \
+#         --band "$BAND" \
+#         "${COMMON_ARGS[@]}"
+# done
+
+# --- psilo_music ------------------------------------------------------------
+# Both music types, each its own joined run (separate cohort, separate
+# decomposition). Drop --experiment assr from COMMON_ARGS first.
+#
+# python /mnt/scripts/run_iva_condition_comparison.py \
+#     --experiment psilo_music \
+#     --music_type CLASSIC PSYTRANCE \
+#     --conditions Placebo Psilocybin \
+#     --n_pca 10 \
+#     --wavelet_data_dir "$WAVELET_DIR" \
+#     --reuse_wavelets \
+#     --n_jobs -1
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch

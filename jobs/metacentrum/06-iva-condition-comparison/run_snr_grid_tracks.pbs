@@ -1,0 +1,132 @@
+#!/bin/bash
+#PBS -N PSILO_SNR_GRID_TRACKS_06
+#PBS -l walltime=1:00:00
+#PBS -l select=1:ncpus=4:mem=100gb:scratch_local=10gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-06 — full-recording ASSR SNR / condition-contrast GRID, TIME-axis join.
+#
+# Runs scripts/run_assr_snr_grid.py for the CHANNEL_JOINED_TRACKS decomposition:
+# the whole current workflow of
+# notebooks/06-iva-condition-comparison/iva_component_analysis_joined_tracks.ipynb
+# on the FULL wavelet cache instead of the 12 s notebook subset, sweeping the
+# frequency-selection x stimulus-window grid in one pass.
+#
+# WHAT "reflected as in the notebook" MEANS HERE. Every notebook piece is run:
+#   - TWO references: ASSR-mask (full) on the whole channel space, and
+#     ASSR-mask (PCA) read only through each recording's PCA subspace.
+#   - TWO signal variants: zscored (the stored per-recording z-scored sources for
+#     the ICs, plus the masks on the z-scored cache) and prestim (the raw cache
+#     projected, then every trial referenced to its own pre-stimulus baseline).
+#   - THREE test families, participants as the unit, exact Wilcoxon: contrast
+#     (Placebo - Psilocybin per source), discrimination (does an IC separate the
+#     conditions better than a reference, the interaction, vs each reference) and
+#     snr (is an IC's response magnitude lower than a reference's, per condition).
+#
+# THE GRID this job runs at once:
+#   --halfwidths 0 5            -> 40 Hz single bin AND 35-45 Hz band mean
+#   --stimulus_intervals        -> 0-500 ms AND 200-500 ms test windows
+# crossed with both signal variants -> 2 x 2 x 2 = 8 cells, all in one CSV.
+#
+# RESOURCES. Like run_trial_stats.pbs this is I/O bound: the cost is one streamed
+# pass over the ~50 GB DEFLATE cache per condition (~13 min each), decompressed
+# subject by subject. mem=32gb comfortably holds the stored tf_maps (~1 GB) plus
+# the kept-frequency projections; ncpus=4 because the decompression is
+# single-threaded. Do NOT copy the 499gb/8cpu header from run_condition_tracks.pbs.
+#
+# NEEDS ON DISK (all from earlier stages):
+#   data/processed/assr/iva_results/JoinedTracks/iva_*__pca<N>.npz   (the store)
+#   data/processed/assr/wavelets/broadband/<Cond>_ASSR__wavelet_power__*__freqdim1.npz
+#   data/processed/assr/concatenated/<Cond>_ASSR.stimulus_onsets.npy
+#   data/processed/assr/concatenated/<Cond>_ASSR.metadata.csv
+#
+# WRITES:
+#   results/assr/assr_snr_grid__iva_channel_joined_tracks__pca<N>.csv   (all cells)
+#   plots/06-iva-condition-comparison/JoinedTracks_ASSR/broadband/assr_snr_grid/
+#       pca_<N>/{pvalue_summary,snr_by_condition}__<variant>__<sel>__<window>.png
+#
+# The joined (subject-axis) counterpart is run_snr_grid_joined.pbs.
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+
+DATA_DIR="/mnt/data/processed"
+
+python /mnt/scripts/run_assr_snr_grid.py \
+    --experiment assr \
+    --variant iva_channel_joined_tracks \
+    --store_condition JoinedTracks \
+    --music_type ASSR \
+    --conditions Placebo Psilocybin \
+    --n_pca 5 \
+    --halfwidths 0 5 \
+    --stimulus_intervals 0:0.5 0.2:0.5 \
+    --signal_variants zscored prestim \
+    --contrast_alternative greater \
+    --snr_alternative less \
+    --store_dir "$DATA_DIR" \
+    --wavelet_data_dir "$DATA_DIR" \
+    --results_dir /mnt/results/assr \
+    --save_dir /mnt/plots
+
+# --- Other component counts ------------------------------------------------
+# Needs the matching --store_components run to exist first; the script reads the
+# store, it does not decompose. Each --n_pca is its own pass over the cache.
+#
+# for N_PCA in 3 10; do
+#     echo "=== pca $N_PCA at $(date) ==="
+#     python /mnt/scripts/run_assr_snr_grid.py \
+#         --experiment assr --variant iva_channel_joined_tracks \
+#         --store_condition JoinedTracks --music_type ASSR \
+#         --conditions Placebo Psilocybin --n_pca "$N_PCA" \
+#         --halfwidths 0 5 --stimulus_intervals 0:0.5 0.2:0.5 \
+#         --store_dir "$DATA_DIR" --wavelet_data_dir "$DATA_DIR" \
+#         --results_dir /mnt/results/assr --save_dir /mnt/plots
+# done
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch
