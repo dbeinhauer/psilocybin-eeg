@@ -101,6 +101,7 @@ from src.analysis.pca_polarity import (  # noqa: E402
     apply_pc1_signs,
     topography_consistency,
 )
+from src.analysis.assr_trials import baseline_normalise  # noqa: E402
 from src.definitions.constants import AssrEpoch, ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
     ConditionVariants,
@@ -151,6 +152,60 @@ def epoch_average(
     if n_used == 0:
         raise ValueError("No onset window fits inside the recording.")
     return acc / n_used, n_used
+
+
+def epoch_average_baselined(
+    arr: np.ndarray,
+    onsets: np.ndarray,
+    pre: int,
+    post: int,
+    baseline_mask: np.ndarray,
+    mode: str = "rel",
+) -> tuple[np.ndarray, int]:
+    """Average onset windows AFTER referencing each trial to its own pre-onset baseline.
+
+    The per-trial pre-stimulus normalisation stage-06 uses
+    (:func:`src.analysis.assr_trials.baseline_normalise`), applied to a
+    ``(n_freqs, time)`` channel block before averaging over trials — the same formula
+    one stage earlier in the pipeline. ``mode`` selects the 06 form: ``"rel"``
+    (``x/baseline - 1``, a relative change, NOT a z-score), ``"z"``
+    (``(x - baseline)/baseline SD``, 06's canonical form) or ``"subtract"``
+    (``x - baseline``).
+
+    Args:
+        arr: Array whose last axis is time.
+        onsets: Stimulus onset sample indices.
+        pre: Samples kept before each onset.
+        post: Samples kept after each onset (window length is ``pre + post``).
+        baseline_mask: Boolean ``(pre + post,)`` selecting the pre-onset samples.
+        mode: One of ``"rel"``, ``"z"``, ``"subtract"``.
+
+    Returns:
+        Tuple ``(mean, n_used)`` — trials referenced to baseline then averaged over the
+        trials that fit inside the recording.
+    """
+    n_time = arr.shape[-1]
+    windows = [
+        arr[..., onset - pre : onset + post]
+        for onset in onsets
+        if onset - pre >= 0 and onset + post <= n_time
+    ]
+    if not windows:
+        raise ValueError("No onset window fits inside the recording.")
+    stack = np.stack(windows, axis=-2).astype(np.float64)  # (..., n_trials, win)
+    z, rel, _positive = baseline_normalise(stack, baseline_mask)
+    if mode == "rel":
+        chosen = rel
+    elif mode == "z":
+        chosen = z
+    elif mode == "subtract":
+        base = stack[..., baseline_mask].mean(axis=-1, keepdims=True)
+        chosen = stack - base
+    else:
+        raise ValueError(f"mode must be 'rel', 'z' or 'subtract'; got {mode!r}.")
+    # nanmean: 06's `rel` is NaN where a baseline is not positive (never on real
+    # non-negative wavelet power, but guarded).
+    return np.nanmean(chosen, axis=-2), stack.shape[-2]
 
 
 def channel_pca_tf_maps(
@@ -361,6 +416,7 @@ def stream_wavelet_pca(
     base_mask: np.ndarray,
     *,
     zscore_vs_recording: bool = True,
+    baseline_mode: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int, UnreducedReference]:
     """Stream the whole wavelet cache once, reducing each subject to its TF maps.
 
@@ -389,6 +445,10 @@ def stream_wavelet_pca(
         base_mask: Boolean mask selecting the pre-onset baseline samples.
         zscore_vs_recording: Z-score each channel's per-frequency power against the
             whole recording before epoching (removes the 1/f tilt).
+        baseline_mode: If set (``"rel"``/``"z"``/``"subtract"``), reference every trial
+            to its own pre-onset baseline before averaging, via
+            :func:`epoch_average_baselined`, instead of the plain onset average. Use
+            with ``zscore_vs_recording=False`` — the baseline reference replaces it.
 
     Returns:
         Tuple ``(tf_maps, loadings, explained, n_times, reference)``,
@@ -433,7 +493,14 @@ def stream_wavelet_pca(
                     ).reshape(n_freqs, n_times)
                     if zscore_vs_recording:
                         block = zscore(block, axis=1)
-                    ev, _ = epoch_average(block, onsets, pre, post)  # (n_freqs, win)
+                    if baseline_mode is None:
+                        ev, _ = epoch_average(
+                            block, onsets, pre, post
+                        )  # (n_freqs, win)
+                    else:
+                        ev, _ = epoch_average_baselined(
+                            block, onsets, pre, post, base_mask, baseline_mode
+                        )
                     stack[chan] = ev
                 (
                     tf_maps[:, subj],
@@ -544,6 +611,7 @@ def plot_pca_per_participant(
     agreement: str,
     title_suffix: str,
     plots_dir: Path,
+    file_suffix: str = "",
 ) -> None:
     """Grid of per-participant TF maps for ONE component, written to its own figure.
 
@@ -587,7 +655,8 @@ def plot_pca_per_participant(
         y=1.0,
     )
     fig.savefig(
-        plots_dir / f"wavelet_pca_{pc_label.lower()}_tf_per_participant.png",
+        plots_dir
+        / f"wavelet_pca_{pc_label.lower()}_tf_per_participant{file_suffix}.png",
         dpi=150,
         bbox_inches="tight",
     )
@@ -679,6 +748,7 @@ def plot_pca_group(
     pc_labels: list[str],
     title_suffix: str,
     plots_dir: Path,
+    file_suffix: str = "",
 ) -> None:
     """Group-average TF map per component, one panel each.
 
@@ -726,7 +796,9 @@ def plot_pca_group(
     )
     fig.tight_layout()
     fig.savefig(
-        plots_dir / "wavelet_pca_tf_group_average.png", dpi=150, bbox_inches="tight"
+        plots_dir / f"wavelet_pca_tf_group_average{file_suffix}.png",
+        dpi=150,
+        bbox_inches="tight",
     )
     plt.close(fig)
 
@@ -1144,6 +1216,79 @@ def run_pca(args: argparse.Namespace) -> None:
         plots_dir,
     )
 
+    # ---- Pre-stimulus-baseline variant of the TF maps ------------------------
+    # A SECOND streaming pass on RAW power, referencing every trial to its own pre-onset
+    # baseline the way stage-06 does, then the SAME channel-PCA + polarity alignment and
+    # the TF-map plots — per participant AND averaged over participants — for the first
+    # n_components components, saved with a `_baseline_<mode>` suffix so they sit beside
+    # the z-scored ones rather than overwriting them.
+    if args.baseline_mode != "none":
+        print(
+            f"Streaming again for the pre-stimulus-baseline ({args.baseline_mode}) "
+            "TF-map variant ...",
+            flush=True,
+        )
+        tf_base, load_base, exp_base, _n_b, _ref_b = stream_wavelet_pca(
+            wavelet_path,
+            n_channels,
+            n_freqs,
+            onsets,
+            pre,
+            post,
+            n_components,
+            stim_mask,
+            base_mask,
+            zscore_vs_recording=False,  # the baseline reference replaces the z-scoring
+            baseline_mode=args.baseline_mode,
+        )
+        tf_base = tf_base[:, order]
+        load_base = load_base[:, order]
+        exp_base = exp_base[:, order]
+        cons_base = []
+        for comp in range(n_components):
+            signs, _anchor = align_pc1_signs(
+                load_base[comp], channel_names=channel_names
+            )
+            load_base[comp] = apply_pc1_signs(load_base[comp], signs)
+            tf_base[comp] = apply_pc1_signs(tf_base[comp], signs)
+            cons_base.append(topography_consistency(load_base[comp]))
+        base_suffix = f"_baseline_{args.baseline_mode}"
+        base_title = (
+            f"{condition.value}/{music_type.value} (n={n_subj}, "
+            f"pre-stimulus baseline: {args.baseline_mode})"
+        )
+        for comp, pc_label in enumerate(pc_labels):
+            plot_pca_per_participant(
+                tf_base[comp],
+                exp_base[comp],
+                epoch_times,
+                freqs,
+                labels,
+                args.assr_freq,
+                pc_label,
+                f"{cons_base[comp].n_agreeing}/{cons_base[comp].n_subjects}",
+                base_title,
+                plots_dir,
+                file_suffix=base_suffix,
+            )
+        plot_pca_group(
+            tf_base,
+            exp_base,
+            cons_base,
+            epoch_times,
+            freqs,
+            args.assr_freq,
+            pc_labels,
+            base_title,
+            plots_dir,
+            file_suffix=base_suffix,
+        )
+        print(
+            f"Pre-stimulus-baseline ({args.baseline_mode}) TF maps written "
+            f"(per participant + group, {base_suffix}).",
+            flush=True,
+        )
+
     # ---- Component comparison ------------------------------------------------
     # PCA ranks components by explained channel variance over the whole TF plane,
     # which is not the same thing as carrying the steady-state, so score every
@@ -1322,6 +1467,16 @@ def build_parser() -> argparse.ArgumentParser:
         "per-frequency power against the whole recording.",
     )
     parser.set_defaults(zscore_vs_recording=True)
+    parser.add_argument(
+        "--baseline_mode",
+        default="rel",
+        choices=["none", "rel", "z", "subtract"],
+        help="Also plot a pre-stimulus-baseline TF-map variant (per participant AND "
+        "group), referencing every trial to its own pre-onset baseline the way "
+        "stage-06 does. 'rel' = x/baseline-1 (a relative change, NOT a z-score), 'z' = "
+        "06's baseline z, 'subtract' = x-baseline, 'none' skips it. Costs a SECOND "
+        "streaming pass over the cache.",
+    )
     parser.add_argument(
         "--no_unreduced_reference",
         dest="unreduced_reference",

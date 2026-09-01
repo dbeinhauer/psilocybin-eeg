@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -N PSILO_SNR_GRID_JOINED_06
 #PBS -l walltime=1:00:00
-#PBS -l select=1:ncpus=4:mem=100gb:scratch_local=10gb
+#PBS -l select=1:ncpus=4:mem=400gb:scratch_local=10gb
 #PBS -m ae
 #PBS -j oe
 
@@ -41,7 +41,7 @@
 # WRITES:
 #   results/assr/assr_snr_grid__iva_channel_joined__pca<N>.csv         (all cells)
 #   plots/06-iva-condition-comparison/Joined_ASSR/broadband/assr_snr_grid/
-#       pca_<N>/{pvalue_summary,snr_by_condition}__<variant>__<sel>__<window>.png
+#       pca_<N>/<sel>/<window>/{pvalue_summary,snr_by_condition,trial_course_by_source}__<variant>.png
 #
 # The time-axis counterpart is run_snr_grid_tracks.pbs.
 # ---------------------------------------------------------------------------

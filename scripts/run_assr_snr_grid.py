@@ -34,7 +34,9 @@ Outputs (per run, all grid cells in one file):
 * ``results/<experiment>/assr_snr_grid__<variant>__pca<N>.csv`` — every test row, tagged
   with its signal variant, frequency selection and stimulus window.
 * ``plots/06-iva-condition-comparison/<Condition>_<Music>/broadband/assr_snr_grid/
-  pca_<N>/`` — a p-value summary and an SNR-by-condition figure per grid cell.
+  pca_<N>/<selection>/<window>/`` — one subdirectory per frequency selection (band range)
+  and stimulus window (time interval), each holding a p-value summary, an SNR-by-condition
+  figure and a per-source trial-course figure for every signal variant.
 
 Examples::
 
@@ -446,6 +448,98 @@ def _forest(ax, rows, alpha, xlabel, title, rng):
     ax.set_title(title, loc="left", fontsize=11)
 
 
+def _plot_courses(
+    course, times, window_interval, contrast, labels, conditions, alpha, title, path
+):
+    """Per-source epoch trial course, both conditions overlaid.
+
+    The line is the mean across participants of each participant's median-over-trials
+    course; the band is +/- SEM ACROSS PARTICIPANTS (never across trials, which are
+    correlated within a participant). The paradigm's stimulus interval is shaded grey and
+    the cell's test window gold, and each panel carries its 4b p-value.
+    """
+    by_source = contrast.set_index("source")
+    n_src = len(labels)
+    ncols = min(4, n_src)
+    nrows = int(np.ceil(n_src / ncols))
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(5.1 * ncols, 3.6 * nrows),
+        sharex=True,
+        sharey=True,
+        squeeze=False,
+    )
+    axflat = axes.flat
+    for s, source in enumerate(labels):
+        ax = axflat[s]
+        ax.axvspan(
+            0.0, AssrEpoch.STIMULUS_DURATION_S, color="0.55", alpha=0.10, lw=0, zorder=0
+        )
+        ax.axvspan(
+            window_interval[0],
+            window_interval[1],
+            color="#B8860B",
+            alpha=0.13,
+            lw=0,
+            zorder=0,
+        )
+        ax.axhline(0.0, color="0.45", lw=0.8, zorder=1)
+        ax.axvline(0.0, color="0.35", lw=0.9, ls="--", zorder=1)
+        for cond in conditions:
+            vals = course[cond][:, s]  # (P, W)
+            centre = np.nanmean(vals, axis=0)
+            n = np.sum(~np.isnan(vals), axis=0)
+            half = np.nanstd(vals, axis=0, ddof=1) / np.sqrt(np.maximum(n, 1))
+            colour = _CONDITION_COLORS.get(cond, "0.3")
+            ax.fill_between(
+                times,
+                centre - half,
+                centre + half,
+                color=colour,
+                alpha=0.18,
+                lw=0,
+                zorder=2,
+            )
+            ax.plot(times, centre, color=colour, lw=1.8, zorder=3, label=cond)
+        row = by_source.loc[source]
+        is_ref = source in _MASK_LABELS
+        ax.set_title(
+            f"{source}{'  (reference)' if is_ref else ''}",
+            loc="left",
+            fontsize=11,
+            fontweight="bold" if is_ref else "normal",
+        )
+        ax.text(
+            0.985,
+            0.955,
+            f"{conditions[0]} > {conditions[1]}\np = {row['p']:.3f}   {row['same sign']}",
+            transform=ax.transAxes,
+            ha="right",
+            va="top",
+            fontsize=8.5,
+            family="monospace",
+            color="0.25" if row["p"] > alpha else "black",
+            bbox=dict(
+                boxstyle="round,pad=0.3",
+                facecolor="white",
+                edgecolor="0.75" if row["p"] > alpha else "black",
+                alpha=0.85,
+            ),
+        )
+        if s + ncols >= n_src:
+            ax.set_xlabel("Time from onset (s)")
+        if s % ncols == 0:
+            ax.set_ylabel("response (a.u.)")
+    for j in range(n_src, nrows * ncols):
+        axflat[j].axis("off")
+    axflat[0].legend(loc="lower right", frameon=True, fontsize=9)
+    fig.suptitle(title, y=1.0, fontsize=12.5)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def _plot_cell(cell_tables, value, conditions, labels, ic_labels, alpha, title, path):
     """The p-value summary (contrast + one versus panel per reference) for one grid cell."""
     rng = np.random.default_rng(42)
@@ -704,16 +798,27 @@ def run(args: argparse.Namespace) -> None:
             [flip_ic, np.ones((n_participants, len(_MASK_LABELS)))], axis=1
         )
 
-    # z-scored IC source band, per (selection, condition): straight from the store
+    # The stored z-scored IC sources, per condition, on that condition's OWN time axis:
+    #   * subject-axis join (per_recording): tf_maps[row] IS the single recording.
+    #   * time-axis join (tracks): tf_maps[row] is BOTH conditions concatenated, so the
+    #     condition's segment is sliced out (a last-axis view) to match the per-condition
+    #     cache and onsets — without this the axes disagree (2*T vs T).
+    if per_recording:
+        _ic_source = {
+            c: [results.tf_maps[resolve(p, c)] for p in participants] for c in conditions
+        }
+    else:
+        _ic_source = {}
+        for c in conditions:
+            segment = results.condition_track(results.tf_maps, c)  # (rows, K, F, T_seg)
+            _ic_source[c] = [segment[resolve(p, c)] for p in participants]
+
     def _z_ic_band(bins: np.ndarray, condition: str) -> np.ndarray:
-        # tf_maps[row] is (K, F, T); average over the SELECTED FREQUENCY bins (axis 1),
+        # (K, F, T) per participant -> average over the SELECTED FREQUENCY bins (axis 1),
         # keeping every component, to match the raw-projected band collapse.
         return np.stack(
-            [
-                results.tf_maps[resolve(p, condition)][:, bins, :].mean(axis=1)
-                for p in participants
-            ]
-        )  # (P, K, T_full)
+            [src[:, bins, :].mean(axis=1) for src in _ic_source[condition]]
+        )  # (P, K, T_condition)
 
     # ---- 6. the grid: selection x window ---------------------------------
     rows_out: list[dict] = []
@@ -754,16 +859,22 @@ def run(args: argparse.Namespace) -> None:
             window_label = f"{lo:g}-{hi:g}s"
 
             for signal in args.signal_variants:
-                # value per condition: median over trials of the window mean, anchored
-                value = {}
+                # value (window-reduced) and course (full epoch) per condition, both from
+                # the SAME normalised trials, anchored by the per-condition flip.
+                value, course = {}, {}
                 for condition in conditions:
                     trials = cut[signal][condition]  # (P, K+2, N, W)
                     if signal == "prestim":
-                        z, _rel, _pos = at.baseline_normalise(trials, baseline_mask)
-                        per_trial = z[..., window].mean(axis=-1)
+                        normed, _rel, _pos = at.baseline_normalise(
+                            trials, baseline_mask
+                        )
                     else:
-                        per_trial = trials[..., window].mean(axis=-1)
+                        normed = trials
+                    per_trial = normed[..., window].mean(axis=-1)  # (P, K+2, N)
                     value[condition] = np.median(per_trial, axis=2) * flip[condition]
+                    course[condition] = (
+                        np.median(normed, axis=2) * flip[condition][:, :, None]
+                    )
 
                 cell = {
                     "variant": signal,
@@ -786,6 +897,9 @@ def run(args: argparse.Namespace) -> None:
                         plots_dir,
                         cell,
                         value,
+                        course,
+                        times,
+                        (lo, hi),
                         conditions,
                         labels,
                         ic_labels,
@@ -885,6 +999,9 @@ def _write_cell_plots(
     plots_dir,
     cell,
     value,
+    course,
+    times,
+    window_interval,
     conditions,
     labels,
     ic_labels,
@@ -892,8 +1009,17 @@ def _write_cell_plots(
     rows_out,
     n_participants,
 ) -> None:
-    """Two figures for one grid cell, built from the rows just accumulated."""
+    """Three figures for one grid cell, built from the rows just accumulated.
+
+    Each frequency selection (band range) and stimulus window (time interval) gets its
+    own subdirectory, ``<selection>/<window>/``, so the two signal variants of a cell sit
+    together and the grid is browsable by band and window; the variant stays in the
+    filename. The figure titles keep the full ``variant__selection__window`` context.
+    """
     tag = f"{cell['variant']}__{cell['selection']}__{cell['window']}"
+    variant = cell["variant"]
+    cell_dir = plots_dir / cell["selection"] / cell["window"]
+    cell_dir.mkdir(parents=True, exist_ok=True)
     frame = pd.DataFrame([r for r in rows_out if all(r[k] == cell[k] for k in cell)])
     cell_tables = {
         "contrast": frame[frame["family"] == "contrast"],
@@ -921,7 +1047,7 @@ def _write_cell_plots(
         ic_labels,
         alpha,
         f"Condition contrast & discrimination — {tag}, n={n_participants}",
-        plots_dir / f"pvalue_summary__{tag}.png",
+        cell_dir / f"pvalue_summary__{variant}.png",
     )
     _plot_snr(
         cell_tables,
@@ -930,7 +1056,18 @@ def _write_cell_plots(
         ic_labels,
         alpha,
         f"IC SNR vs reference, per condition — {tag}, n={n_participants}",
-        plots_dir / f"snr_by_condition__{tag}.png",
+        cell_dir / f"snr_by_condition__{variant}.png",
+    )
+    _plot_courses(
+        course,
+        times,
+        window_interval,
+        cell_tables["contrast"],
+        labels,
+        conditions,
+        alpha,
+        f"Trial course per spatial filter — {tag}, n={n_participants}",
+        cell_dir / f"trial_course_by_source__{variant}.png",
     )
 
 
