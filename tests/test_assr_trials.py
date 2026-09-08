@@ -181,23 +181,213 @@ class TestPolarityFlip:
         flip, _ = at.polarity_flip(rng.normal(size=(6, 3, 10)), mask)
         assert set(np.unique(flip)).issubset({-1.0, 1.0})
 
-    def test_applying_the_flip_orients_every_participant(self, mask):
-        rng = np.random.default_rng(3)
-        patterns = rng.normal(size=(8, 2, 10))
-        flip, _ = at.polarity_flip(patterns, mask)
-        oriented = (patterns * flip[:, :, None])[:, :, mask].mean(axis=2)
-        assert (oriented >= 0).all()
-
-    def test_strength_is_relative_to_the_whole_pattern(self, mask):
-        patterns = np.zeros((1, 1, 10))
-        patterns[0, 0, :4] = 1.0  # only the mask channels carry weight
-        _flip, strength = at.polarity_flip(patterns, mask)
-        # mean over mask = 1.0; mean |.| over all = 0.4
-        assert strength[0, 0] == pytest.approx(2.5)
-
     def test_rejects_mask_mismatch(self):
         with pytest.raises(ValueError, match="electrode_mask"):
             at.polarity_flip(np.zeros((2, 1, 10)), np.ones(5, dtype=bool))
+
+    def test_orients_every_participant_against_the_rest_of_the_head(self, mask):
+        rng = np.random.default_rng(4)
+        patterns = rng.normal(size=(8, 2, 10))
+        flip, _ = at.polarity_flip(patterns, mask)
+        oriented = patterns * flip[:, :, None]
+        inside = oriented[:, :, mask].mean(axis=2)
+        outside = oriented[:, :, ~mask].mean(axis=2)
+        assert (inside - outside >= 0).all()
+
+    def test_a_global_offset_cannot_flip_it(self, mask):
+        # The pattern is MORE negative on the mask than off it, but a large positive
+        # offset makes its mask MEAN positive. An anchor reading only the mask mean
+        # would be fooled into leaving it; the correlation compares inside against
+        # outside, so it flips correctly.
+        patterns = np.zeros((1, 1, 10))
+        patterns[0, 0, :4] = -1.0
+        patterns += 5.0
+        assert patterns[0, 0, mask].mean() > 0  # the mean-based anchor's blind spot
+        flip, _ = at.polarity_flip(patterns, mask)
+        assert flip[0, 0] == -1.0
+
+    def test_strength_is_the_absolute_correlation(self, mask):
+        patterns = np.zeros((1, 1, 10))
+        patterns[0, 0, :4] = 1.0
+        _flip, strength = at.polarity_flip(patterns, mask)
+        indicator = mask.astype(float)
+        expected = abs(np.corrcoef(patterns[0, 0], indicator)[0, 1])
+        assert strength[0, 0] == pytest.approx(expected)
+        assert 0.0 <= strength[0, 0] <= 1.0
+
+    def test_sign_is_independent_per_component(self, mask):
+        # Two components of ONE participant, loading oppositely: the flip must not be
+        # shared between them.
+        patterns = np.zeros((1, 2, 10))
+        patterns[0, 0, :4] = 1.0
+        patterns[0, 1, :4] = -1.0
+        flip, _ = at.polarity_flip(patterns, mask)
+        assert flip[0].tolist() == [1.0, -1.0]
+
+    def test_flat_pattern_gets_zero_strength_and_no_flip(self, mask):
+        flip, strength = at.polarity_flip(np.full((1, 1, 10), 3.0), mask)
+        assert flip[0, 0] == 1.0
+        assert strength[0, 0] == 0.0
+
+    def test_rejects_degenerate_masks(self):
+        for bad in (np.zeros(10, dtype=bool), np.ones(10, dtype=bool)):
+            with pytest.raises(ValueError, match="some but not all"):
+                at.polarity_flip(np.zeros((2, 1, 10)), bad)
+
+
+class TestRoiChannelwiseSnr:
+    @pytest.fixture
+    def baseline_mask(self):
+        m = np.zeros(40, dtype=bool)
+        m[:20] = True
+        return m
+
+    def _synthetic(self, gains, rng, n_trials=24, n_samples=40, response=3.0):
+        """One participant, channels differing only in GAIN, identical SNR."""
+        n_ch = len(gains)
+        noise = rng.normal(size=(1, n_ch, n_trials, n_samples))
+        signal = np.zeros(n_samples)
+        signal[20:] = response
+        data = (noise + signal) * np.asarray(gains)[None, :, None, None]
+        return data + 100.0 * np.asarray(gains)[None, :, None, None]
+
+    def test_output_is_in_units_of_its_own_baseline_sd(self, baseline_mask):
+        rng = np.random.default_rng(0)
+        data = self._synthetic([1.0] * 8, rng)
+        snr, _ = at.roi_channelwise_snr(data, baseline_mask)
+        # Step 3 is exactly what makes this true; without it the baseline SD would be
+        # ~1/sqrt(n_channels), not 1.
+        assert snr[..., baseline_mask].std(ddof=1) == pytest.approx(1.0, rel=0.15)
+
+    def test_gain_differences_do_not_reweight_the_roi(self, baseline_mask):
+        # Same SNR in every channel, gains spanning 30x. An equal-weight ROI must give
+        # the same answer as it would with equal gains.
+        equal = at.roi_channelwise_snr(
+            self._synthetic([1.0] * 8, np.random.default_rng(1)), baseline_mask
+        )[0]
+        spread = at.roi_channelwise_snr(
+            self._synthetic(
+                [0.1, 0.3, 1, 3, 0.2, 2, 0.5, 3.0], np.random.default_rng(1)
+            ),
+            baseline_mask,
+        )[0]
+        assert np.allclose(equal, spread, atol=1e-9)
+
+    def test_a_dead_channel_dilutes_rather_than_dominates(self, baseline_mask):
+        rng = np.random.default_rng(2)
+        data = self._synthetic([1.0] * 8, rng)
+        with_dead = data.copy()
+        with_dead[0, 0] = rng.normal(size=with_dead[0, 0].shape) + 50.0  # no response
+        good = at.roi_channelwise_snr(data, baseline_mask)[0]
+        mixed = at.roi_channelwise_snr(with_dead, baseline_mask)[0]
+        drive = slice(20, None)
+        assert 0 < mixed[..., drive].mean() < good[..., drive].mean()
+
+    def test_diagnostics_report_the_effective_channel_count(self, baseline_mask):
+        rng = np.random.default_rng(3)
+        data = self._synthetic([1.0] * 9, rng)
+        _snr, diag = at.roi_channelwise_snr(data, baseline_mask)
+        # Independent channels: the ROI mean's baseline SD ~ 1/sqrt(9).
+        assert diag["roi_baseline_sd"] == pytest.approx(1 / 3, rel=0.3)
+        assert diag["effective_channels"] == pytest.approx(9, rel=0.6)
+        assert diag["max_abs_z1"] > 0
+
+    def test_a_quiet_baseline_trial_does_not_create_a_post_stimulus_plateau(self):
+        """The defect the pooled divisor exists to prevent.
+
+        Two channels get a baseline whose loudness varies trial to trial, so some trials
+        draw a very quiet one, plus a drift that outlasts the stimulus. A per-trial
+        divisor would blow that drift up on exactly those trials and — because the ROI
+        is a mean over channels — drag the whole course to a plateau that never returns
+        to baseline. Pooling the divisor over trials removes the lottery, so the course
+        has to come back down.
+        """
+        rng = np.random.default_rng(11)
+        mask = np.zeros(60, dtype=bool)
+        mask[:20] = True
+        data = rng.normal(size=(1, 8, 40, 60))
+        data[..., 20:40] += 3.0  # the stimulus response, in every channel
+        for channel in (0, 1):
+            loudness = rng.lognormal(0.0, 1.5, size=40)
+            data[0, channel, :, :20] *= loudness[:, None]
+            data[0, channel, :, 40:] += 1.0  # drift outlasting the stimulus
+
+        snr, diagnostics = at.roi_channelwise_snr(data, mask)
+        after = snr[..., 40:].mean()
+        peak = snr[..., 20:40].mean()
+        assert after / peak < 0.05  # returns to baseline rather than plateauing
+        # The runaway a per-trial divisor produces is orders of magnitude larger.
+        assert diagnostics["max_abs_z1"] < 50
+
+    def test_scaling_is_one_constant_not_per_participant(self, baseline_mask):
+        """A participant with noisier electrodes must not be rescaled to match.
+
+        Per-participant scaling is what would break a paired contrast: the divisor is
+        estimated per (participant, condition), so it rescales one participant's two
+        conditions differently for reasons unrelated to the response.
+        """
+        rng = np.random.default_rng(20)
+        data = self._synthetic([1.0] * 6, rng, n_trials=30)
+        loud = data.copy()
+        loud[0, :, :, :] *= 1.0
+        # Make ONE participant's whole recording noisier by adding a second "subject".
+        pair = np.concatenate([data, data * 3.0], axis=0)  # (2, C, N, W)
+        snr, _ = at.roi_channelwise_snr(pair, baseline_mask)
+        drive = slice(20, None)
+        a = snr[0][..., drive].mean()
+        b = snr[1][..., drive].mean()
+        # Both are pure gain changes, which step 1 already removes, so they must agree —
+        # and neither is renormalised to the other by a per-participant divisor.
+        assert a == pytest.approx(b, rel=1e-6)
+
+    def test_a_shared_scale_can_be_passed_in(self, baseline_mask):
+        rng = np.random.default_rng(21)
+        data = self._synthetic([1.0] * 6, rng)
+        auto, diag = at.roi_channelwise_snr(data, baseline_mask)
+        forced, forced_diag = at.roi_channelwise_snr(
+            data, baseline_mask, scale=2 * diag["roi_baseline_sd"]
+        )
+        assert forced_diag["roi_baseline_sd"] == pytest.approx(
+            2 * diag["roi_baseline_sd"]
+        )
+        assert np.allclose(forced, auto / 2)
+
+    def test_reports_the_spread_it_declined_to_apply(self, baseline_mask):
+        rng = np.random.default_rng(22)
+        pair = np.concatenate(
+            [
+                self._synthetic([1.0] * 6, rng),
+                self._synthetic([1.0] * 6, rng, n_trials=24) * 3.0,
+            ],
+            axis=0,
+        )
+        _snr, diag = at.roi_channelwise_snr(pair, baseline_mask)
+        assert diag["participant_sd_spread"] >= 1.0
+
+    def test_rejects_a_non_positive_scale(self, baseline_mask):
+        data = np.random.default_rng(23).normal(size=(1, 2, 4, 40))
+        with pytest.raises(ValueError, match="positive"):
+            at.roi_channelwise_snr(data, baseline_mask, scale=0.0)
+
+    def test_rejects_wrong_rank(self, baseline_mask):
+        with pytest.raises(ValueError, match="participants, channels"):
+            at.roi_channelwise_snr(np.zeros((2, 3, 40)), baseline_mask)
+
+    def test_rejects_short_baseline(self):
+        short = np.zeros(40, dtype=bool)
+        short[0] = True
+        with pytest.raises(ValueError, match="at least 2"):
+            at.roi_channelwise_snr(np.zeros((1, 2, 3, 40)), short)
+
+
+class TestPolarityWeakCount:
+    def test_counts_pairs_below_the_floor(self):
+        strength = np.array([[0.05, 0.5], [0.2, 0.01]])
+        assert at.polarity_weak_count(strength) == (2, 4)
+
+    def test_floor_is_configurable(self):
+        strength = np.array([[0.05, 0.5]])
+        assert at.polarity_weak_count(strength, floor=0.6) == (2, 2)
 
 
 class TestPolarityIsDetermined:
@@ -316,12 +506,29 @@ class TestBaselineNormalise:
         z, _rel, _positive = at.baseline_normalise(trials, baseline_mask)
         assert np.isfinite(z).all()
 
-    def test_z_puts_the_baseline_at_zero_mean_unit_sd(self, baseline_mask):
+    def test_z_puts_every_trial_baseline_at_zero_mean(self, baseline_mask):
         rng = np.random.default_rng(5)
         trials = rng.normal(3.0, 2.0, size=(2, 1, 4, 100))
         z, _rel, _positive = at.baseline_normalise(trials, baseline_mask)
+        # The MEAN is removed per trial, so this holds trial by trial.
         assert np.allclose(z[..., baseline_mask].mean(axis=-1), 0.0, atol=1e-12)
-        assert np.allclose(z[..., baseline_mask].std(axis=-1, ddof=1), 1.0)
+
+    def test_the_pooled_sd_is_unit_across_trials_not_within_one(self, baseline_mask):
+        """What pooling the divisor guarantees, and what it deliberately gives up.
+
+        Dividing by a per-trial SD would force EVERY trial's baseline to unit SD, which
+        is what lets one quiet baseline inflate that trial's whole epoch. Pooling makes
+        the unit hold across the trial ensemble instead, so a trial that happened to be
+        quiet stays quiet rather than being amplified to match its neighbours.
+        """
+        rng = np.random.default_rng(5)
+        trials = rng.normal(3.0, 2.0, size=(2, 1, 8, 100))
+        trials[0, 0, 0, :25] *= 0.05  # one trial with a freakishly quiet baseline
+        z, _rel, _positive = at.baseline_normalise(trials, baseline_mask)
+
+        per_trial = z[..., baseline_mask].std(axis=-1, ddof=1)
+        assert np.allclose(np.sqrt((per_trial**2).mean(axis=-1)), 1.0)  # pooled == 1
+        assert per_trial[0, 0, 0] < 0.2  # the quiet trial was NOT rescaled up to 1
 
     def test_rel_is_nan_where_the_baseline_is_not_positive(self, baseline_mask):
         trials = np.ones((1, 1, 2, 100))
@@ -558,3 +765,48 @@ class TestResolveConditions:
 
         got = at.resolve_conditions([ConditionVariants.PLACEBO, "Psilocybin"])
         assert got == ["Placebo", "Psilocybin"]
+
+
+class TestReferenceSnrTests:
+    """The third paired family: is a learned source below the fixed reference?"""
+
+    def _value(self):
+        # Three participants; IC 1 sits above the reference, IC 2 below it.
+        return np.array(
+            [
+                [2.0, 0.2, 1.0],
+                [2.5, 0.1, 1.2],
+                [2.2, 0.3, 1.1],
+            ]
+        )
+
+    def test_one_record_per_non_reference_source(self):
+        labels = ["IC 1", "IC 2", at.BINARY_FILTER_LABEL]
+        records = at.reference_snr_tests(
+            self._value(), labels, condition="Placebo", alternative="less"
+        )
+        assert [row["source"] for row in records] == ["IC 1", "IC 2"]
+        assert {row["condition"] for row in records} == {"Placebo"}
+
+    def test_the_below_reference_count_reads_the_right_direction(self):
+        labels = ["IC 1", "IC 2", at.BINARY_FILTER_LABEL]
+        records = at.reference_snr_tests(self._value(), labels, condition="Placebo")
+        by_source = {row["source"]: row for row in records}
+        # IC 1 is above the reference for all three, IC 2 below for all three.
+        assert by_source["IC 1"]["IC<ref"] == "0/3"
+        assert by_source["IC 2"]["IC<ref"] == "3/3"
+        assert by_source["IC 2"]["median"] < 0 < by_source["IC 1"]["median"]
+
+    def test_the_reference_column_can_be_named_explicitly(self):
+        labels = [at.BINARY_FILTER_LABEL, "IC 1", "IC 2"]
+        value = self._value()[:, [2, 0, 1]]
+        records = at.reference_snr_tests(
+            value, labels, condition="Placebo", reference_index=0
+        )
+        assert [row["source"] for row in records] == ["IC 1", "IC 2"]
+
+    def test_a_mismatched_value_array_is_refused(self):
+        with pytest.raises(ValueError, match="to match labels"):
+            at.reference_snr_tests(
+                np.zeros((3, 2)), ["a", "b", "c"], condition="Placebo"
+            )

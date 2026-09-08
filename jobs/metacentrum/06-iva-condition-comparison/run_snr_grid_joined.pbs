@@ -19,13 +19,15 @@
 # run_assr_snr_grid.py handles that: it resolves the filter, the PCA-mask operator
 # AND the polarity anchor per (participant, condition) through results.row. (This is
 # exactly the assumption the older run_assr_trial_stats.py could not make, which is
-# why that script is time-axis only.) Everything else — the two references, the two
+# why that script is time-axis only.) Everything else — the three references, the three
 # signal variants, the three test families, the grid — is identical.
 #
 # THE GRID this job runs at once:
 #   --halfwidths 0 5            -> 40 Hz single bin AND 35-45 Hz band mean
 #   --stimulus_intervals        -> 0-500 ms AND 200-500 ms test windows
-# crossed with both signal variants -> 2 x 2 x 2 = 8 cells, all in one CSV.
+# crossed with all three signal variants -> 2 x 2 x 3 = 12 cells, all in one CSV.
+# The third, stored_prestim, costs no extra streaming: it reuses the stored IC rows the
+# zscored variant already reads and the reference columns prestim already projects.
 #
 # RESOURCES. I/O bound, one streamed pass over the ~50 GB DEFLATE cache per
 # condition (~13 min each). mem=32gb holds the stored tf_maps (~2 GB for the 2P-row
@@ -90,7 +92,7 @@ python /mnt/scripts/run_assr_snr_grid.py \
     --n_pca 5 \
     --halfwidths 0 5 \
     --stimulus_intervals 0:0.5 0.2:0.5 \
-    --signal_variants zscored prestim \
+    --signal_variants zscored prestim stored_prestim \
     --contrast_alternative greater \
     --snr_alternative less \
     --store_dir "$DATA_DIR" \

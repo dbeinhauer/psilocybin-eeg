@@ -15,11 +15,20 @@
 # frequency-selection x stimulus-window grid in one pass.
 #
 # WHAT "reflected as in the notebook" MEANS HERE. Every notebook piece is run:
-#   - TWO references: ASSR-mask (full) on the whole channel space, and
-#     ASSR-mask (PCA) read only through each recording's PCA subspace.
-#   - TWO signal variants: zscored (the stored per-recording z-scored sources for
-#     the ICs, plus the masks on the z-scored cache) and prestim (the raw cache
-#     projected, then every trial referenced to its own pre-stimulus baseline).
+#   - THREE references: ASSR-mask (full) on the whole channel space, built the
+#     equal-weight way (each electrode referenced to its own pre-stimulus window
+#     before the ROI is averaged, then the average referenced to its own again);
+#     ASSR-mask (PCA) read only through each recording's PCA subspace on the raw
+#     cache; and ASSR-mask (PCA, z), the same operator on the z-scored cache —
+#     the signal the decomposition was handed, before the unmixing.
+#   - THREE signal variants: zscored (the stored per-recording z-scored sources
+#     for the ICs, plus the masks on the z-scored cache), prestim (the raw cache
+#     projected, then every trial referenced to its own pre-stimulus baseline) and
+#     stored_prestim (the stored sources for the IC rows, given that same per-trial
+#     baseline, on prestim's reference rows unchanged). Streaming the full cache
+#     means all three see identical onsets and identical references, so the only
+#     thing that differs between prestim and stored_prestim is how the component
+#     itself was read.
 #   - THREE test families, participants as the unit, exact Wilcoxon: contrast
 #     (Placebo - Psilocybin per source), discrimination (does an IC separate the
 #     conditions better than a reference, the interaction, vs each reference) and
@@ -28,7 +37,9 @@
 # THE GRID this job runs at once:
 #   --halfwidths 0 5            -> 40 Hz single bin AND 35-45 Hz band mean
 #   --stimulus_intervals        -> 0-500 ms AND 200-500 ms test windows
-# crossed with both signal variants -> 2 x 2 x 2 = 8 cells, all in one CSV.
+# crossed with all three signal variants -> 2 x 2 x 3 = 12 cells, all in one CSV.
+# The third, stored_prestim, costs no extra streaming: it reuses the stored IC rows the
+# zscored variant already reads and the reference columns prestim already projects.
 #
 # RESOURCES. Like run_trial_stats.pbs this is I/O bound: the cost is one streamed
 # pass over the ~50 GB DEFLATE cache per condition (~13 min each), decompressed
@@ -86,35 +97,35 @@ source /opt/myproject/.venv/bin/activate
 DATA_DIR="/mnt/data/processed"
 
 python /mnt/scripts/run_assr_snr_grid.py \
-    --experiment assr \
-    --variant iva_channel_joined_tracks \
-    --store_condition JoinedTracks \
-    --music_type ASSR \
-    --conditions Placebo Psilocybin \
-    --n_pca 5 \
-    --halfwidths 0 5 \
-    --stimulus_intervals 0:0.5 0.2:0.5 \
-    --signal_variants zscored prestim \
-    --contrast_alternative greater \
-    --snr_alternative less \
-    --store_dir "$DATA_DIR" \
-    --wavelet_data_dir "$DATA_DIR" \
-    --results_dir /mnt/results/assr \
-    --save_dir /mnt/plots
+   --experiment assr \
+   --variant iva_channel_joined_tracks \
+   --store_condition JoinedTracks \
+   --music_type ASSR \
+   --conditions Placebo Psilocybin \
+   --n_pca 5 \
+   --halfwidths 0 5 \
+   --stimulus_intervals 0:0.5 0.2:0.5 \
+   --signal_variants zscored prestim stored_prestim \
+   --contrast_alternative greater \
+   --snr_alternative less \
+   --store_dir "$DATA_DIR" \
+   --wavelet_data_dir "$DATA_DIR" \
+   --results_dir /mnt/results/assr \
+   --save_dir /mnt/plots
 
 # --- Other component counts ------------------------------------------------
 # Needs the matching --store_components run to exist first; the script reads the
 # store, it does not decompose. Each --n_pca is its own pass over the cache.
 #
 # for N_PCA in 3 10; do
-#     echo "=== pca $N_PCA at $(date) ==="
-#     python /mnt/scripts/run_assr_snr_grid.py \
-#         --experiment assr --variant iva_channel_joined_tracks \
-#         --store_condition JoinedTracks --music_type ASSR \
-#         --conditions Placebo Psilocybin --n_pca "$N_PCA" \
-#         --halfwidths 0 5 --stimulus_intervals 0:0.5 0.2:0.5 \
-#         --store_dir "$DATA_DIR" --wavelet_data_dir "$DATA_DIR" \
-#         --results_dir /mnt/results/assr --save_dir /mnt/plots
+#      echo "=== pca $N_PCA at $(date) ==="
+#      python /mnt/scripts/run_assr_snr_grid.py \
+#          --experiment assr --variant iva_channel_joined_tracks \
+#          --store_condition JoinedTracks --music_type ASSR \
+#          --conditions Placebo Psilocybin --n_pca "$N_PCA" \
+#          --halfwidths 0 5 --stimulus_intervals 0:0.5 0.2:0.5 \
+#          --store_dir "$DATA_DIR" --wavelet_data_dir "$DATA_DIR" \
+#          --results_dir /mnt/results/assr --save_dir /mnt/plots
 # done
 EOF
 

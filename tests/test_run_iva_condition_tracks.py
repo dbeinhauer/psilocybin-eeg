@@ -285,10 +285,24 @@ class TestOnsetAveragePerCondition:
                 if int(o) - pre >= 0 and int(o) + post <= arr.shape[-1]
             ]
             manual = np.mean([arr[..., o - pre : o + post] for o in fitting], axis=0)
+            # Each frequency is then referenced to its own pre-onset mean, so the hand
+            # computation has to do the same. Doing it per trial BEFORE the mean would
+            # give the identical answer — epoch_average is a plain mean and the mean is
+            # linear — which is why the correction is applied once, afterwards.
+            manual -= manual[..., epoch_times < 0.0].mean(axis=-1, keepdims=True)
             rows = slice(
                 block * len(self.PARTICIPANTS), (block + 1) * len(self.PARTICIPANTS)
             )
-            np.testing.assert_allclose(stacked[rows], manual, rtol=1e-12)
+            np.testing.assert_allclose(stacked[rows], manual, rtol=1e-12, atol=1e-12)
+
+    def test_the_baseline_is_removed_per_frequency(
+        self, sources_by_condition, onsets_by_condition
+    ):
+        stacked, _p, _c, epoch_times, _m = self._run(
+            sources_by_condition, onsets_by_condition
+        )
+        baseline = stacked[..., epoch_times < 0.0].mean(axis=-1)
+        assert np.allclose(baseline, 0.0, atol=1e-12)
 
     def test_no_onsets_for_one_condition_skips_everything(
         self, sources_by_condition, onsets_by_condition

@@ -261,6 +261,39 @@ class IvaVariants(Enum):
     CHANNEL_JOINED_TRACKS = "iva_channel_joined_tracks"
 
 
+class JicaVariants(Enum):
+    """
+    Joint-ICA (jICA) workflow variants, values are the canonical subdirectory names
+    shared by the stage-07 notebooks and by ``scripts/run_wavelet_jica.py``.
+
+    All of them run the **same** independence geometry as
+    :attr:`IvaVariants.CHANNEL` — mixing = channels, samples = time x frequency —
+    but tie the recordings together differently: instead of one dataset per
+    recording coupled through IVA's source-component vector, every recording's
+    channels are laid side by side into **one** feature axis and a single FastICA is
+    fitted to the lot. A component is therefore one shared spectro-temporal source
+    ``(F, T)`` plus a mixing column that splits into a per-recording topography
+    ``(C,)`` and, in the size of that block, a per-recording loading.
+
+    * :attr:`CHANNEL_JOINED` — the recording-axis join
+      (:attr:`ConditionVariants.JOINED`): one channel block per recording, so each
+      condition gets its own topography and loading and the condition contrast
+      lives there. The TF maps are shared by construction.
+    * :attr:`CHANNEL_JOINED_TRACKS` — the time-axis join
+      (:attr:`ConditionVariants.JOINED_TRACKS`): one channel block per participant
+      whose sample axis spans both condition tracks, so the topography and loading
+      are shared and the contrast lives in the TF maps, recovered by splitting the
+      sample axis.
+    * :attr:`COMPONENT_ANALYSIS` — the 40 Hz response read-out built on either
+      join: the per-recording filters projected onto the raw wavelet power, cut into
+      stimulus-locked trials, and tested against the fixed ASSR-electrode reference.
+    """
+
+    CHANNEL_JOINED = "ica_channel_joined"
+    CHANNEL_JOINED_TRACKS = "ica_channel_joined_tracks"
+    COMPONENT_ANALYSIS = "ica_component_analysis"
+
+
 class IvaComponentArrays(Enum):
     """
     Canonical names of the per-component arrays kept in the IVA results store.

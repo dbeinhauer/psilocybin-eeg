@@ -56,8 +56,10 @@ Sign handling, in order:
 1. ``iva_g`` fixes each component's sign only per participant.
 2. :func:`~src.analysis.wavelet_ica.align_iva_component_signs` resolves it from
    ``Sigma_N``.
-3. :func:`~src.analysis.iva_condition_comparison.align_tf_pc1_signs` re-decides
-   it from PC1 of the per-participant ``(F, T)`` maps and has the final say.
+3. :func:`~src.analysis.assr_trials.polarity_flip` re-decides it from the
+   correlation between each component's topography and the binary ASSR
+   electrode mask, and has the final say — so a positive value means more power
+   over that area for everyone, which is what the contrasts actually need.
 
 All three run **before** the split, deliberately: a sign belongs to a
 ``(participant, component)`` pair, not to a condition. Flipping a participant's
@@ -146,7 +148,6 @@ from scripts.notebook_helpers import (  # noqa: E402
 from src.analysis import iva_quality  # noqa: E402
 from src.analysis.condition_tracks import ZSCORE_MODES  # noqa: E402
 from src.analysis.iva_condition_comparison import (  # noqa: E402
-    align_tf_pc1_signs,
     apply_component_signs,
     decompose_channel_iva,
     slice_to_band,
@@ -156,6 +157,7 @@ from src.definitions.constants import AssrEpoch, ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
     REAL_CONDITIONS,
     ConditionVariants,
+    CoordinateSystems,
     ExclusionCategories,
     ExperimentNames,
     FrequencyBandNames,
@@ -164,7 +166,9 @@ from src.definitions.fields import (  # noqa: E402
     MusicTypeVariants,
     SpectrumTypeVariants,
 )
+from src.analysis import assr_trials as at  # noqa: E402
 from src.io.iva_store import save_iva_components  # noqa: E402
+from src.io.loading import assr_electrode_mask  # noqa: E402
 from src.visualization.iva_condition_plots import (  # noqa: E402
     plot_condition_mean_tf_maps,
     plot_condition_mean_topomaps,
@@ -183,7 +187,12 @@ _STAGE_DIR = "06-iva-condition-comparison"
 _ANALYSIS_DIR = IvaVariants.CHANNEL_JOINED_TRACKS.value
 
 #: What the final sign alignment was, printed on every figure.
-_ALIGNMENT_NOTE = "PC1 of the per-participant TF maps (strongest bin positive)"
+_ALIGNMENT_NOTE = "corr(topography, ASSR electrode mask), per (participant, component)"
+#: What the figures say when the montage carries no anchor electrode and the
+#: signs were therefore stored as iva_g returned them. Naming it matters: an
+#: unaligned group mean partly cancels, and a reader must not take a flat map
+#: for an absent effect.
+_ALIGNMENT_NOTE_NONE = "NOT sign-aligned (no ASSR anchor electrode present)"
 
 #: Frequency (Hz) marked on every TF panel — the ASSR stimulation frequency.
 _TF_FREQ_MARKS = [iva_quality.ASSR_FREQ]
@@ -396,6 +405,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Number of parallel jobs for data loading.",
     )
     parser.add_argument(
+        "--coordinate_system",
+        default=CoordinateSystems.HYDROGEL_257_NO_FIDUCIALS.value,
+        help="Montage the ASSR electrode mask is read for.",
+    )
+    parser.add_argument(
+        "--lenient_mask",
+        action="store_true",
+        help="Accept the intersection when anchor electrodes are missing.",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable DEBUG logging.",
@@ -428,9 +447,13 @@ def _onset_average_per_condition(
     Both are cut on the same paradigm window from
     :class:`~src.definitions.constants.AssrEpoch` via
     :func:`~src.analysis.iva_quality.onset_window`, taking the **shorter** post-onset
-    span of the two so the two averages share one epoch axis and can be stacked. No
-    baseline subtraction: the pre-onset interval reads ≈ 0 by construction because each
-    track was z-scored over time.
+    span of the two so the two averages share one epoch axis and can be stacked.
+
+    Each frequency is then referenced to its own pre-onset mean
+    (:func:`~src.analysis.iva_quality.subtract_epoch_baseline`). The z-scoring puts the
+    pre-onset interval near 0 over the WHOLE recording, but not within any one epoch —
+    the local level still drifts — so this is what makes the map a change rather than a
+    level. Only the mean is removed; see that function for why no divisor is applied.
 
     :param sources_by_condition: Condition name → ``(P, K, F, T_c)`` split sources.
     :param onsets_by_condition: Condition name → onset samples local to that segment,
@@ -470,6 +493,7 @@ def _onset_average_per_condition(
     post = min(g[2] for g in geometry.values())
     epoch_times = np.arange(-pre, post) / sfreq
     marks = [0.0, min(AssrEpoch.STIMULUS_DURATION_S, float(epoch_times[-1]))]
+    baseline_mask = epoch_times < 0.0
 
     averaged: dict[str, np.ndarray] = {}
     for condition in conditions:
@@ -477,9 +501,13 @@ def _onset_average_per_condition(
         averaged[condition], n_used = iva_quality.epoch_average(
             sources_by_condition[condition], onsets_in, pre, post
         )
+        averaged[condition] = iva_quality.subtract_epoch_baseline(
+            averaged[condition], baseline_mask
+        )
         _logger.info(
             f"[{label}] {condition}: averaged {n_used} epoch(s) -> "
-            f"{averaged[condition].shape}"
+            f"{averaged[condition].shape}, each frequency referenced to its own "
+            "pre-onset mean"
         )
 
     stacked, subject_participants, subject_conditions = (
@@ -526,6 +554,8 @@ def run_condition_tracks(
     n_jobs: int,
     store_root: Path | None = None,
     store_dtype: str = "float32",
+    coordinate_system: CoordinateSystems = CoordinateSystems.HYDROGEL_257_NO_FIDUCIALS,
+    lenient_mask: bool = False,
 ) -> None:
     """Run the time-concatenated decomposition for one music type and write every figure.
 
@@ -557,6 +587,9 @@ def run_condition_tracks(
     :param store_root: Processed-data root to store the recovered components under,
         or ``None`` to store nothing.
     :param store_dtype: Floating precision of the stored component arrays.
+    :param coordinate_system: Montage the electrode mask is read for.
+    :param lenient_mask: Accept the intersection when the recording is missing some of
+        the listed anchor electrodes, instead of refusing to under-select.
     """
     paired, condition_analyzers = load_paired_condition_wavelets(
         music_type,
@@ -611,22 +644,64 @@ def run_condition_tracks(
     # Orient BEFORE the split: a sign belongs to a (participant, component) pair, so
     # flipping a participant's two segments differently would break the one property
     # this variant is built on — that the component is the same in both conditions.
-    polarity = align_tf_pc1_signs(sources)
-    sources = apply_component_signs(sources, polarity.signs)
-    patterns = apply_component_signs(patterns, polarity.signs)
-    _logger.info(
-        f"[{label}] TF-PC1 alignment: flipped {polarity.n_flipped} "
-        f"(component, participant) pair(s); PC1 explains "
-        f"{polarity.explained_variance_ratio.min():.1%}-"
-        f"{polarity.explained_variance_ratio.max():.1%} of the ensemble."
+    # ── Orient every (participant, component) sign to the ASSR electrodes ──
+    # The only sign alignment there is. IVA fixes a component only up to a per-dataset
+    # sign, and what every downstream figure and contrast needs is not merely a
+    # CONSISTENT sign but a MEANINGFUL one: positive = more power over the ASSR area.
+    # The anchor is the correlation between the component's topography and the 0/1
+    # electrode mask — more positive over that area than over the rest of the head — so
+    # a pattern riding on a global offset cannot flip it. It reads the topography alone
+    # and never the tested response, so it stays symmetric in the conditions and cannot
+    # manufacture a contrast.
+    #
+    # Applied HERE rather than only at analysis time, so the stored sources and
+    # topographies are already oriented and every figure drawn from the file agrees with
+    # every test run on it. Re-applying the same anchor downstream is then a no-op.
+    channel_names = list(
+        topo_info_subset(condition_analyzers[paired.conditions[0]].info, n_ch).ch_names
     )
-    weak = np.flatnonzero(polarity.explained_variance_ratio < 0.5) + 1
-    if weak.size:
+    # A montage that carries none of the anchor electrodes has no ROI to anchor to —
+    # a different situation from a recording that dropped a few of them, which
+    # --lenient_mask governs. Say so and store the signs unaligned rather than either
+    # crashing or pretending an anchor was applied.
+    try:
+        present = assr_electrode_mask(channel_names, coordinate_system, strict=False)
+    except FileNotFoundError:
+        present = np.zeros(len(channel_names), dtype=bool)
+    if not present.any():
         _logger.warning(
-            f"[{label}] PC1 explains < 50% of the ensemble for IC {weak.tolist()}; "
-            "no dominant shared map, so the alignment there is weak evidence."
+            f"[{label}] no anchor electrode of {coordinate_system.value} is present in "
+            "this montage, so the component signs are stored UNALIGNED — every "
+            "downstream group mean will partly cancel. Check --coordinate_system."
         )
-
+        mask_anchor = {"polarity_anchor": np.asarray("none")}
+        alignment_note = _ALIGNMENT_NOTE_NONE
+    else:
+        electrode_mask = assr_electrode_mask(
+            channel_names, coordinate_system, strict=not lenient_mask
+        )
+        mask_flip, mask_strength = at.polarity_flip(patterns, electrode_mask)
+        sources = apply_component_signs(sources, mask_flip)
+        patterns = apply_component_signs(patterns, mask_flip)
+        n_weak, n_anchors = at.polarity_weak_count(mask_strength)
+        alignment_note = _ALIGNMENT_NOTE
+        mask_anchor = {
+            "polarity_anchor": np.asarray("assr_mask_corr"),
+            "polarity_anchor_flip": mask_flip,
+            "polarity_anchor_strength": mask_strength,
+        }
+        _logger.info(
+            f"[{label}] ASSR-mask sign anchor: {int((mask_flip < 0).sum())}/"
+            f"{mask_flip.size} (participant, component) pair(s) flipped; {n_weak}/{n_anchors} "
+            f"decided on |corr| < {at.POLARITY_CORR_FLOOR} "
+            f"(median |corr| {np.median(mask_strength):.3f})"
+        )
+        if n_weak:
+            _logger.warning(
+                f"[{label}] {n_weak}/{n_anchors} sign anchor(s) rest on a weak topography "
+                "correlation; a wrongly flipped participant CANCELS signal in a group mean "
+                "rather than merely adding variance."
+            )
     # Store the sign-aligned components before splitting or drawing anything. The
     # arrays go in **unsplit**, on the concatenated time axis, together with the
     # segment order and lengths: that is the model's own layout, and it keeps the
@@ -673,9 +748,7 @@ def run_condition_tracks(
             segment_lengths=list(paired.segment_lengths),
             extras={
                 "zscore_mode": np.asarray(zscore_mode),
-                "tf_pc1_signs": polarity.signs,
-                "tf_pc1_loadings": polarity.loadings,
-                "tf_pc1_explained_variance_ratio": polarity.explained_variance_ratio,
+                **mask_anchor,
                 **stored_onsets,
             },
             dtype=store_dtype,
@@ -742,7 +815,7 @@ def run_condition_tracks(
         n_ch,
         comp_indices,
         label=label,
-        alignment_note=_ALIGNMENT_NOTE,
+        alignment_note=alignment_note,
         save_path=out_dir / f"{prefix}shared_mean_topomaps.png",
     )
     plt.close("all")
@@ -760,7 +833,7 @@ def run_condition_tracks(
         show_difference=show_difference,
         time_marks=onset_times,
         freq_marks=_TF_FREQ_MARKS,
-        alignment_note=_ALIGNMENT_NOTE,
+        alignment_note=alignment_note,
         save_path=out_dir / f"{prefix}condition_mean_tf_maps.png",
     )
     plt.close("all")
@@ -777,7 +850,7 @@ def run_condition_tracks(
         label=label,
         root_dir=participants_dir,
         prefix=f"{prefix}shared_",
-        alignment_note=_ALIGNMENT_NOTE,
+        alignment_note=alignment_note,
     )
     written += plot_participant_condition_tf_maps(
         sources_stacked,
@@ -792,7 +865,7 @@ def run_condition_tracks(
         prefix=prefix,
         time_marks=onset_times,
         freq_marks=_TF_FREQ_MARKS,
-        alignment_note=_ALIGNMENT_NOTE,
+        alignment_note=alignment_note,
     )
 
     # ── stimulus-averaged ──────────────────────────────────────────────
@@ -820,7 +893,7 @@ def run_condition_tracks(
                 show_difference=show_difference,
                 freq_marks=_TF_FREQ_MARKS,
                 epoch_marks=marks,
-                alignment_note=_ALIGNMENT_NOTE,
+                alignment_note=alignment_note,
                 save_path=out_dir / f"{prefix}condition_mean_tf_maps_onset.png",
             )
             plt.close("all")
@@ -837,7 +910,7 @@ def run_condition_tracks(
                 prefix=f"{prefix}onset_",
                 freq_marks=_TF_FREQ_MARKS,
                 epoch_marks=marks,
-                alignment_note=_ALIGNMENT_NOTE,
+                alignment_note=alignment_note,
             )
 
     _logger.info(
@@ -948,6 +1021,8 @@ def main(argv: list[str] | None = None) -> None:
             n_jobs=args.n_jobs,
             store_root=store_root,
             store_dtype=args.store_dtype,
+            coordinate_system=CoordinateSystems(args.coordinate_system),
+            lenient_mask=args.lenient_mask,
         )
 
 

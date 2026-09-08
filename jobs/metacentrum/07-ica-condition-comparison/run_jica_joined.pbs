@@ -1,0 +1,219 @@
+#!/bin/bash
+#PBS -N PSILO_JICA_JOINED_07
+#PBS -l walltime=6:00:00
+#PBS -l select=1:ncpus=4:mem=499gb:scratch_local=80gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-07 joint ICA (jICA) — the RECORDING-axis join (JOINED).
+#
+# The companion of run_jica_tracks.pbs: identical pipeline, identical
+# participants, the recordings tied together along a different axis. Read that
+# job's header first — it carries the memory table and the two extents that are
+# not free knobs, both of which apply here unchanged.
+#
+#   block 0      ->  participant 001, Placebo
+#   ...
+#   block P-1    ->  participant 0NN, Placebo
+#   block P      ->  participant 001, Psilocybin
+#   ...
+#   block 2P-1   ->  participant 0NN, Psilocybin
+#
+#   samples  = frequency x time      (ONE condition's time axis)
+#   features = recording x channel        <-- twice as wide as the time join
+#
+# WHAT THIS VARIANT CAN AND CANNOT SHOW — and it is the mirror image of the time
+# join. Every recording gets its OWN channel block, so each condition has its own
+# topography and its own loading, and the condition contrast lives THERE. But the
+# sample axis is common to the whole joint matrix, so the conditions share ONE
+# (F, T) map per component: this variant cannot show a Placebo-versus-Psilocybin
+# time-frequency difference at all. The TF grid is therefore emitted with a
+# SINGLE row, labelled as shared, rather than two identical rows and an all-zero
+# difference — a figure that would read as a null result while really being a
+# statement about the model.
+#
+# So the two jobs are complements, not alternatives: between them they cover both
+# sides of the decomposition, and neither covers both alone.
+#
+#   this job (JOINED)             run_jica_tracks.pbs (JOINED_TRACKS)
+#   ---------------------------   ------------------------------------
+#   blocks: 2P (per recording)    blocks: P (per participant)
+#   TF maps: SHARED, one row      TF maps: split per condition + difference
+#   topography/loading: contrast  topography/loading: SHARED, one row
+#   filter per condition: its own the participant's, shared
+#
+# WHICH ONE THE READ-OUT SHOULD BE TRUSTED ON. Both run it, and they answer the
+# same question with different exposure to one confound. Here each condition is
+# read by its OWN filter, so a difference in the 40 Hz response could in
+# principle come from the filter having changed rather than from the signal; in
+# the time join the same operator reads both conditions, so it cannot. Treat
+# run_jica_tracks.pbs as the primary read-out and this job as the check that the
+# conclusion survives when each recording gets its own filter — if the two
+# disagree, the disagreement is the result.
+#
+# The polarity anchor stays valid either way: it reads only the FORWARD PATTERN's
+# projection onto the fixed reference electrodes — a spatial property — never the
+# tested response, so it cannot manufacture a condition difference. Here it is
+# resolved per recording from that recording's own pattern.
+#
+# --------------------------------------------------------------------------
+# MEMORY. The feature axis is 2P x C rather than P x C but the sample axis is one
+# condition's time axis rather than both, so the FastICA input is the SAME size as
+# the time join's — the memory section of run_jica_tracks.pbs applies verbatim, with
+# T_total read as one condition's T. At the full ASSR extent that is a ~44 GB matrix
+# and a 90-130 GB peak, so this job also runs the whole recording and passes no
+# --n_times. That flag is a LEADING CROP of the session, not a subsample — a
+# debugging flag, not a setting.
+#
+# Read that job's note on the 32-bit LAPACK ceiling too: it applies here identically,
+# and it is why the channel reduction goes through the covariance rather than an SVD
+# of the data matrix.
+#
+# One thing IS different, and it is a hard requirement rather than a budget: this
+# join stacks recordings into one subject axis, so it needs both conditions on
+# ONE TIME BASE. That holds whenever the stimulus alignment was fitted over every
+# recording of both conditions, which is what the standard preprocessing does —
+# but a cohort where it does not will fail here and still work in the time join.
+#
+# As there, the dominant peak is the wavelet cache read (~110 GB per condition,
+# decompressed in full before it is trimmed), which is what mem=499gb is for — and it
+# is also the dominant TIME cost: ~40 minutes per condition, measured. Everything
+# after it is minutes. See run_jica_tracks.pbs for the full timeline and for the
+# --subset_cache trade if you plan to re-run. Stage-03 (store_assr_wavelets.pbs) must
+# have produced those caches first.
+#
+# --------------------------------------------------------------------------
+# Plots:
+#   shared_tf_maps               the shared component maps, ONE row
+#   shared_tf_maps_onset         the same, averaged over stimuli
+#   condition_mean_topomaps      rows = conditions + difference, columns =
+#                                components — the topography contrast this
+#                                variant exists for
+#   loading_bars_absolute        per-RECORDING loading, grouped by participant
+#   loading_bars_within_component  and coloured by condition, so a participant's
+#                                Placebo and Psilocybin bars are paired: this is
+#                                where the condition contrast is read
+#   trial_course_by_source_*     the 40 Hz response over time per spatial filter
+#   pvalue_summary_*             the two test families as forest plots
+#   snr_vs_reference_*           each component's response minus the reference's
+#
+# Output:
+#   plots/07-ica-condition-comparison/Joined_ASSR/broadband/
+#       ica_channel_joined/ica_<N>/*.png
+#       ica_component_analysis/ica_<N>/*.png
+#   results/assr/jica_tests__joined__ASSR__ica<N>.csv
+#
+# The CSV is the durable product and does not collide with the time join's: the
+# filename carries the join, and every row names it too, so the two can be
+# concatenated and compared directly.
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+
+WAVELET_DIR="/mnt/data/processed"
+
+# Everything except --n_ica, so the sweep below can vary it. An argument repeated
+# on one command line takes its LAST value, so a flag that also lives in this
+# array cannot be overridden by prefixing it — it has to be left out.
+COMMON_ARGS=(
+    --experiment assr
+    --join joined
+    --conditions Placebo Psilocybin
+    --random_state 42
+    --ica_algorithm parallel
+    --ica_max_iter 2000
+    --wavelet_data_dir "$WAVELET_DIR"
+    --reuse_wavelets
+    --n_jobs -1
+)
+
+# The FULL time axis, so all ~148 stimulus onsets per condition. --n_times is
+# deliberately NOT passed: it is a LEADING CROP, not a subsample, so any value
+# would keep only the first N/250 seconds of each recording and drop the later
+# trials wholesale.
+echo "=== jICA recording-axis join, FULL extent, 5 components at $(date) ==="
+python /mnt/scripts/run_wavelet_jica.py \
+    --n_ica 5 \
+    "${COMMON_ARGS[@]}"
+
+# --- Component-count sweep -------------------------------------------------
+# Each --n_ica gets its own ica_<N>/ subdirectory and its own CSV. Watch the
+# convergence line: a run that did not converge is not a fixed point and its
+# components should not be interpreted.
+#
+# for N_ICA in 3 8; do
+#     echo "=== n_ica $N_ICA at $(date) ==="
+#     python /mnt/scripts/run_wavelet_jica.py \
+#         --n_ica "$N_ICA" \
+#         "${COMMON_ARGS[@]}"
+# done
+
+# --- Read only the sustained steady state ----------------------------------
+# Skips the onset transient, so what is tested is the steady state rather than
+# the evoked response plus it.
+#
+# python /mnt/scripts/run_wavelet_jica.py \
+#     --n_ica 5 \
+#     --stimulus_interval 0.2 0.5 \
+#     --save_dir /mnt/plots/sustained \
+#     --results_dir /mnt/results/assr_sustained \
+#     "${COMMON_ARGS[@]}"
+
+# --- Topography figures per participant ------------------------------------
+# One figure PER COMPONENT — Placebo on the first row, Psilocybin on the second,
+# one column per participant ordered by ID, so a participant's two recordings are
+# vertically paired. That pairing answers what the condition means cannot: is a
+# difference shared across the group, or carried by one or two people?
+#
+# python /mnt/scripts/run_wavelet_jica.py \
+#     --n_ica 5 \
+#     --participant_grids \
+#     --skip_analysis \
+#     "${COMMON_ARGS[@]}"
+
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch

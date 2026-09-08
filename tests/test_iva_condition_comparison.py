@@ -12,8 +12,6 @@ import numpy as np
 import pytest
 
 from src.analysis.iva_condition_comparison import (
-    TfPc1Polarity,
-    align_tf_pc1_signs,
     apply_component_signs,
     condition_component_means,
     condition_difference,
@@ -70,148 +68,41 @@ def subject_conditions():
     return ["Placebo"] * 3 + ["Psilocybin"] * 3
 
 
-class TestAlignTfPc1Signs:
-    def test_returns_the_documented_shapes(self, scrambled):
-        polarity = align_tf_pc1_signs(scrambled)
-        assert isinstance(polarity, TfPc1Polarity)
-        assert polarity.signs.shape == (N_SUBJECTS, N_COMPONENTS)
-        assert polarity.loadings.shape == (N_SUBJECTS, N_COMPONENTS)
-        assert polarity.pc1.shape == (N_COMPONENTS, N_FREQS, N_TIMES)
-        assert polarity.explained_variance_ratio.shape == (N_COMPONENTS,)
-
-    def test_signs_are_plus_or_minus_one(self, scrambled):
-        assert set(np.unique(align_tf_pc1_signs(scrambled).signs)) <= {-1.0, 1.0}
-
-    def test_every_recording_agrees_with_its_component_mean(self, scrambled):
-        """The outcome the alignment exists for."""
-        polarity = align_tf_pc1_signs(scrambled)
-        aligned = apply_component_signs(scrambled, polarity.signs)
-        for k in range(N_COMPONENTS):
-            mean = aligned[:, k].mean(axis=0).ravel()
-            for s in range(N_SUBJECTS):
-                assert np.corrcoef(aligned[s, k].ravel(), mean)[0, 1] > 0.5
-
-    def test_the_aligned_mean_recovers_the_shared_map(self, scrambled, shared):
-        polarity = align_tf_pc1_signs(scrambled)
-        aligned = apply_component_signs(scrambled, polarity.signs)
-        for k in range(N_COMPONENTS):
-            mean = aligned[:, k].mean(axis=0)
-            assert abs(np.corrcoef(mean.ravel(), shared[k].ravel())[0, 1]) > 0.99
-            # Not cancelled: the mean keeps the shared map's amplitude.
-            assert np.abs(mean).mean() > 0.9 * np.abs(shared[k]).mean()
-
-    def test_aligning_never_weakens_the_mean(self, scrambled):
-        polarity = align_tf_pc1_signs(scrambled)
-        aligned = apply_component_signs(scrambled, polarity.signs)
-        for k in range(N_COMPONENTS):
-            assert (
-                np.abs(aligned[:, k].mean(axis=0)).mean()
-                >= np.abs(scrambled[:, k].mean(axis=0)).mean() - 1e-12
-            )
-
-    def test_is_idempotent(self, scrambled):
-        polarity = align_tf_pc1_signs(scrambled)
-        aligned = apply_component_signs(scrambled, polarity.signs)
-        assert align_tf_pc1_signs(aligned).n_flipped == 0
-
-    def test_recovers_the_true_signs_up_to_one_global_sign_per_component(
-        self, scrambled, true_flips
-    ):
-        """The group's overall orientation is free; the *relative* signs are not."""
-        polarity = align_tf_pc1_signs(scrambled)
-        ratio = polarity.signs * true_flips
-        for k in range(N_COMPONENTS):
-            assert len(set(ratio[:, k])) == 1
-
-    def test_pc1_is_anchored_strongest_bin_positive(self, scrambled):
-        pc1 = align_tf_pc1_signs(scrambled).pc1
-        for k in range(N_COMPONENTS):
-            flat = pc1[k].ravel()
-            assert flat[int(np.argmax(np.abs(flat)))] > 0
-
-    def test_is_independent_of_recording_order(self, scrambled):
-        """A reproducible anchor must not depend on how recordings happen to arrive."""
-        polarity = align_tf_pc1_signs(scrambled)
-        perm = np.random.default_rng(4).permutation(N_SUBJECTS)
-        permuted = align_tf_pc1_signs(scrambled[perm])
-        np.testing.assert_allclose(permuted.pc1, polarity.pc1, atol=1e-10)
-        np.testing.assert_allclose(permuted.signs, polarity.signs[perm])
-
-    def test_loadings_are_the_pre_flip_projections(self, scrambled):
-        polarity = align_tf_pc1_signs(scrambled)
-        # signs invert exactly the negative loadings, nothing else.
-        expected = np.where(polarity.loadings < 0, -1.0, 1.0)
-        np.testing.assert_array_equal(polarity.signs, expected)
-
-    def test_explained_variance_is_high_for_a_dominant_shared_map(self, scrambled):
-        evr = align_tf_pc1_signs(scrambled).explained_variance_ratio
-        assert (evr > 0.9).all(), evr
-
-    def test_explained_variance_is_low_for_unstructured_maps(self):
-        """The diagnostic must say so when there is no shared map to align to."""
-        noise = np.random.default_rng(5).standard_normal(
-            (N_SUBJECTS, 1, N_FREQS, N_TIMES)
-        )
-        assert align_tf_pc1_signs(noise).explained_variance_ratio[0] < 0.6
-
-    def test_flip_counters(self, scrambled):
-        polarity = align_tf_pc1_signs(scrambled)
-        assert polarity.n_flipped == int((polarity.signs < 0).sum())
-        np.testing.assert_array_equal(
-            polarity.flipped_per_component(), (polarity.signs < 0).sum(axis=0)
-        )
-        assert polarity.flipped_per_component().shape == (N_COMPONENTS,)
-
-    def test_an_all_zero_component_is_left_alone(self):
-        polarity = align_tf_pc1_signs(np.zeros((3, 2, 2, 2)))
-        assert polarity.n_flipped == 0
-        assert polarity.explained_variance_ratio.tolist() == [0.0, 0.0]
-
-    def test_inputs_are_not_mutated(self, scrambled):
-        before = scrambled.copy()
-        align_tf_pc1_signs(scrambled)
-        np.testing.assert_array_equal(scrambled, before)
-
-    def test_wrong_ndim_raises(self):
-        with pytest.raises(ValueError, match=r"must be \(S, K, F, T\)"):
-            align_tf_pc1_signs(np.zeros((3, 2, 4)))
-
-    def test_empty_axis_raises(self):
-        with pytest.raises(ValueError, match="non-empty"):
-            align_tf_pc1_signs(np.zeros((3, 0, 4, 5)))
+@pytest.fixture
+def signs(scrambled):
+    """A deterministic +-1 array; apply_component_signs does not care where it came from."""
+    values = np.ones(scrambled.shape[:2])
+    values[::2, 0] = -1.0
+    values[1::2, -1] = -1.0
+    return values
 
 
 class TestApplyComponentSigns:
-    def test_orients_tf_maps(self, scrambled):
-        signs = align_tf_pc1_signs(scrambled).signs
+    def test_orients_tf_maps(self, scrambled, signs):
         out = apply_component_signs(scrambled, signs)
         np.testing.assert_allclose(out, scrambled * signs[:, :, None, None])
 
-    def test_orients_channel_patterns_with_the_same_signs(self, scrambled, patterns):
+    def test_orients_channel_patterns_with_the_same_signs(self, patterns, signs):
         """Map and topography must never disagree about which way is up."""
-        signs = align_tf_pc1_signs(scrambled).signs
         out = apply_component_signs(patterns, signs)
         np.testing.assert_allclose(out, patterns * signs[:, :, None])
 
-    def test_orients_marginals(self, scrambled):
-        signs = align_tf_pc1_signs(scrambled).signs
+    def test_orients_marginals(self, scrambled, signs):
         marginal = scrambled.mean(axis=2)  # (S, K, T)
         np.testing.assert_allclose(
             apply_component_signs(marginal, signs), marginal * signs[:, :, None]
         )
 
-    def test_orients_a_bare_two_axis_array(self, scrambled):
-        signs = align_tf_pc1_signs(scrambled).signs
+    def test_orients_a_bare_two_axis_array(self, scrambled, signs):
         flat = scrambled[..., 0, 0]
         np.testing.assert_allclose(apply_component_signs(flat, signs), flat * signs)
 
-    def test_inputs_are_not_mutated(self, patterns, scrambled):
+    def test_inputs_are_not_mutated(self, patterns, signs):
         before = patterns.copy()
-        apply_component_signs(patterns, align_tf_pc1_signs(scrambled).signs)
+        apply_component_signs(patterns, signs)
         np.testing.assert_array_equal(patterns, before)
 
-    def test_applying_twice_is_the_identity(self, patterns, scrambled):
-        signs = align_tf_pc1_signs(scrambled).signs
+    def test_applying_twice_is_the_identity(self, patterns, signs):
         once = apply_component_signs(patterns, signs)
         np.testing.assert_allclose(apply_component_signs(once, signs), patterns)
 

@@ -69,15 +69,19 @@ TRIALS_REL_KEY = "trials_rel"
 BASELINE_POSITIVE_KEY = "baseline_positive"
 ONSETS_KEY = "onsets"
 
-#: How large a component's pattern weight over the anchor electrodes must be, relative
-#: to its weight over all channels, before its sign is trustworthy. Below this the
-#: component barely projects onto the area and the flip is a coin toss on noise.
+#: Sign anchor: the correlation between a component's forward pattern and the 0/1 anchor
+#: mask, read across ALL channels. Because
+#: ``cov(pattern, mask) = f (1 - f) (mean_inside - mean_outside)`` for a binary mask with
+#: a fraction ``f`` of ones, this asks whether the pattern is more positive over the
+#: anchor area **than elsewhere on the head** — so a pattern that happens to sit on a
+#: global offset cannot flip it, which an anchor reading only the mean *inside* the mask
+#: could not guarantee.
 #:
-#: Note this is deliberately NOT a measure of how much participants agree on the sign.
-#: They are free to disagree — that is precisely what the flip exists to reconcile, and
-#: on a real cohort every component splits. What has to hold is that each participant's
-#: own weight there is big enough for its sign to mean something.
-POLARITY_STRENGTH_FLOOR = 0.2
+#: Below this ``|corr|`` the flip is decided by noise rather than by the topography. It
+#: is still applied — leaving a component unflipped is not the safer option, it just
+#: picks the run's arbitrary sign instead — but the count of pairs under this floor
+#: belongs on any figure whose direction depends on it.
+POLARITY_CORR_FLOOR = 0.1
 
 
 def source_labels(n_components: int) -> list[str]:
@@ -307,31 +311,35 @@ def polarity_flip(
     channel_patterns: np.ndarray,
     electrode_mask: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Per-participant sign that orients each component to the ASSR electrodes.
+    """Per-component sign that orients each component to the ASSR electrodes.
 
-    A component's sign is fixed only up to whatever the run's own alignment chose,
-    which is not the same as "positive means more power over the electrodes of
+    A component's sign is fixed only up to whatever the decomposition happened to
+    choose, which is not the same as "positive means more power over the electrodes of
     interest". Measured on a real cohort, the sign of a component's forward-pattern
     weight over those electrodes splits across participants — so left alone, a positive
     value means *more* power there for some participants and *less* for others, no
     direction can be predicted, and a group mean partly cancels.
 
-    Flipping by that sign fixes it. The anchor is legitimate for a paired contrast
-    precisely because the pattern is a property of the decomposition, shared by both
-    conditions when one mixing matrix per participant covers the whole recording — so
-    it is symmetric in the conditions and cannot favour either. An anchor read off the
-    tested quantity instead (say, "flip so condition A is positive") forces that
-    condition's value to be ``|v| >= 0`` while leaving the other centred, and
-    manufactures a difference under the null.
+    The ambiguity is per **(participant, component)**: every component carries its own
+    independent sign, so a single flip applied to all of a participant's components
+    would be wrong. The returned array is shaped accordingly.
+
+    The anchor is :data:`POLARITY_CORR_FLOOR`'s correlation — see that constant for why
+    it compares the anchor area against the rest of the head rather than against zero.
+    It is legitimate for a paired contrast precisely because the pattern is a property
+    of the decomposition, symmetric in the conditions, and read without ever touching
+    the tested response. An anchor taken from the tested quantity instead (say, "flip so
+    condition A is positive") forces that condition's value to be ``|v| >= 0`` while
+    leaving the other centred, and manufactures a difference under the null.
 
     :param channel_patterns: ``(participants, components, channels)`` forward patterns.
     :param electrode_mask: Boolean mask over the channel axis selecting the electrodes
         the components are anchored to.
     :return: ``(flip, strength)`` — ``flip`` is ``(participants, components)`` of +-1,
-        and ``strength`` is ``(participants, components)`` holding
-        ``|mean weight on the mask| / |mean weight overall|``, which says whether the
-        anchor is well determined or a coin toss on noise.
-    :raises ValueError: If the mask does not match the pattern's channel axis.
+        and ``strength`` is ``(participants, components)`` of ``|corr(pattern, mask)|``,
+        to be read against :data:`POLARITY_CORR_FLOOR`.
+    :raises ValueError: If the mask does not match the pattern's channel axis, or
+        selects every channel or none — either leaves the correlation undefined.
     """
     patterns = np.asarray(channel_patterns, dtype=float)
     mask = np.asarray(electrode_mask, dtype=bool)
@@ -340,18 +348,55 @@ def polarity_flip(
             f"electrode_mask must be ({patterns.shape[-1]},) to match the patterns' "
             f"channel axis; got {mask.shape}."
         )
-    on_mask = patterns[:, :, mask].mean(axis=2)
-    overall = np.abs(patterns).mean(axis=2)
-    strength = np.divide(
-        np.abs(on_mask), overall, out=np.zeros_like(on_mask), where=overall > 0
+    if not mask.any() or mask.all():
+        raise ValueError(
+            f"The anchor mask must select some but not all of the {mask.size} "
+            f"channels; it selects {int(mask.sum())}. With no contrast between inside "
+            "and outside the correlation is undefined."
+        )
+    # Centring the 0/1 mask is what turns this into "more positive here than elsewhere"
+    # rather than "positive here".
+    indicator = mask.astype(float)
+    indicator = indicator - indicator.mean()
+    centred = patterns - patterns.mean(axis=2, keepdims=True)
+    numerator = centred @ indicator
+    denominator = np.linalg.norm(centred, axis=2) * np.linalg.norm(indicator)
+    correlation = np.divide(
+        numerator, denominator, out=np.zeros_like(numerator), where=denominator > 0
     )
-    return np.where(on_mask >= 0, 1.0, -1.0), strength
+    # A flat pattern correlates with nothing; leave it at +1 rather than inventing a
+    # sign, and let the zero strength mark it. Clip because a perfect correlation comes
+    # back as 1 + 2e-16, and the strength is compared against a floor and printed.
+    return (
+        np.where(correlation >= 0, 1.0, -1.0),
+        np.clip(np.abs(correlation), 0.0, 1.0),
+    )
+
+
+def polarity_weak_count(
+    strength: np.ndarray,
+    *,
+    floor: float = POLARITY_CORR_FLOOR,
+) -> tuple[int, int]:
+    """How many ``"mask_corr"`` flips were decided below *floor*.
+
+    The flip is applied regardless — declining to flip does not avoid a choice, it just
+    keeps the run's own arbitrary sign — but a caller drawing a group mean should say
+    how much of it rests on anchors this weak, because a wrongly flipped participant
+    *cancels* signal rather than merely adding variance.
+
+    :param strength: ``(participants, components)`` of ``|corr|``.
+    :param floor: Below this the anchor is treated as undetermined.
+    :return: ``(weak, total)`` counts over the whole array.
+    """
+    values = np.asarray(strength, dtype=float)
+    return int((values < floor).sum()), int(values.size)
 
 
 def polarity_is_determined(
     strength: np.ndarray,
     *,
-    floor: float = POLARITY_STRENGTH_FLOOR,
+    floor: float = POLARITY_CORR_FLOOR,
 ) -> np.ndarray:
     """Whether each component projects onto the anchor electrodes strongly enough.
 
@@ -361,8 +406,8 @@ def polarity_is_determined(
     component that hardly loads on those electrodes, leaving its sign there set by
     noise.
 
-    :param strength: ``(participants, components)`` of
-        ``|mean weight on the mask| / |mean weight overall|``.
+    :param strength: ``(participants, components)`` of ``|corr(pattern, mask)|``, as
+        returned by :func:`polarity_flip`.
     :param floor: Minimum median strength across participants.
     :return: Boolean ``(components,)``.
     """
@@ -536,6 +581,134 @@ def epoch_time_base(pre: int, post: int, sfreq: float) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
+def roi_channelwise_snr(
+    trials: np.ndarray,
+    baseline_mask: np.ndarray,
+    *,
+    scale: float | None = None,
+) -> tuple[np.ndarray, dict[str, float]]:
+    """Per-trial SNR of an ROI, with every electrode carrying equal weight.
+
+    The alternative — averaging raw wavelet **power** over the ROI first and normalising
+    the mean afterwards — leaves each electrode weighted by its own power level, which
+    on this cohort is uncorrelated with whether that electrode carries any response. The
+    mask's whole intent is equal weight, so the normalisation has to come first.
+
+    Three steps, in this order:
+
+    1. **Per (participant, channel, trial)**, reference the trial to its own
+       pre-stimulus **mean**, and divide by that channel's baseline SD *pooled over
+       trials*. Every electrode now enters in units of its own resting fluctuation, so
+       the ROI mean is a mean of SNRs rather than a power-weighted blend.
+
+       The divisor is pooled over trials rather than taken per trial, and that is not
+       a detail. A
+       25-sample baseline SD varies about four times more than sampling theory predicts
+       (measured spread 63% against 14%), with a quarter of channel-trials landing below
+       0.3x their pooled value. A channel that happens to be quiet before one onset is
+       then divided by a spuriously small number, which inflates its **whole epoch** —
+       so any slow post-stimulus drift becomes a large *sustained* deviation. Because
+       step 2 takes a mean, those channels dominate, and because the same channels are
+       quiet across many trials a later median over trials cannot undo it. Left
+       per-trial, the ROI course peaks ~6x too high and plateaus at ~46% of peak instead
+       of returning to baseline. Pooling caps the worst ``|z|`` at ~141 rather than
+       ~5000 and restores the shape the raw signal, the power-weighted row and any
+       single electrode all show. Keeping the *mean* per trial preserves the drift
+       correction, which is the part that genuinely has to be local.
+    2. **Mean over the ROI channels**, per trial.
+    3. Reference that mean to the pre-stimulus window again, dividing by ONE shared
+       constant — the median ROI baseline SD across participants — not by each
+       participant's own.
+
+    Step 3 is not redundant, and leaving it out is the trap. A single normalised channel
+    has baseline SD 1 by construction, but the *mean* of correlated channels does not:
+    measured on the ASSR ROI it is ~0.55, i.e. only ~3 effectively independent channels
+    out of 35. Without it the ROI row sits ~1.8x below any row that really is in units
+    of its own baseline SD — every IC row — and :func:`snr_comparison` subtracts the two
+    directly.
+
+    But the constant must be SHARED, and that is the subtle part. A per-participant
+    divisor varies ~1.5-2x across the cohort and, worse, differs between the two
+    conditions of the SAME participant by up to 63% — so it injects a per-participant,
+    per-condition rescaling into what is meant to be a paired contrast. Measured, that
+    inflates the across-subject SD by ~67% and costs power. One shared constant fixes
+    the units without reweighting anybody; because it preserves ranks it also leaves the
+    paired Wilcoxon exactly where it would be with no step 3 at all.
+
+    Callers testing more than one condition should put every condition on the SAME
+    constant. Each call reports the one it used as ``roi_baseline_sd``, and rescaling is
+    a multiplication: ``snr * (its roi_baseline_sd / the shared one)``.
+
+    :param trials: ``(participants, channels, trials, samples)`` raw power, time last.
+    :param baseline_mask: Boolean ``(samples,)`` selecting the pre-stimulus window.
+    :param scale: The step-3 constant. ``None`` derives it from this call (the median
+        ROI baseline SD across participants); pass a number to put several calls — the
+        conditions of one paired test — on one shared scale.
+    :return: ``(snr, diagnostics)`` — *snr* is ``(participants, trials, samples)`` in
+        units of the ROI mean's own pre-stimulus SD; *diagnostics* carries
+        ``roi_baseline_sd`` (the median step-2 baseline SD, the inflation step 3
+        removes), ``effective_channels`` (its implied ``1/sd**2``), and ``max_abs_z1``
+        (the largest per-channel value step 1 produced — watch it for the runaway
+        divisor described above).
+    :raises ValueError: If *trials* is not 4-D, the baseline is shorter than 2 samples,
+        or *scale* is not positive.
+    """
+    array = np.asarray(trials, dtype=float)
+    if array.ndim != 4:
+        raise ValueError(
+            f"trials must be (participants, channels, trials, samples); got "
+            f"{array.shape}."
+        )
+    mask = np.asarray(baseline_mask, dtype=bool)
+    if int(mask.sum()) < 2:
+        raise ValueError(
+            f"The baseline window holds {int(mask.sum())} sample(s); at least 2 are "
+            "needed for a standard deviation."
+        )
+
+    # 1. per (participant, channel, trial): the MEAN stays per trial, so the drift
+    #    correction is local; the SD is pooled over trials unless asked otherwise.
+    base = array[..., mask].mean(axis=-1, keepdims=True)
+    per_trial = array[..., mask].std(axis=-1, ddof=1, keepdims=True)
+    # Root-mean-square over trials: the pooled WITHIN-trial SD, which is what a
+    # per-trial estimate is a noisy draw from. Not the SD of the pooled baseline
+    # samples, which would also absorb the between-trial drift in level.
+    spread = np.sqrt((per_trial**2).mean(axis=2, keepdims=True))
+    usable = spread > 0
+    z1 = np.where(usable, (array - base) / np.where(usable, spread, 1.0), np.nan)
+
+    # 2. equal-weight ROI mean
+    roi = np.nanmean(z1, axis=1)  # (participants, trials, samples)
+
+    # 3. centre per participant (a level, harmless to the paired contrast), but scale by
+    #    ONE constant shared by everybody.
+    roi_base = roi[..., mask]  # (participants, trials, baseline samples)
+    centre = np.nanmean(roi_base, axis=(1, 2), keepdims=True)[..., 0]
+    within = np.sqrt(
+        np.nanmean(np.nanvar(roi_base, axis=-1, ddof=1), axis=-1)
+    )  # (participants,)
+    shared = float(np.nanmedian(within)) if scale is None else float(scale)
+    if not shared > 0:
+        raise ValueError(
+            f"The ROI baseline scale must be positive; got {shared}. Every "
+            "participant's ROI baseline is flat, which cannot happen on real power."
+        )
+    snr = (roi - centre[:, None]) / shared
+
+    finite = within[np.isfinite(within) & (within > 0)]
+    diagnostics = {
+        "roi_baseline_sd": shared,
+        "effective_channels": float(1.0 / shared**2),
+        "max_abs_z1": float(np.nanmax(np.abs(z1))),
+        # How far a per-participant divisor would have reweighted the cohort. Reported
+        # rather than applied: it is exactly what step 3 refuses to do.
+        "participant_sd_spread": (
+            float(finite.max() / finite.min()) if finite.size else float("nan")
+        ),
+    }
+    return snr, diagnostics
+
+
 def baseline_normalise(
     trials: np.ndarray,
     baseline_mask: np.ndarray,
@@ -553,6 +726,17 @@ def baseline_normalise(
       source whatever its sign, dimensionless, and comparable across participants and
       sources. **This is the canonical form**, and the one a comparison spanning both
       learned and fixed filters must use.
+
+    The two halves of that ``z`` are estimated differently, and deliberately. The
+    **mean** is taken per trial, because removing the slow drift in level between trials
+    is the whole point — and at 25 samples a mean is a well-behaved estimator (standard
+    error ``sd/5``, symmetric). The **SD** is pooled across trials, because at 25 samples
+    it is *not*: measured on this cohort it varies ~4x more than sampling theory allows,
+    heavy-tailed, with a quarter of trials landing below 0.3x their pooled value. A trial
+    that draws a quiet baseline is then divided by a spuriously small number, which
+    inflates that trial's WHOLE epoch and turns any slow post-stimulus drift into a large
+    sustained deviation. Pooling estimates the same quantity — the per-trial value is a
+    noisy draw from it — from ``trials x baseline samples`` instead of 25.
     * ``rel = x / baseline - 1`` — the relative change, as a readable percentage, but
       written only where the baseline is positive; every other trial is ``NaN``,
       deliberately, so a downstream mean cannot average a sign-flipped value. That makes
@@ -575,7 +759,10 @@ def baseline_normalise(
         )
 
     baseline = array[..., mask].mean(axis=-1, keepdims=True)
-    spread = array[..., mask].std(axis=-1, ddof=1, keepdims=True)
+    # The MEAN is per trial, the SD is pooled ACROSS trials — see the note above on why
+    # the two estimators are treated differently at 25 baseline samples.
+    per_trial = array[..., mask].std(axis=-1, ddof=1, keepdims=True)
+    spread = np.sqrt((per_trial**2).mean(axis=-2, keepdims=True))
 
     positive = baseline > 0
     rel = np.where(positive, array / np.where(positive, baseline, 1.0) - 1.0, np.nan)
@@ -698,6 +885,67 @@ def discrimination_gain(
     return condition_contrast(values, conditions, source_index) - condition_contrast(
         values, conditions, reference_index
     )
+
+
+def reference_snr_tests(
+    value: np.ndarray,
+    labels: Sequence[str],
+    *,
+    condition: str,
+    reference_index: int = -1,
+    alternative: str = "less",
+) -> list[dict]:
+    """Is each learned source's response below the fixed reference's, in one condition?
+
+    A **magnitude** comparison, and a different question from
+    :func:`discrimination_gain`. That one asks whether a source separates the
+    *conditions* better than the reference — an interaction. This asks the plainer
+    question the reference is there to answer: does the learned filter recover *less*
+    signal over the reference area than simply averaging those electrodes does?
+
+    Run per condition rather than pooled, because the drug may change how well either
+    filter recovers the response. Every source is tested and none selected: picking one
+    by its own effect size and then testing it on the same data would bias the result.
+
+    The values must be polarity-anchored (:func:`polarity_flip`) first, or "lower" is
+    not a drop in recovered signal but a sign flip.
+
+    :param value: ``(participants, sources)`` response for one condition.
+    :param labels: Source label per column.
+    :param condition: Condition name, recorded on every returned record.
+    :param reference_index: Column holding the reference source (default: the last,
+        which is where :func:`stack_filters` puts the binary filter).
+    :param alternative: Passed to :func:`paired_test`; ``"less"`` encodes the
+        expectation that a learned filter recovers less than a selection aimed at the
+        response.
+    :return: One record per non-reference source, carrying both medians, how many
+        participants fall below the reference, and the test.
+    :raises ValueError: If *value* does not match *labels*.
+    """
+    values = np.asarray(value, dtype=float)
+    if values.ndim != 2 or values.shape[1] != len(labels):
+        raise ValueError(
+            f"value must be (participants, {len(labels)}) to match labels; got shape "
+            f"{values.shape}."
+        )
+    reference_index = range(len(labels))[reference_index]
+    records = []
+    for source, label in enumerate(labels):
+        if source == reference_index:
+            continue
+        difference = values[:, source] - values[:, reference_index]
+        finite = np.isfinite(difference)
+        records.append(
+            {
+                "source": label,
+                "condition": condition,
+                "IC SNR": float(np.nanmedian(values[:, source])),
+                "ref SNR": float(np.nanmedian(values[:, reference_index])),
+                "IC<ref": f"{int((difference[finite] < 0).sum())}/{int(finite.sum())}",
+                **paired_test(difference, alternative),
+            }
+        )
+    return records
 
 
 # ---------------------------------------------------------------------------

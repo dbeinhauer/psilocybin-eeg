@@ -5,18 +5,42 @@ variant.
 This is the CLI counterpart of
 ``notebooks/06-iva-condition-comparison/iva_component_analysis_joined.ipynb`` and its
 ``_tracks`` sibling, run on the **full** wavelet cache rather than the 12 s notebook
-subset. It reproduces the whole current workflow — both ASSR references, both signal
-variants, and all three test families — and sweeps the frequency-selection x
+subset. It reproduces the whole current workflow — both ASSR references, every signal
+variant, and all three test families — and sweeps the frequency-selection x
 stimulus-window grid in one pass, which is exactly what a job wants:
 
-* **Two references.** ``ASSR-mask (full)`` is the fixed fronto-central electrode average
-  on the whole channel space; ``ASSR-mask (PCA)`` is the same average read only through
-  each recording's PCA subspace (``mask @ P^T P``), the apples-to-apples reference for
-  the learned components.
-* **Two signal variants.** ``zscored`` reads the stored per-recording z-scored sources
-  for the IC rows (full recording, every onset) and the masks on the z-scored cache;
-  ``prestim`` projects the raw cache and references every trial to its own pre-stimulus
-  baseline.
+* **Three references**, in increasing proximity to what the IVA actually saw.
+  ``ASSR-mask (full)`` is the fixed fronto-central electrode average on the whole
+  channel space, built the equal-weight way: every electrode is referenced to its own
+  pre-stimulus mean per trial and divided by its baseline SD pooled over trials BEFORE
+  the ROI is averaged, then the average is referenced to its own again (see
+  :func:`~src.analysis.assr_trials.roi_channelwise_snr`), because averaging raw power
+  first would weight each electrode by its own power level, and a per-trial divisor
+  would let a momentarily quiet channel plateau the whole course.
+  ``ASSR-mask (PCA)`` is the same average read only through each recording's PCA
+  subspace (``mask @ P^T P``) on the RAW cache. ``ASSR-mask (PCA, z)`` is that same
+  operator on the Z-SCORED cache — the signal the decomposition was handed, after the
+  channel reduction and before the unmixing — so the pair separates the reduction from
+  the per-(channel, frequency) rescaling z-scoring adds. In ``zscored`` the last two
+  coincide by construction; in the baseline variants they differ.
+* **Three signal variants**, differing in how the LEARNED rows are read and how the
+  signal is put into comparable units:
+
+  - ``zscored`` reads the stored per-recording z-scored sources for the IC rows (full
+    recording, every onset) and the masks on the z-scored cache. No per-trial baseline.
+  - ``prestim`` projects the raw cache through the recovered spatial filters and
+    references every trial to its own pre-stimulus baseline.
+  - ``stored_prestim`` takes the IC rows from the stored sources — the decomposition's
+    own output, which the projection only approximates, since the model was fitted on
+    time-z-scored data and ``prestim`` applies the same filter to un-z-scored power —
+    and gives them the same per-trial baseline. Its mask rows are ``prestim``'s,
+    unchanged.
+
+  Because this script streams the **full** cache, ``prestim`` and ``stored_prestim``
+  see identical onsets and identical reference rows; the only thing that differs
+  between them is how the component itself was read. (In the notebooks, whose caches
+  are a 12 s subset, the stored IC rows carry many more trials than the mask rows —
+  that asymmetry does not exist here.)
 * **Three test families**, participants as the unit, exact Wilcoxon:
   ``contrast`` (Placebo - Psilocybin per source), ``discrimination`` (does an IC separate
   the conditions better than a reference, the interaction, vs each reference) and
@@ -24,8 +48,9 @@ stimulus-window grid in one pass, which is exactly what a job wants:
 * **The grid**: every ``--halfwidths`` x ``--stimulus_intervals`` combination, so a
   single run covers e.g. 40 Hz and 35-45 Hz crossed with 0-500 ms and 200-500 ms.
 
-**Both decomposition variants.** ``--variant channel_joined_tracks`` shares one filter
-per participant across the conditions; ``--variant channel_joined`` has a separate
+**Both decomposition variants.** ``--variant iva_channel_joined_tracks`` shares one
+filter per participant across the conditions; ``--variant iva_channel_joined`` has a
+separate
 topography per recording, so every projection and polarity anchor is resolved per
 (participant, condition) through ``results.row``. Nothing else differs.
 
@@ -40,8 +65,8 @@ Outputs (per run, all grid cells in one file):
 
 Examples::
 
-    # The job grid: both frequencies x both windows, both variants of signal.
-    python scripts/run_assr_snr_grid.py --experiment assr --variant channel_joined \\
+    # The job grid: both frequencies x both windows, every variant of signal.
+    python scripts/run_assr_snr_grid.py --experiment assr --variant iva_channel_joined \\
         --n_pca 5 --halfwidths 0 5 --stimulus_intervals 0:0.5 0.2:0.5
 
     # A quick shape check without decompressing the whole cache.
@@ -96,8 +121,20 @@ _STAGE_DIR = "06-iva-condition-comparison"
 _ANALYSIS_DIR = "assr_snr_grid"
 _FULL_LABEL = "ASSR-mask (full)"
 _PCA_LABEL = "ASSR-mask (PCA)"
-_MASK_LABELS = (_FULL_LABEL, _PCA_LABEL)
-_SIGNAL_VARIANTS = ("zscored", "prestim")
+#: The same subspace-projected electrode average, but read off the Z-SCORED wavelet:
+#: literally the signal the decomposition was handed, after the channel PCA and before
+#: the unmixing. It is the reference-side analogue of the "stored_prestim" IC rows and
+#: fills the same missing cell — z-scored input WITH a per-trial baseline — so reading
+#: it beside "ASSR-mask (PCA)" separates the channel reduction from the
+#: per-(channel, frequency) rescaling that z-scoring adds. In the "zscored" variant it
+#: necessarily coincides with "ASSR-mask (PCA)", which is a free check that the two
+#: paths agree; in the baseline variants the two genuinely differ.
+_PCA_Z_LABEL = "ASSR-mask (PCA, z)"
+_MASK_LABELS = (_FULL_LABEL, _PCA_LABEL, _PCA_Z_LABEL)
+_SIGNAL_VARIANTS = ("zscored", "prestim", "stored_prestim")
+# The variants whose trials are referenced to their own pre-stimulus window. "zscored"
+# is the odd one out: its z-score along time IS the normalisation.
+_BASELINE_VARIANTS = ("prestim", "stored_prestim")
 _CONDITION_COLORS = {
     ConditionVariants.PLACEBO.value: "#0F6E8C",
     ConditionVariants.PSILOCYBIN.value: "#A6357F",
@@ -201,7 +238,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         nargs="+",
         default=list(_SIGNAL_VARIANTS),
         choices=list(_SIGNAL_VARIANTS),
-        help="Which normalisations to test side by side.",
+        help=(
+            "Which normalisations to test side by side. 'stored_prestim' reads the "
+            "IC rows off the decomposition and keeps 'prestim' references."
+        ),
     )
     analysis.add_argument(
         "--contrast_alternative",
@@ -333,14 +373,18 @@ def _project_condition(
     cache_labels: list[str],
     store_channels: list[str],
     n_times: int | None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Stream one condition once; return the prestim and z-scored-mask projections.
+    roi_index: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Stream one condition once; return every per-condition array the grid needs.
 
-    :return: ``(prestim, zmask)`` where ``prestim`` is
+    :return: ``(prestim, zmask, roi_raw)``. ``prestim`` is
         ``(participants, components + 2, freqs, times)`` (IC filters, then the full and
-        PCA masks, on the RAW cache) and ``zmask`` is ``(participants, 2, freqs, times)``
-        (the two masks on the z-scored cache). The z-scored IC rows are read straight
-        from the store, so they are not produced here.
+        PCA masks, on the RAW cache); ``zmask`` is ``(participants, 2, freqs, times)``
+        (the two masks on the z-scored cache); ``roi_raw`` is
+        ``(participants, ROI channels, freqs, times)``, the mask's electrodes kept
+        UNCOMBINED so :func:`~src.analysis.assr_trials.roi_channelwise_snr` can
+        normalise each one before they are averaged. The z-scored IC rows are read
+        straight from the store, so they are not produced here.
     """
     header = read_wavelet_cache_header(cache_path)
     if header.channel_names != store_channels:
@@ -355,6 +399,9 @@ def _project_condition(
         (len(participants), n_comp + 2, freq_indices.size, keep_times), np.float32
     )
     zmask = np.empty((len(participants), 2, freq_indices.size, keep_times), np.float32)
+    roi_raw = np.empty(
+        (len(participants), roi_index.size, freq_indices.size, keep_times), np.float32
+    )
     seen = np.zeros(len(participants), bool)
 
     _logger.info(
@@ -378,6 +425,7 @@ def _project_condition(
             [filters[store], full_row, pca_row], axis=0
         )  # (K+2, C)
         prestim[row] = at.project_channels(stacked, block)
+        roi_raw[row] = block[roi_index]
         zmask[row] = at.project_channels(
             np.concatenate([full_row, pca_row], axis=0), _zscore_time(block)
         )
@@ -392,7 +440,7 @@ def _project_condition(
             f"[{condition}] participants {absent} never appeared in the cache."
         )
     _logger.info(f"[{condition}] projected in {time.time() - started:.0f}s")
-    return prestim, zmask
+    return prestim, zmask, roi_raw
 
 
 # ---------------------------------------------------------------------------
@@ -715,6 +763,7 @@ def run(args: argparse.Namespace) -> None:
     ic_labels = [at.COMPONENT_LABEL.format(k=k + 1) for k in range(n_components)]
     labels = ic_labels + list(_MASK_LABELS)
     resolve, per_recording = _row_resolver(results, variant)
+    full_mask_column = labels.index(_FULL_LABEL)
     _logger.info(
         f"variant {variant.value} ({'per-recording' if per_recording else 'shared'} "
         f"filters); {int(electrode_mask.sum())} ASSR electrode(s)"
@@ -758,9 +807,14 @@ def run(args: argparse.Namespace) -> None:
     n_participants = len(participants)
 
     # ---- 4. project both conditions (one stream each) --------------------
-    prestim_proj, zmask_proj = {}, {}
+    roi_index = np.flatnonzero(electrode_mask)
+    prestim_proj, zmask_proj, roi_proj = {}, {}, {}
     for condition in conditions:
-        prestim_proj[condition], zmask_proj[condition] = _project_condition(
+        (
+            prestim_proj[condition],
+            zmask_proj[condition],
+            roi_proj[condition],
+        ) = _project_condition(
             cache_paths[condition],
             condition,
             participants,
@@ -772,6 +826,7 @@ def run(args: argparse.Namespace) -> None:
             cache_labels[condition],
             store_channels,
             args.n_times,
+            roi_index,
         )
 
     # ---- 5. epoch geometry (shared window) -------------------------------
@@ -787,13 +842,29 @@ def run(args: argparse.Namespace) -> None:
         f"epoch {pre}+{post}={pre + post} samples = [{times[0]:.3f}, {times[-1]:.3f}] s"
     )
 
-    # per-(participant, condition) polarity flip, IC rows only (masks stay +1)
-    flip = {}
+    # Per-(participant, component) polarity flip, IC rows only (masks stay +1). The
+    # anchor is the correlation between the component's topography and the 0/1 ASSR
+    # mask, so it asks whether the pattern is more positive over that area than over the
+    # rest of the head — a pattern riding on a global offset cannot flip it. Every pair
+    # is flipped on the sign of that correlation, however small; declining to flip a
+    # weak one keeps the run's arbitrary sign rather than avoiding a choice. What the
+    # weak ones do earn is a count, carried onto every figure whose direction rests on
+    # them.
+    flip, polarity_weak = {}, {}
     for condition in conditions:
         rows_c = [resolve(p, condition) for p in participants]
-        flip_ic, _strength = at.polarity_flip(patterns[rows_c], electrode_mask)
+        flip_ic, strength = at.polarity_flip(patterns[rows_c], electrode_mask)
+        weak, total = at.polarity_weak_count(strength)
         if args.no_polarity_anchor:
             flip_ic = np.ones_like(flip_ic)
+            weak = 0
+        polarity_weak[condition] = (weak, total)
+        _logger.info(
+            f"[{condition}] polarity anchor (mask_corr): "
+            f"{int((flip_ic < 0).sum())}/{flip_ic.size} pair(s) flipped, "
+            f"{weak}/{total} with |corr| < {at.POLARITY_CORR_FLOOR} "
+            f"(median |corr| {np.median(strength):.3f})"
+        )
         flip[condition] = np.concatenate(
             [flip_ic, np.ones((n_participants, len(_MASK_LABELS)))], axis=1
         )
@@ -805,7 +876,8 @@ def run(args: argparse.Namespace) -> None:
     #     cache and onsets — without this the axes disagree (2*T vs T).
     if per_recording:
         _ic_source = {
-            c: [results.tf_maps[resolve(p, c)] for p in participants] for c in conditions
+            c: [results.tf_maps[resolve(p, c)] for p in participants]
+            for c in conditions
         }
     else:
         _ic_source = {}
@@ -813,12 +885,42 @@ def run(args: argparse.Namespace) -> None:
             segment = results.condition_track(results.tf_maps, c)  # (rows, K, F, T_seg)
             _ic_source[c] = [segment[resolve(p, c)] for p in participants]
 
+    # The stored sources always span the whole recording, while the projection can be
+    # trimmed (--n_times), so put the stored axis on the projected one before anything
+    # concatenates the two. Only a trim is legitimate: a stored track SHORTER than what
+    # was projected means the store and the cache do not describe the same recording.
+    for c in conditions:
+        keep = prestim_proj[c].shape[-1]
+        short = [
+            p for p, src in zip(participants, _ic_source[c]) if src.shape[-1] < keep
+        ]
+        if short:
+            raise ValueError(
+                f"[{c}] the stored source is shorter than the projected cache for "
+                f"{short}; the store and the cache disagree on the time axis."
+            )
+        _ic_source[c] = [src[..., :keep] for src in _ic_source[c]]
+
     def _z_ic_band(bins: np.ndarray, condition: str) -> np.ndarray:
         # (K, F, T) per participant -> average over the SELECTED FREQUENCY bins (axis 1),
         # keeping every component, to match the raw-projected band collapse.
         return np.stack(
             [src[:, bins, :].mean(axis=1) for src in _ic_source[condition]]
         )  # (P, K, T_condition)
+
+    # One line for every figure that depends on the sign anchor, so a reader never has
+    # to go back to the log to find how much of a group mean rests on a coin toss.
+    if args.no_polarity_anchor:
+        polarity_note = "polarity anchor OFF — component signs are the run's own"
+    else:
+        polarity_note = (
+            "sign anchor corr(topography, ASSR mask): "
+            + ", ".join(
+                f"{c} {polarity_weak[c][0]}/{polarity_weak[c][1]} weak"
+                for c in conditions
+            )
+            + f" (|corr| < {at.POLARITY_CORR_FLOOR})"
+        )
 
     # ---- 6. the grid: selection x window ---------------------------------
     rows_out: list[dict] = []
@@ -836,21 +938,83 @@ def run(args: argparse.Namespace) -> None:
     for sel_name, bins in selections.items():
         take = [union_position[int(b)] for b in bins]
         # cut trials once per condition per variant input
-        cut = {"prestim": {}, "zscored": {}}
+        cut: dict[str, dict[str, np.ndarray]] = {name: {} for name in _SIGNAL_VARIANTS}
+        roi_snr: dict[str, np.ndarray] = {}
+        roi_scale: dict[str, dict[str, float]] = {}
         for condition in conditions:
             onsets_inside = geometry[condition][0]
             prestim_band = prestim_proj[condition][:, :, take, :].mean(
                 axis=2
             )  # (P, K+2, T)
+            zmask_band = zmask_proj[condition][:, :, take, :].mean(axis=2)  # (P, 2, T)
+            z_ic = _z_ic_band(bins, condition)  # (P, K, T)
+            # The pre-IVA reference: the PCA mask on the z-scored cache, which is what
+            # zmask's second row already is. Appended to EVERY variant's band so the
+            # source axis is the same everywhere; only the baseline variants then give
+            # it a per-trial reference, which is what makes it differ there from the raw
+            # "(PCA)" row. In "zscored" it duplicates that row by construction.
+            pca_z_band = zmask_band[:, 1:2]  # (P, 1, T)
+
+            prestim_band = np.concatenate(
+                [prestim_band, pca_z_band], axis=1
+            )  # (P, K+3, T)
             cut["prestim"][condition], _ = at.cut_trials(
                 prestim_band, onsets_inside, pre, post
             )
-            zmask_band = zmask_proj[condition][:, :, take, :].mean(axis=2)  # (P, 2, T)
-            z_ic = _z_ic_band(bins, condition)  # (P, K, T)
-            zscored_band = np.concatenate([z_ic, zmask_band], axis=1)  # (P, K+2, T)
+            zscored_band = np.concatenate(
+                [z_ic, zmask_band, pca_z_band], axis=1
+            )  # (P, K+3, T)
             cut["zscored"][condition], _ = at.cut_trials(
                 zscored_band, onsets_inside, pre, post
             )
+            # The stored IC rows on the RAW mask rows: the learned rows come off the
+            # decomposition, the references are "prestim"'s own columns rather than
+            # anything recomputed, so the reference a component is judged against is
+            # identical in the two baseline variants and only the component moves.
+            stored_band = np.concatenate(
+                [z_ic, prestim_band[:, n_components:]], axis=1
+            )  # (P, K+3, T)
+            cut["stored_prestim"][condition], _ = at.cut_trials(
+                stored_band, onsets_inside, pre, post
+            )
+            # The binary-ROI row, built the equal-weight way: each electrode is
+            # referenced to its OWN pre-stimulus window before the ROI is averaged, and
+            # the average is then referenced to its own again so the row lands back in
+            # units of its own baseline SD. Averaging raw power first, as the columns
+            # above still do for the PCA reference, silently weights each electrode by
+            # its own power level. Kept separate from `cut` because it is already
+            # normalised and must skip baseline_normalise below.
+            roi_band = roi_proj[condition][:, :, take, :].mean(axis=2)  # (P, R, T)
+            roi_cut, _ = at.cut_trials(roi_band, onsets_inside, pre, post)
+            roi_snr[condition], roi_scale[condition] = at.roi_channelwise_snr(
+                roi_cut, baseline_mask
+            )
+
+        # Put every condition's ROI row on ONE scale. Each call derived its own from its
+        # own participants, and those differ between conditions — leaving them apart
+        # would rescale a participant's two conditions differently and corrupt the very
+        # paired difference the contrast tests. Rescaling is exact, not a re-fit:
+        # snr / shared == (snr / own) * (own / shared).
+        shared_roi_scale = float(
+            np.median([d["roi_baseline_sd"] for d in roi_scale.values()])
+        )
+        for condition in conditions:
+            roi_snr[condition] = roi_snr[condition] * (
+                roi_scale[condition]["roi_baseline_sd"] / shared_roi_scale
+            )
+        _logger.info(
+            f"[{sel_name}] equal-weight ROI over {roi_index.size} electrode(s): shared "
+            f"baseline SD {shared_roi_scale:.3f} "
+            f"(~{1.0 / shared_roi_scale**2:.1f} effective channels); per-condition "
+            + ", ".join(
+                f"{c} {roi_scale[c]['roi_baseline_sd']:.3f} "
+                f"(spread {roi_scale[c]['participant_sd_spread']:.2f}x across "
+                f"participants, NOT applied)"
+                for c in conditions
+            )
+            + f"; max |per-channel z| "
+            f"{max(d['max_abs_z1'] for d in roi_scale.values()):.0f}"
+        )
 
         for lo, hi in args.stimulus_intervals:
             window = (times >= lo) & (times <= hi)
@@ -863,14 +1027,18 @@ def run(args: argparse.Namespace) -> None:
                 # the SAME normalised trials, anchored by the per-condition flip.
                 value, course = {}, {}
                 for condition in conditions:
-                    trials = cut[signal][condition]  # (P, K+2, N, W)
-                    if signal == "prestim":
+                    trials = cut[signal][condition]  # (P, K+3, N, W)
+                    if signal in _BASELINE_VARIANTS:
                         normed, _rel, _pos = at.baseline_normalise(
                             trials, baseline_mask
                         )
+                        # Swap in the equal-weight ROI row. Only the baseline variants
+                        # get it: "zscored" has no per-trial baseline to build it on.
+                        normed = normed.copy()
+                        normed[:, full_mask_column] = roi_snr[condition]
                     else:
                         normed = trials
-                    per_trial = normed[..., window].mean(axis=-1)  # (P, K+2, N)
+                    per_trial = normed[..., window].mean(axis=-1)  # (P, K+3, N)
                     value[condition] = np.median(per_trial, axis=2) * flip[condition]
                     course[condition] = (
                         np.median(normed, axis=2) * flip[condition][:, :, None]
@@ -906,6 +1074,7 @@ def run(args: argparse.Namespace) -> None:
                         args.alpha,
                         rows_out,
                         n_participants,
+                        polarity_note,
                     )
 
     # ---- 7. one CSV for the whole grid -----------------------------------
@@ -1008,6 +1177,7 @@ def _write_cell_plots(
     alpha,
     rows_out,
     n_participants,
+    polarity_note,
 ) -> None:
     """Three figures for one grid cell, built from the rows just accumulated.
 
@@ -1015,6 +1185,10 @@ def _write_cell_plots(
     own subdirectory, ``<selection>/<window>/``, so the two signal variants of a cell sit
     together and the grid is browsable by band and window; the variant stays in the
     filename. The figure titles keep the full ``variant__selection__window`` context.
+
+    *polarity_note* names how many (participant, component) sign anchors were decided
+    on a weak topography correlation. It rides on the trial-course figure because that
+    is the one whose shape a wrongly flipped participant would visibly cancel.
     """
     tag = f"{cell['variant']}__{cell['selection']}__{cell['window']}"
     variant = cell["variant"]
@@ -1066,7 +1240,7 @@ def _write_cell_plots(
         labels,
         conditions,
         alpha,
-        f"Trial course per spatial filter — {tag}, n={n_participants}",
+        f"Trial course per spatial filter — {tag}, n={n_participants}\n{polarity_note}",
         cell_dir / f"trial_course_by_source__{variant}.png",
     )
 

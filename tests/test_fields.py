@@ -20,6 +20,7 @@ from src.definitions.fields import (
     AnalysisVariants,
     IvaComponentArrays,
     IvaVariants,
+    JicaVariants,
     PreprocessedDataVariants,
     RAW_DATA_VARIANTS,
     INTERIM_DATA_VARIANTS,
@@ -215,6 +216,33 @@ class TestIvaVariants:
                 }
             )
             == 3
+        )
+
+
+class TestJicaVariants:
+    def test_values_are_the_canonical_output_subdirectory_names(self):
+        assert {v.value for v in JicaVariants} == {
+            "ica_channel_joined",
+            "ica_channel_joined_tracks",
+            "ica_component_analysis",
+        }
+
+    def test_every_value_is_filename_and_path_safe(self):
+        """The values are used verbatim as directory names by stage 07."""
+        for variant in JicaVariants:
+            assert variant.value.replace("_", "").isalnum()
+
+    def test_no_value_collides_with_an_iva_variant(self):
+        """The two stages sit side by side under plots/; their names must not clash."""
+        assert not {v.value for v in JicaVariants} & {v.value for v in IvaVariants}
+
+    def test_the_two_joins_mirror_the_iva_ones(self):
+        """Same joins, different decomposition — so the names should be recognisable."""
+        assert JicaVariants.CHANNEL_JOINED.value.endswith(
+            IvaVariants.CHANNEL_JOINED.value.removeprefix("iva_")
+        )
+        assert JicaVariants.CHANNEL_JOINED_TRACKS.value.endswith(
+            IvaVariants.CHANNEL_JOINED_TRACKS.value.removeprefix("iva_")
         )
 
 

@@ -24,8 +24,8 @@ Both views exist for channel topographies and for time-frequency maps.
 **Sign alignment is a precondition, not a detail.** IVA fixes each component's sign only
 per recording, so unaligned maps average toward zero and — because the flips fall
 arbitrarily across the two condition blocks — invent condition differences. Pass maps
-oriented by :func:`~src.analysis.iva_condition_comparison.align_tf_pc1_signs` and name
-what did it via *alignment_note*, which every figure prints.
+oriented by :func:`~src.analysis.assr_trials.polarity_flip` and name what did it via
+*alignment_note*, which every figure prints.
 
 **Participants are always ordered by ID**, never by any score, so a participant keeps the
 same column in every figure and the two condition rows stay aligned with each other.

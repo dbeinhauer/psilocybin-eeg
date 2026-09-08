@@ -291,7 +291,19 @@ class TestOnsetAverage:
             int(o) for o in ONSETS if 0 <= int(o) - pre and int(o) + post <= N_TIMES
         ]
         manual = np.mean([sources[..., o - pre : o + post] for o in fitting], axis=0)
-        np.testing.assert_allclose(onset_tf, manual, rtol=1e-12)
+        # Each frequency is then referenced to its own pre-onset mean, so the hand
+        # computation has to do the same. Doing it per trial BEFORE the mean would give
+        # the identical answer — epoch_average is a plain mean and the mean is linear —
+        # which is exactly why the correction is applied once, afterwards.
+        manual -= manual[..., epoch_times < 0.0].mean(axis=-1, keepdims=True)
+        np.testing.assert_allclose(onset_tf, manual, rtol=1e-12, atol=1e-12)
+
+    def test_the_baseline_is_removed_per_frequency(self, sources):
+        onset_tf, epoch_times, _ = _onset_average(
+            sources, ONSETS, label="t", n_times=N_TIMES, sfreq=SFREQ, min_onsets=1
+        )
+        baseline = onset_tf[..., epoch_times < 0.0].mean(axis=-1)
+        assert np.allclose(baseline, 0.0, atol=1e-12)
 
     def test_no_onsets_returns_none(self, sources):
         assert (
@@ -532,7 +544,11 @@ class TestComponentStore:
         assert loaded.channel_patterns.shape == (6, 3, 6)  # --n_channels 6
         assert not loaded.has(IvaComponentArrays.TIMECOURSE)
         assert len(loaded.channel_names) == 6
-        assert loaded.extras["tf_pc1_signs"].shape == (6, 3)
+        # The sign anchor is the ASSR electrode topography. This synthetic montage
+        # carries none of those electrodes, so the run must say so and store the signs
+        # unaligned rather than crash or silently claim an anchor it did not apply.
+        assert loaded.extras["polarity_anchor"].item() == "none"
+        assert "polarity_anchor_flip" not in loaded.extras
 
     def test_the_stimulus_onsets_travel_with_the_components(
         self, tmp_path, stub_loaders

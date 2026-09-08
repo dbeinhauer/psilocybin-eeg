@@ -1,0 +1,315 @@
+#!/bin/bash
+#PBS -N PSILO_JICA_TRACKS_07
+#PBS -l walltime=6:00:00
+#PBS -l select=1:ncpus=4:mem=499gb:scratch_local=80gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-07 joint ICA (jICA) — the TIME-concatenated join (JOINED_TRACKS).
+#
+# Runs both halves of notebooks/07-ica-condition-comparison/ on full-cohort data:
+# the decomposition (wavelet_ica_channel_joined_tracks.ipynb) and the 40 Hz
+# read-out with its tests (ica_component_analysis.ipynb).
+#
+#   participant k  ->  [ ---- Placebo track ---- | ---- Psilocybin track ---- ]
+#
+# SAME independence geometry as the stage-06 channel-IVA jobs — mixing =
+# channels, samples = the joint time x frequency plane — but a different way of
+# tying the recordings together. Instead of one dataset per recording coupled
+# through IVA's source-component vector, every participant's channels are laid
+# side by side into ONE feature axis and a single FastICA is fitted to the lot:
+#
+#   samples  = frequency x time    (time spanning BOTH conditions)
+#   features = participant x channel     <-- the stacked mixing axis
+#
+# So a component is one SHARED spectro-temporal source plus a mixing column that
+# splits into per-participant blocks.
+#
+# WHAT THIS VARIANT CAN AND CANNOT SHOW. The sample axis spans both tracks, so
+# each component's single (F, T_total) map splits back into a Placebo half and a
+# Psilocybin half — a genuine per-condition time-frequency contrast, which the
+# recording-axis join (run_jica_joined.pbs) cannot produce at all. The price is
+# the mixing side: one channel block per participant means ONE topography and
+# ONE loading per (participant, component), SHARED by both conditions. And that
+# is stronger than it is for IVA — because the sources are shared and
+# unit-variance, a participant's loading is exactly proportional to the squared
+# norm of its pattern block, so restricting it to one condition's samples would
+# rescale every participant by the SAME factor. There is therefore no
+# per-condition loading to compare, not even in principle. The figures are
+# emitted with a single row rather than two identical rows and a zero
+# difference. For a contrast in the scalp pattern or the loading, use
+# run_jica_joined.pbs.
+#
+# WHAT jICA BUYS OVER IVA. A component's sign flips its map and its whole mixing
+# column together, so there is NO per-recording sign ambiguity: a block that
+# comes out negative is genuinely inverted, a result rather than an artefact.
+# The stage-06 jobs spend two alignment passes on that sign (align_iva_component
+# _signs from Sigma_N, then align_tf_pc1_signs from PC1 of the TF maps) and carry
+# the risk that arbitrary flips manufacture a condition difference. Here the only
+# free sign is one global one per component, pinned by "largest |TF| excursion
+# positive" — deliberately hypothesis-free.
+#
+# WHAT IT COSTS. A per-block filter is that participant's CONTRIBUTION to a
+# shared source, not their own copy of the component:
+#
+#   source_k(f, t) = sum_b  u_{b,k} . x_b(f, t)
+#
+# so a participant with a near-zero loading has a near-noise extracted time
+# course and still carries full weight in every group statistic. The loading
+# figures are what say which those are — read them before any p-value.
+#
+# --------------------------------------------------------------------------
+# MEMORY — and why this job runs the FULL time axis.
+#
+# jICA does not reduce its feature axis the way IVA does: IVA reduces each recording's
+# CHANNEL axis with its own PCA BEFORE stacking, so its input is (n_pca, F*T, K) — a
+# few GB at full extent. jICA's input is
+#
+#   (F * T_total) x (participants * channels) x itemsize
+#
+# At the full ASSR extent — 12 matched participants, 195 channels, 50 frequencies,
+# T = ~47000 samples per condition, float32 — that is:
+#
+#   raw tensors (both tracks)            ~44 GB
+#   standardised copy                    ~44 GB
+#   stacked FastICA input                ~44 GB
+#   ----------------------------------------------------------------------
+#   peak, roughly                        90-130 GB
+#
+# Nothing proportional to the data is allocated on top of that. The channel reduction
+# goes through the (features, features) COVARIANCE — 2340 x 2340 here, ~44 MB — which
+# is accumulated in blocks of samples, eigendecomposed, and used to project the data
+# down to --n_ica dimensions. See src.analysis.wavelet_jica.fit_joint_ica.
+#
+# THAT ROUTE IS NOT AN OPTIMISATION, IT IS THE ONLY ONE THAT WORKS. Handing the
+# stacked matrix to FastICA directly makes it whiten via scipy.linalg.svd, and LAPACK
+# indexes with 32-BIT INTEGERS, so a matrix with more than 2**31 - 1 elements is
+# refused outright:
+#
+#   ValueError: Indexing a matrix of 10993320000 elements would incur an in integer
+#   overflow in LAPACK.
+#
+# At 2340 features that ceiling is ~918k samples — ~73 s of both tracks — so the full
+# recording is 5x over it. No node size changes that; it is a hard limit. (An earlier
+# revision of this job hit exactly that error after loading 44 GB of wavelet data.)
+#
+# The dominant peak is therefore the wavelet cache read, not the fit: a cached wavelet
+# tensor is decompressed IN FULL before it is trimmed (the stimulus alignment is
+# defined over the whole cohort, so that cache cannot be written per subset), ~110 GB
+# per condition for ASSR, read one condition at a time. That is what mem=499gb is
+# really for. Stage-03 (store_assr_wavelets.pbs) must have produced those two caches
+# first.
+#
+# MEASURED TIMINGS, from the run of 2026-09-07 (12 participants, full extent):
+#
+#   18:38 -> 19:16   Placebo wavelet cache read        37.5 min
+#   19:16 -> 19:57   Psilocybin wavelet cache read     40.9 min
+#   19:57 -> 19:59   pairing + standardise + stack      2.0 min
+#   ---------------------------------------------------------------
+#                    to the start of the fit           ~1 h 22 min
+#
+# So the two cache reads are ~80 minutes of the ~1.5 hours before the decomposition
+# even begins, and everything after them is minutes: the covariance accumulation is
+# 2340^2 x 4.7M ~ 2.6e13 flops (order ten minutes on four BLAS threads), and the
+# eigendecomposition, the FastICA iterations and the band-limited read-out are all
+# negligible beside it. walltime=6:00:00 leaves roughly 3x margin on that.
+#
+# WORTH KNOWING IF YOU WILL RE-RUN. --subset_cache writes each condition's trimmed
+# tensor back UNCOMPRESSED, so a second run at the same extent reads it in seconds
+# instead of 40 minutes — the 80-minute read is paid once rather than every time. The
+# cost is disk on the HOME filesystem, ~44 GB per condition at full extent, counted
+# against quota. It is left OFF here because that is a quota decision rather than a
+# default; turn it on if you plan a --n_ica sweep or the companion join.
+#
+# --------------------------------------------------------------------------
+# THREE EXTENTS THAT ARE NOT FREE KNOBS, all left at full below:
+#
+#   --n_times     A LEADING CROP of each condition, not a subsample, so any value
+#                 keeps only the first N/250 seconds of every recording and drops
+#                 the later trials wholesale — excluding habituation and
+#                 time-on-task from the components AND from the tests. It costs
+#                 trials (~148 per condition at full extent) on top of that. Not a
+#                 setting; a debugging flag.
+#
+#   --n_channels  The ASSR-electrode reference is the checked-in fronto-central
+#                 selection in config/assr_electrodes/, spread over the montage,
+#                 so a LEADING channel slice does not contain it. The run refuses
+#                 rather than quietly averaging over two electrodes.
+#   --n_pairs     The participant is the unit of every test, and an exact
+#                 Wilcoxon over P participants cannot return a p below 2/2**P:
+#                 0.0005 at P=12, but 0.06 at P=5. Subsetting the cohort does not
+#                 just weaken the test, it makes it unable to reject at all.
+#
+# Only participants recorded under BOTH conditions are kept (12 of the ASSR set:
+# 15 Placebo and 16 Psilocybin recordings, 7 unpaired), so the design is a
+# balanced within-participant one.
+#
+# Z-scoring happens per condition BEFORE the concatenation, inside
+# assemble_join: each track is standardised on its own and the standardised
+# tracks are laid end to end, so each enters the decomposition exactly as in a
+# single-condition run. Consequence: an overall power difference between the
+# conditions is normalised away, so what the COMPONENTS describe is temporal and
+# spectral STRUCTURE. The read-out is unaffected — its trials are cut from the
+# RAW, un-z-scored power.
+#
+# NO new wavelet cache is written. Unlike the subject-axis join this variant does
+# NOT need the two conditions to share a time base, so the tracks may differ in
+# length. --subset_cache is deliberately NOT passed: at this extent the "subset"
+# would be a large uncompressed copy per condition for little saving; it pays off
+# only for a small channel/time subset (see the exploration block below).
+#
+# --------------------------------------------------------------------------
+# Plots:
+#   condition_tf_maps            rows = conditions + difference, columns =
+#   condition_tf_maps_onset      components; the second averaged over stimuli,
+#                                each condition epoched with ITS OWN onsets on
+#                                its own segment
+#   shared_mean_topomaps         the shared topographies, ONE row
+#   loading_bars_absolute        per-participant loading, % of the joint
+#                                channel-space energy
+#   loading_bars_within_component  the same, normalised per component, so a
+#                                component carried by one or two people is
+#                                obvious
+#   trial_course_by_source_*     THE headline figure: the 40 Hz response over
+#                                time per spatial filter, Placebo vs Psilocybin,
+#                                mean +/- SEM ACROSS PARTICIPANTS, each panel
+#                                carrying its one-sided p
+#   pvalue_summary_*             the two test families as forest plots
+#   snr_vs_reference_*           each component's response minus the reference's,
+#                                per condition
+#
+# Output:
+#   plots/07-ica-condition-comparison/JoinedTracks_ASSR/broadband/
+#       ica_channel_joined_tracks/ica_<N>/*.png
+#       ica_component_analysis/ica_<N>/*.png
+#   results/assr/jica_tests__joined_tracks__ASSR__ica<N>.csv
+#
+# THE CSV is the durable product: one row per test, with the family (contrast /
+# vs_reference / snr), the source, the median, a robust effect size, how many
+# participants point positive, the exact Wilcoxon p and a bootstrap interval.
+# Both --halfwidths are carried through it, so whether a result survives the
+# other frequency window can be checked without a second run. Nothing in it is
+# corrected for multiplicity, by choice — read a row alongside its effect and
+# same-sign columns and against its neighbours, not on its p alone.
+#
+# NB --n_ica is NOT capped by the channel count (the feature axis is
+# participants x channels), but it IS capped in practice by convergence: FastICA
+# reliably converges at small K on ASSR data and can fail at 10, and a
+# non-converged unmixing is an arbitrary point on the solver's path. The run
+# reports it and refuses to pretend otherwise. Every extra component also adds an
+# uncorrected test to two families, which is why 5 is the default rather than the
+# notebooks' 10.
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+
+WAVELET_DIR="/mnt/data/processed"
+
+# Everything except --n_ica, so the sweep below can vary it. An argument repeated
+# on one command line takes its LAST value, so a flag that also lives in this
+# array cannot be overridden by prefixing it — it has to be left out.
+COMMON_ARGS=(
+    --experiment assr
+    --join joined_tracks
+    --conditions Placebo Psilocybin
+    --random_state 42
+    --ica_algorithm parallel
+    --ica_max_iter 2000
+    --wavelet_data_dir "$WAVELET_DIR"
+    --reuse_wavelets
+    --n_jobs -1
+)
+
+# The FULL time axis: every sample of both tracks, so all ~148 stimulus onsets per
+# condition. --n_times is deliberately NOT passed — it is a LEADING CROP, not a
+# subsample, so any value would keep only the first N/250 seconds of each recording
+# and drop the later trials wholesale, excluding habituation and time-on-task
+# effects from everything downstream.
+echo "=== jICA time-join, FULL extent, 5 components at $(date) ==="
+python /mnt/scripts/run_wavelet_jica.py \
+    --n_ica 5 \
+    "${COMMON_ARGS[@]}"
+
+# --- Component-count sweep -------------------------------------------------
+# Each --n_ica gets its own ica_<N>/ subdirectory and its own CSV, so nothing
+# collides. Watch the convergence line: a run that did not converge is not a
+# fixed point and its components should not be interpreted.
+#
+# for N_ICA in 3 8; do
+#     echo "=== n_ica $N_ICA at $(date) ==="
+#     python /mnt/scripts/run_wavelet_jica.py \
+#         --n_ica "$N_ICA" \
+#         "${COMMON_ARGS[@]}"
+# done
+
+# --- Read only the sustained steady state ----------------------------------
+# The default response window is the paradigm's full driven interval (0-500 ms),
+# which includes the onset transient. This reads only the sustained part, where a
+# steady-state effect should live if it is one.
+#
+# python /mnt/scripts/run_wavelet_jica.py \
+#     --n_ica 5 \
+#     --stimulus_interval 0.2 0.5 \
+#     --save_dir /mnt/plots/sustained \
+#     --results_dir /mnt/results/assr_sustained \
+#     "${COMMON_ARGS[@]}"
+
+# --- psilo_music ------------------------------------------------------------
+# Both music types, each its own run. There are no stimulus onsets there, so the
+# read-out has nothing to cut trials around and is skipped automatically; only
+# the decomposition figures are produced.
+#
+# python /mnt/scripts/run_wavelet_jica.py \
+#     --experiment psilo_music \
+#     --music_type CLASSIC PSYTRANCE \
+#     --join joined_tracks \
+#     --n_ica 5 \
+#     --wavelet_data_dir "$WAVELET_DIR" \
+#     --reuse_wavelets \
+#     --n_jobs -1
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch
