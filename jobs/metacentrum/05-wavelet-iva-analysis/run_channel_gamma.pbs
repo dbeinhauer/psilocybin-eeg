@@ -22,9 +22,9 @@
 # next music type starts. Peak memory stays bounded to one music type.
 #
 # Output:
-#   plots/05-channel-wavelet-iva-analysis/Placebo_CLASSIC/
+#   plots/05-wavelet-iva-analysis/Placebo_CLASSIC/
 #       bands/iva_channel/alpha_*_top.png and alpha_*_bottom.png
-#   plots/05-channel-wavelet-iva-analysis/Placebo_PSYTRANCE/
+#   plots/05-wavelet-iva-analysis/Placebo_PSYTRANCE/
 #       bands/iva_channel/alpha_*_top.png and alpha_*_bottom.png
 #
 # Components are ranked by the mean off-diagonal value of the per-component

@@ -64,7 +64,7 @@
 # silently skipped for experiments without stimulus onsets.
 #
 # Output (broadband):
-#   plots/05-channel-wavelet-iva-analysis/Placebo_ASSR/
+#   plots/05-wavelet-iva-analysis/Placebo_ASSR/
 #       broadband/iva_channel/pca_10/
 #           iva_*_top.png                              # standard IVA plots
 #           quality_reference_wavelet_*.png            # the reference pair

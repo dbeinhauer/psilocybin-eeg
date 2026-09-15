@@ -15,9 +15,9 @@
 # components.  Processes the Placebo condition on both music types.
 #
 # Output:
-#   plots/04-subject-time-wavelet-ica-analysis/Placebo_CLASSIC/
+#   plots/04-wavelet-ica-analysis/Placebo_CLASSIC/
 #       bands/subject_time/alpha_*.png
-#   plots/04-subject-time-wavelet-ica-analysis/Placebo_PSYTRANCE/
+#   plots/04-wavelet-ica-analysis/Placebo_PSYTRANCE/
 #       bands/subject_time/alpha_*.png
 # ---------------------------------------------------------------------------
 

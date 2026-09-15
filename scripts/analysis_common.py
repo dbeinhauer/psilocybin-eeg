@@ -44,6 +44,7 @@ import numpy as np
 from scipy.stats import circmean
 
 from src.analysis.data_representations import (
+    subset as data_subset,
     AnalysisData,
     DataRepresentation,
     to_wavelet_phase,
@@ -2220,3 +2221,53 @@ def run_wavelet_workflow(
         )
 
     _logger.info(f"Wavelet {representation} analysis complete.")
+
+
+def add_subset_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add the three axis limits every stage uses to run notebook-sized.
+
+    Named the same everywhere so one habit carries across stages, and applied through
+    :func:`~src.analysis.data_representations.subset` so they mean the same thing.
+
+    :param parser: Parser to extend.
+    """
+    group = parser.add_argument_group("notebook-sized runs")
+    group.add_argument(
+        "--n_subjects",
+        type=int,
+        default=None,
+        help="Keep only the first N subjects. Default: all.",
+    )
+    group.add_argument(
+        "--n_channels",
+        type=int,
+        default=None,
+        help="Keep only the first N channels. Default: all. Note a spatial filter or "
+        "electrode mask built for the full montage will not match a subset.",
+    )
+    group.add_argument(
+        "--n_times",
+        type=int,
+        default=None,
+        help="Keep only the first N time samples. Default: all.",
+    )
+
+
+def apply_subset(datasets: dict, args: argparse.Namespace) -> dict:
+    """Apply ``--n_subjects/--n_channels/--n_times`` to every dataset.
+
+    :param datasets: Mapping of dataset key to :class:`AnalysisData`.
+    :param args: Parsed arguments carrying the three limits.
+    :return: The same mapping with each entry subset; unchanged when no limit is set.
+    """
+    limits = {
+        "n_items": getattr(args, "n_subjects", None),
+        "n_features": getattr(args, "n_channels", None),
+        "n_samples": getattr(args, "n_times", None),
+    }
+    if all(value is None for value in limits.values()):
+        return datasets
+    out = {key: data_subset(value, **limits) for key, value in datasets.items()}
+    shapes = {key: value.data.shape for key, value in out.items()}
+    _logger.info(f"subset to {limits} -> {shapes}")
+    return out

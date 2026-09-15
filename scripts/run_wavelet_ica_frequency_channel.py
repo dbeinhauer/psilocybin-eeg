@@ -8,7 +8,7 @@ Subject-Time variant, which has F×C observations and S×T features).
 Produces **all** ICA components (not just the first 6 shown in the notebook)
 and writes every plot into the canonical per-condition layout under::
 
-    plots/04-frequency-channel-wavelet-ica-analysis/<Condition>_<MusicType>/
+    plots/04-wavelet-ica-analysis/<Condition>_<MusicType>/
         broadband/frequency_channel/                  # default (no --band)
             pca_scree_<label>.png
             ...
@@ -62,7 +62,9 @@ from scripts.analysis_common import (  # noqa: E402
     FREQUENCY_BANDS,
     _broadband_wavelet_4d,
     add_wavelet_grid_args,
+    add_subset_arguments,
     analyzers_to_datasets,
+    apply_subset,
     load_analyzers,
     resolve_wavelet_dir,
 )
@@ -79,7 +81,7 @@ from src.definitions.fields import (  # noqa: E402
 
 _logger = logging.getLogger(__name__)
 
-_STAGE_DIR = "04-frequency-channel-wavelet-ica-analysis"
+_STAGE_DIR = "04-wavelet-ica-analysis"
 
 # ---------------------------------------------------------------------------
 # Cluster-analysis constants and helpers
@@ -280,6 +282,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable DEBUG logging.",
     )
+    add_subset_arguments(parser)
+
     return parser
 
 
@@ -1200,6 +1204,7 @@ def run(args: argparse.Namespace) -> None:
         experiment_name=experiment_name,
     )
     datasets = analyzers_to_datasets(analyzers)
+    datasets = apply_subset(datasets, args)
 
     for mt in music_types:
         mt_label = mt.value

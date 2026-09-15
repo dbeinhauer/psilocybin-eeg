@@ -11,7 +11,7 @@ Adapter functions (``to_*``) convert between representations.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import List, Optional, Union
 
@@ -391,3 +391,55 @@ def extract_ica_activations(
 
     min_samples = min(s.shape[1] for s in sources)
     return np.array([s[:, :min_samples] for s in sources])
+
+
+def subset(
+    data: AnalysisData,
+    *,
+    n_items: int | None = None,
+    n_features: int | None = None,
+    n_samples: int | None = None,
+) -> AnalysisData:
+    """A leading slice of *data* along any of its three axes.
+
+    What makes a notebook run in seconds rather than as long as the job: every stage
+    subsets the same way, taking the first *n* of each axis rather than sampling, so a
+    rerun always sees the same rows.
+
+    ``info`` and ``feature_names`` are cut with the feature axis, so a topography drawn
+    from a subset still names the channels it actually holds. Nothing is copied that is
+    not sliced, and the input is never modified.
+
+    :param data: The container to subset.
+    :param n_items: Keep this many items (subjects); ``None`` keeps all.
+    :param n_features: Keep this many features (channels); ``None`` keeps all.
+    :param n_samples: Keep this many samples (time points); ``None`` keeps all.
+    :return: A new :class:`AnalysisData`; the original when nothing was limited.
+    :raises ValueError: If any limit is not positive.
+    """
+    limits = {"n_items": n_items, "n_features": n_features, "n_samples": n_samples}
+    for name, value in limits.items():
+        if value is not None and value <= 0:
+            raise ValueError(f"{name} must be positive; got {value}.")
+    if all(value is None for value in limits.values()):
+        return data
+
+    items, features, samples = data.data.shape
+    keep_i = items if n_items is None else min(n_items, items)
+    keep_f = features if n_features is None else min(n_features, features)
+    keep_s = samples if n_samples is None else min(n_samples, samples)
+
+    subset_info = data.info
+    if subset_info is not None and keep_f < features:
+        subset_info = mne.pick_info(subset_info, list(range(keep_f)), verbose=False)
+    names = data.feature_names
+    if names is not None and keep_f < features:
+        names = list(names[:keep_f])
+
+    return replace(
+        data,
+        data=data.data[:keep_i, :keep_f, :keep_s],
+        feature_names=names,
+        info=subset_info,
+        metadata={**data.metadata, "subset_of": data.data.shape},
+    )

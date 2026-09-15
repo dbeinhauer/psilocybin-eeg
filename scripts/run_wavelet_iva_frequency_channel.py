@@ -8,7 +8,7 @@ Produces **all** IVA components (not just the first 10 shown in the
 notebook) and writes every plot into the canonical per-condition
 layout under::
 
-    plots/05-frequency-channel-wavelet-iva-analysis/<Condition>_<MusicType>/
+    plots/05-wavelet-iva-analysis/<Condition>_<MusicType>/
         broadband/iva_frequency_channel/pca_<n_pca>/  # default (no --band)
             pca_scree_<label>.png
             iva_component_ranking_<label>.png
@@ -82,7 +82,9 @@ from scripts.analysis_common import (  # noqa: E402
     _broadband_wavelet_4d,
     add_iva_store_args,
     add_wavelet_grid_args,
+    add_subset_arguments,
     analyzers_to_datasets,
+    apply_subset,
     load_analyzers,
     participant_labels,
     resolve_wavelet_dir,
@@ -109,7 +111,7 @@ from src.visualization.iva_quality_plots import topo_info_subset  # noqa: E402
 
 _logger = logging.getLogger(__name__)
 
-_STAGE_DIR = "05-frequency-channel-wavelet-iva-analysis"
+_STAGE_DIR = "05-wavelet-iva-analysis"
 _ANALYSIS_DIR = IvaVariants.FREQUENCY_CHANNEL.value
 
 # ---------------------------------------------------------------------------
@@ -294,6 +296,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable DEBUG logging.",
     )
+    add_subset_arguments(parser)
+
     return parser
 
 
@@ -1361,6 +1365,7 @@ def run(args: argparse.Namespace) -> None:
         experiment_name=experiment_name,
     )
     datasets = analyzers_to_datasets(analyzers)
+    datasets = apply_subset(datasets, args)
 
     for mt in music_types:
         mt_label = mt.value
