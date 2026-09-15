@@ -17,7 +17,9 @@ import pandas as pd
 from src.definitions.constants import ProjectPaths
 from src.definitions.fields import (
     CoordinateSystems,
+    ExperimentNames,
     PreprocessedDataVariants,
+    SpectrumTypeVariants,
     RAW_DATA_VARIANTS,
     INTERIM_DATA_VARIANTS,
 )
@@ -273,6 +275,11 @@ class WaveletCacheHeader:
     :param freqs: Morlet frequency grid in Hz.
     :param sfreq: Sampling frequency in Hz.
     :param label: Dataset label the cache was written under.
+    :param participants: Participant id per subject index, when the cache records them.
+        Full caches do not — their subject axis is in concatenation order and is named
+        through the metadata sidecar. A strip written by
+        ``scripts/run_build_notebook_cache.py`` keeps only some subjects, so its order no
+        longer matches that sidecar and it carries its own labels instead.
     """
 
     path: Path
@@ -282,6 +289,7 @@ class WaveletCacheHeader:
     freqs: np.ndarray
     sfreq: float
     label: str
+    participants: list[str] | None = None
 
     @property
     def n_subjects(self) -> int:
@@ -339,6 +347,11 @@ def read_wavelet_cache_header(path: Path) -> WaveletCacheHeader:
                 "named — and a spatial filter cannot be aligned to it."
             )
         feature_names = [str(name) for name in cached["feature_names"]]
+        participants = (
+            [str(name) for name in cached["participants"]]
+            if "participants" in cached
+            else None
+        )
 
     if len(shape) != 3:
         raise ValueError(
@@ -365,6 +378,7 @@ def read_wavelet_cache_header(path: Path) -> WaveletCacheHeader:
         freqs=freqs,
         sfreq=sfreq,
         label=label,
+        participants=participants,
     )
 
 
@@ -479,3 +493,73 @@ def stream_wavelet_cache_subjects(
                     ).reshape(resolved.n_freqs, resolved.n_times)
                     out[channel] = block[selection, :keep_times]
                 yield subject, out
+
+
+# ---------------------------------------------------------------------------
+# Cache and concatenation paths
+# ---------------------------------------------------------------------------
+
+
+def concatenated_dir(experiment: ExperimentNames, root: Path | None = None) -> Path:
+    """Directory holding one experiment's concatenated arrays and their sidecars.
+
+    :param experiment: Which experiment.
+    :param root: Processed-data root; ``None`` uses the project's.
+    :return: The concatenation directory.
+    """
+    base = ProjectPaths.PROCESSED_DATA_DIR if root is None else Path(root)
+    return base / experiment.value / PreprocessedDataVariants.CONCATENATED.value
+
+
+def cache_participant_labels(concat_dir: Path, label: str) -> list[str]:
+    """Participant labels in a cache's subject order, read from the concatenation metadata.
+
+    A cache's subject axis is in concatenation order and carries no labels of its own, so
+    a row can only be matched to a participant through this sidecar.
+
+    :param concat_dir: Directory holding ``<label>.metadata.csv``.
+    :param label: Dataset label, e.g. ``"Placebo_ASSR"``.
+    :return: Zero-padded three-digit participant ids, in subject order.
+    :raises FileNotFoundError: If the metadata CSV is missing.
+    :raises ValueError: If it lacks the person-index or participant-id column.
+    """
+    path = concat_dir / f"{label}.metadata.csv"
+    if not path.exists():
+        raise FileNotFoundError(f"No concatenation metadata at {path}.")
+    frame = pd.read_csv(path, index_col=0)
+    index_column = "SingleDataMetadata.CONCATENATED_PERSON_INDEX"
+    id_column = "SingleDataMetadata.PARTICIPANT_ID"
+    missing = [c for c in (index_column, id_column) if c not in frame.columns]
+    if missing:
+        raise ValueError(f"{path.name} has no {missing} column(s).")
+    by_index = dict(zip(frame[index_column], frame[id_column].astype(str)))
+    return [
+        "".join(ch for ch in by_index[i] if ch.isdigit())[-3:].zfill(3)
+        for i in sorted(by_index)
+    ]
+
+
+def wavelet_cache_path(
+    root: Path | None, experiment: ExperimentNames, label: str
+) -> Path:
+    """Newest wavelet cache for one dataset label.
+
+    :param root: Processed-data root; ``None`` uses the project's. Point it at
+        ``notebooks/cache`` to read a notebook-sized strip instead of the full cache.
+    :param experiment: Which experiment.
+    :param label: Dataset label, e.g. ``"Placebo_ASSR"``.
+    :return: The cache path.
+    :raises FileNotFoundError: If no cache matches.
+    """
+    base = ProjectPaths.PROCESSED_DATA_DIR if root is None else Path(root)
+    directory = (
+        base / experiment.value / "wavelets" / SpectrumTypeVariants.BROADBAND.value
+    )
+    matches = sorted(directory.glob(f"{label}__wavelet_power__*__freqdim1.npz"))
+    if not matches:
+        raise FileNotFoundError(
+            f"No wavelet cache for {label} in {directory}. Build the full one with "
+            "jobs/metacentrum/03-wavelet-analysis/store_assr_wavelets.pbs, or a "
+            "notebook-sized strip with scripts/run_build_notebook_cache.py."
+        )
+    return matches[-1]

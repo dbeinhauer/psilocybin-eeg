@@ -147,13 +147,15 @@ from src.definitions.fields import (  # noqa: E402
     ExperimentNames,
     IvaVariants,
     MusicTypeVariants,
-    PreprocessedDataVariants,
     SpectrumTypeVariants,
 )
 from src.io.iva_store import load_iva_components  # noqa: E402
 from src.io.loading import (  # noqa: E402
     assr_electrode_mask,
+    cache_participant_labels as _cache_participants,
+    concatenated_dir as _concatenated_dir,
     read_wavelet_cache_header,
+    wavelet_cache_path as _wavelet_cache_path,
 )
 from src.visualization.assr_snr_plots import (  # noqa: E402
     plot_cell as _plot_cell,
@@ -261,6 +263,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     data = parser.add_argument_group("the wavelet cache and the cohort")
     data.add_argument("--wavelet_data_dir", type=Path, default=None)
     data.add_argument(
+        "--concat_dir",
+        type=Path,
+        default=None,
+        help=(
+            "Processed-data root the concatenated arrays and their onset sidecars are "
+            "read from. Separate from --wavelet_data_dir, so a small wavelet strip can "
+            "be read without moving the onsets."
+        ),
+    )
+    data.add_argument(
         "--coordinate_system", default=CoordinateSystems.HYDROGEL_257_NO_FIDUCIALS.value
     )
     data.add_argument(
@@ -347,11 +359,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 
 
-def _concatenated_dir(experiment: ExperimentNames, root: Path | None) -> Path:
-    base = ProjectPaths.PROCESSED_DATA_DIR if root is None else Path(root)
-    return base / experiment.value / PreprocessedDataVariants.CONCATENATED.value
-
-
 def _load_onsets(concat_dir: Path, label: str) -> np.ndarray:
     path = concat_dir / f"{label}{ProjectPaths.STIMULUS_ONSETS_SUFFIX}"
     if not path.exists():
@@ -360,39 +367,6 @@ def _load_onsets(concat_dir: Path, label: str) -> np.ndarray:
             "the concatenated array."
         )
     return np.load(path).astype(int)
-
-
-def _cache_participants(concat_dir: Path, label: str) -> list[str]:
-    path = concat_dir / f"{label}.metadata.csv"
-    if not path.exists():
-        raise FileNotFoundError(f"No concatenation metadata at {path}.")
-    frame = pd.read_csv(path, index_col=0)
-    index_column = "SingleDataMetadata.CONCATENATED_PERSON_INDEX"
-    id_column = "SingleDataMetadata.PARTICIPANT_ID"
-    missing = [c for c in (index_column, id_column) if c not in frame.columns]
-    if missing:
-        raise ValueError(f"{path.name} has no {missing} column(s).")
-    by_index = dict(zip(frame[index_column], frame[id_column].astype(str)))
-    return [
-        "".join(ch for ch in by_index[i] if ch.isdigit())[-3:].zfill(3)
-        for i in sorted(by_index)
-    ]
-
-
-def _wavelet_cache_path(
-    root: Path | None, experiment: ExperimentNames, label: str
-) -> Path:
-    base = ProjectPaths.PROCESSED_DATA_DIR if root is None else Path(root)
-    directory = (
-        base / experiment.value / "wavelets" / SpectrumTypeVariants.BROADBAND.value
-    )
-    matches = sorted(directory.glob(f"{label}__wavelet_power__*__freqdim1.npz"))
-    if not matches:
-        raise FileNotFoundError(
-            f"No wavelet cache for {label} in {directory}. Build it with "
-            "jobs/metacentrum/03-wavelet-analysis/store_assr_wavelets.pbs first."
-        )
-    return matches[-1]
 
 
 def _cache_frequency_grid(cache_paths: dict, conditions: list[str]) -> np.ndarray:
@@ -507,14 +481,21 @@ def run(args: argparse.Namespace) -> None:
     masked_share = at.mask_weight_share(filters, electrode_mask)
 
     # ---- 2. onsets, caches, paired cohort --------------------------------
-    concat_dir = _concatenated_dir(experiment, args.wavelet_data_dir)
+    concat_dir = _concatenated_dir(experiment, args.concat_dir)
     onsets, cache_labels, cache_paths = {}, {}, {}
     for condition in conditions:
         label = f"{condition}_{music_type.value}"
         onsets[condition] = _load_onsets(concat_dir, label)
-        cache_labels[condition] = _cache_participants(concat_dir, label)
         cache_paths[condition] = _wavelet_cache_path(
             args.wavelet_data_dir, experiment, label
+        )
+        # A strip cache names its own subject axis; a full one is named through the
+        # concatenation metadata, whose order it shares.
+        strip_labels = read_wavelet_cache_header(cache_paths[condition]).participants
+        cache_labels[condition] = (
+            list(strip_labels)
+            if strip_labels is not None
+            else _cache_participants(concat_dir, label)
         )
 
     # ---- 3. frequency selections, resolved on BOTH grids -----------------

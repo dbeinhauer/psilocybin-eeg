@@ -17,3 +17,4 @@ logs/
 .venv-viz/
 .worktrees/
 notebooks/**/out/
+notebooks/cache/
