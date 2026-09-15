@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N PSILO_IVA_CH_05
-#PBS -l walltime=2:00:00
+#PBS -l walltime=4:00:00
 #PBS -l select=1:ncpus=8:mem=499gb:scratch_local=80gb
 #PBS -m ae
 #PBS -j oe
@@ -18,7 +18,9 @@
 # Plots: component ranking, channel-PCA scree, temporal- and spectral-
 # marginal ISC matrices + clusters, LOO-ISC bars for four axes
 # (spectro-temporal, temporal, spectral, channel) + a by-axis summary,
-# topomap mean/var of the channel patterns, the shared time × frequency
+# topomap mean/var of the channel patterns (each subject's pattern rescaled
+# to unit L2 norm first, so neither map is driven by per-subject gain),
+# the shared time × frequency
 # source map (direct), source mean ± √variance along time and frequency,
 # pair-space heatmaps (Time × Subject, Subject × Frequency,
 # Subject × Channel), per-subject mean loadings.
@@ -87,10 +89,10 @@ WAVELET_DIR="/mnt/data/processed"
 
 COMMON_ARGS=(
     --condition Placebo
-    --experiment psilo_music
-    --n_pca 50
+    --experiment assr
+    --n_pca 10
     --n_top 10
-    --n_bottom 5
+    --n_bottom 0
     --random_state 42
     --iva_opt_approach newton
     --iva_max_iter 1024
@@ -99,18 +101,18 @@ COMMON_ARGS=(
     --n_jobs -1
 )
 
-# python /mnt/scripts/run_wavelet_iva_channel.py \
-#     "${COMMON_ARGS[@]}"
-
-echo "=== CLASSIC at $(date) ==="
 python /mnt/scripts/run_wavelet_iva_channel.py \
-    --music_type CLASSIC \
     "${COMMON_ARGS[@]}"
 
-echo "=== PSYTRANCE at $(date) ==="
-python /mnt/scripts/run_wavelet_iva_channel.py \
-     --music_type PSYTRANCE \
-     "${COMMON_ARGS[@]}"
+# echo "=== CLASSIC at $(date) ==="
+# python /mnt/scripts/run_wavelet_iva_channel.py \
+#     --music_type CLASSIC \
+#     "${COMMON_ARGS[@]}"
+
+# echo "=== PSYTRANCE at $(date) ==="
+# python /mnt/scripts/run_wavelet_iva_channel.py \
+#      --music_type PSYTRANCE \
+#      "${COMMON_ARGS[@]}"
 EOF
 
 chmod +x run_inside.sh

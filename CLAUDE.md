@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-EEG analysis pipeline studying psilocybin effects on neural synchrony during music listening. 257-channel EGI GSN-HydroCel EEG, two conditions (Placebo/Psilocybin), two music types (CLASSIC/PSYTRANCE). Core metric: Inter-Subject Correlation (ISC).
+EEG analysis pipeline studying psilocybin effects on neural synchrony during music listening. 257-channel EGI GSN-HydroCel EEG, two conditions (Placebo/Psilocybin), two music types (CLASSIC/PSYTRANCE).
 
 ## Claude Code Skills
 

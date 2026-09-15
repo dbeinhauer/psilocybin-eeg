@@ -174,7 +174,7 @@ COMMON_ARGS=(
 # trials wholesale.
 echo "=== jICA recording-axis join, FULL extent, 5 components at $(date) ==="
 python /mnt/scripts/run_wavelet_jica.py \
-    --n_ica 5 \
+    --n_ica 10 \
     "${COMMON_ARGS[@]}"
 
 # --- Component-count sweep -------------------------------------------------

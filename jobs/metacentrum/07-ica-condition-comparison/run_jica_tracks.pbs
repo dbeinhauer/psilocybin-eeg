@@ -267,7 +267,7 @@ COMMON_ARGS=(
 # effects from everything downstream.
 echo "=== jICA time-join, FULL extent, 5 components at $(date) ==="
 python /mnt/scripts/run_wavelet_jica.py \
-    --n_ica 5 \
+    --n_ica 10 \
     "${COMMON_ARGS[@]}"
 
 # --- Component-count sweep -------------------------------------------------
