@@ -8,7 +8,7 @@
 # ---------------------------------------------------------------------------
 # Stage-06 — full-recording ASSR SNR / condition-contrast GRID, SUBJECT-axis join.
 #
-# Runs scripts/run_assr_snr_grid.py for the CHANNEL_JOINED decomposition: the whole
+# Runs scripts/run_assr_snr_grid.py for the CHANNEL_JOINED_SEPARATE decomposition: the whole
 # current workflow of
 # notebooks/06-iva-condition-comparison/iva_component_analysis_joined.ipynb on the
 # FULL wavelet cache, sweeping the frequency-selection x stimulus-window grid.
@@ -47,14 +47,14 @@
 # already held; ncpus=4 because the decompression is single-threaded.
 #
 # NEEDS ON DISK (all from earlier stages):
-#   data/processed/assr/iva_results/Joined/iva_*__pca<N>.npz          (the store)
+#   data/processed/assr/iva_results/JoinedSeparate/iva_*__pca<N>.npz          (the store)
 #   data/processed/assr/wavelets/broadband/<Cond>_ASSR__wavelet_power__*__freqdim1.npz
 #   data/processed/assr/concatenated/<Cond>_ASSR.stimulus_onsets.npy
 #   data/processed/assr/concatenated/<Cond>_ASSR.metadata.csv
 #
 # WRITES:
-#   results/assr/assr_snr_grid__iva_channel_joined__broadband__pca<N>.csv  (all cells)
-#   plots/06-iva-condition-comparison/Joined_ASSR/broadband/assr_snr_grid/
+#   results/assr/assr_snr_grid__iva_channel_joined_separate__broadband__pca<N>.csv  (all cells)
+#   plots/06-iva-condition-comparison/JoinedSeparate_ASSR/broadband/assr_snr_grid/
 #       pca_<N>/<sel>/<window>/{pvalue_summary,snr_by_condition,trial_course_by_source}__<variant>.png
 #       pca_<N>/{mean,mean_masked}_filter_topomaps.png    the spatial-filter check
 #           figures: whether the cohort agreed on the map the mean_* rows average, and
@@ -103,8 +103,8 @@ DATA_DIR="/mnt/data/processed"
 
 python /mnt/scripts/run_assr_snr_grid.py \
     --experiment assr \
-    --variant iva_channel_joined \
-    --store_condition Joined \
+    --variant iva_channel_joined_separate \
+    --store_condition JoinedSeparate \
     --music_type ASSR \
     --conditions Placebo Psilocybin \
     --n_pca 5 \
@@ -124,8 +124,8 @@ python /mnt/scripts/run_assr_snr_grid.py \
 # for N_PCA in 3 10; do
 #     echo "=== pca $N_PCA at $(date) ==="
 #     python /mnt/scripts/run_assr_snr_grid.py \
-#         --experiment assr --variant iva_channel_joined \
-#         --store_condition Joined --music_type ASSR \
+#         --experiment assr --variant iva_channel_joined_separate \
+#         --store_condition JoinedSeparate --music_type ASSR \
 #         --conditions Placebo Psilocybin --n_pca "$N_PCA" \
 #         --halfwidths 0 5 --stimulus_intervals 0:0.5 0.2:0.5 \
 #         --store_dir "$DATA_DIR" --wavelet_data_dir "$DATA_DIR" \

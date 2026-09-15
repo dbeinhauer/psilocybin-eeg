@@ -203,14 +203,14 @@ def _argv(save_dir: Path, results_dir: Path, *extra: str) -> list[str]:
 
 
 def _product(join: str) -> str:
-    return "JoinedTracks_ASSR" if join == "joined_tracks" else "Joined_ASSR"
+    return "JoinedTracks_ASSR" if join == "joined_tracks" else "JoinedSeparate_ASSR"
 
 
 def _decomposition_dir(save_dir: Path, join: str) -> Path:
     variant = (
         JicaVariants.CHANNEL_JOINED_TRACKS
         if join == "joined_tracks"
-        else JicaVariants.CHANNEL_JOINED
+        else JicaVariants.CHANNEL_JOINED_SEPARATE
     )
     return (
         save_dir
@@ -325,7 +325,7 @@ class TestCliDefaults:
             main(["--conditions", "Placebo", "Placebo", "--skip_analysis"])
 
 
-@pytest.mark.parametrize("join", ["joined_tracks", "joined"])
+@pytest.mark.parametrize("join", ["joined_tracks", "joined_separate"])
 class TestWaveletCache:
     """The stage-03 caches are read, never silently recomputed."""
 
@@ -367,7 +367,7 @@ class TestWaveletCache:
             )
 
 
-@pytest.mark.parametrize("join", ["joined_tracks", "joined"])
+@pytest.mark.parametrize("join", ["joined_tracks", "joined_separate"])
 class TestEndToEnd:
     def test_decomposition_and_readout_figures_are_written(
         self, join, stub_loaders, tmp_path
@@ -531,7 +531,7 @@ class TestEndToEnd:
         )
 
 
-@pytest.mark.parametrize("join", ["joined_tracks", "joined"])
+@pytest.mark.parametrize("join", ["joined_tracks", "joined_separate"])
 class TestComponentPolarity:
     """jICA orients each component ONCE, never per recording.
 

@@ -278,7 +278,7 @@ class TestDatasetParserIntegration:
 
 
 class TestVirtualConditionRejection:
-    """`Joined` selects both conditions, so no recording can carry it."""
+    """`JoinedSeparate` selects both conditions, so no recording can carry it."""
 
     def test_mapping_claiming_the_virtual_condition_raises(self, tmp_path):
         mapping = tmp_path / "bad_mapping.csv"
@@ -287,7 +287,7 @@ class TestVirtualConditionRejection:
                 "participant": ["PSI018"],
                 "eeg": ["EEGA"],
                 "participant_eeg": ["PSI018_EEGA"],
-                "condition": [ConditionVariants.JOINED.value],
+                "condition": [ConditionVariants.JOINED_SEPARATE.value],
             }
         ).to_csv(mapping, sep=";", index=False)
 

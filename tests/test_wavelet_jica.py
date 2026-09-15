@@ -46,7 +46,7 @@ from src.definitions.fields import ConditionVariants
 P, C, F, T = 4, 6, 5, 80
 CONDITIONS = ["Placebo", "Psilocybin"]
 PARTICIPANTS = [f"PSI{i + 1:03d}" for i in range(P)]
-BOTH_JOINS = [ConditionVariants.JOINED, ConditionVariants.JOINED_TRACKS]
+BOTH_JOINS = [ConditionVariants.JOINED_SEPARATE, ConditionVariants.JOINED_TRACKS]
 
 
 def _raw(seed: int = 0, n_times: int = T) -> dict[str, np.ndarray]:
@@ -65,8 +65,8 @@ class TestAssembleJoin:
     @pytest.mark.parametrize("join", BOTH_JOINS)
     def test_block_axis_and_sample_axis_match_the_join(self, join):
         layout = assemble_join(_raw(), PARTICIPANTS, CONDITIONS, join)
-        expected_blocks = 2 * P if join is ConditionVariants.JOINED else P
-        expected_times = T if join is ConditionVariants.JOINED else 2 * T
+        expected_blocks = 2 * P if join is ConditionVariants.JOINED_SEPARATE else P
+        expected_times = T if join is ConditionVariants.JOINED_SEPARATE else 2 * T
         assert layout.n_blocks == expected_blocks
         assert layout.n_times == expected_times
         assert layout.matrix.shape == (F * expected_times, expected_blocks * C)
@@ -79,7 +79,7 @@ class TestAssembleJoin:
 
     def test_joined_gives_every_recording_its_own_block(self):
         layout = assemble_join(
-            _raw(), PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED
+            _raw(), PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_SEPARATE
         )
         first = layout.block_of(PARTICIPANTS[0], CONDITIONS[0])
         second = layout.block_of(PARTICIPANTS[0], CONDITIONS[1])
@@ -103,7 +103,7 @@ class TestAssembleJoin:
     def test_inputs_are_not_mutated(self):
         raw = _raw()
         before = {name: array.copy() for name, array in raw.items()}
-        assemble_join(raw, PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED)
+        assemble_join(raw, PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_SEPARATE)
         for name, array in raw.items():
             np.testing.assert_array_equal(array, before[name])
 
@@ -117,30 +117,30 @@ class TestAssembleJoin:
         assert layout.n_times == T + (T - 7)
 
     def test_unknown_join_is_refused(self):
-        with pytest.raises(ValueError, match="JOINED or JOINED_TRACKS"):
+        with pytest.raises(ValueError, match="JOINED_SEPARATE or JOINED_TRACKS"):
             assemble_join(_raw(), PARTICIPANTS, CONDITIONS, ConditionVariants.PLACEBO)
 
     def test_missing_condition_is_refused(self):
         raw = _raw()
         del raw[CONDITIONS[1]]
         with pytest.raises(ValueError, match="No array supplied"):
-            assemble_join(raw, PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED)
+            assemble_join(raw, PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_SEPARATE)
 
     def test_row_count_must_match_the_participant_labels(self):
         with pytest.raises(ValueError, match="participant label"):
             assemble_join(
-                _raw(), PARTICIPANTS[:-1], CONDITIONS, ConditionVariants.JOINED
+                _raw(), PARTICIPANTS[:-1], CONDITIONS, ConditionVariants.JOINED_SEPARATE
             )
 
     def test_disagreeing_channel_axes_are_refused(self):
         raw = _raw()
         raw[CONDITIONS[1]] = raw[CONDITIONS[1]][:, :-1]
         with pytest.raises(ValueError, match="non-time axes"):
-            assemble_join(raw, PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED)
+            assemble_join(raw, PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_SEPARATE)
 
     def test_block_of_refuses_an_unknown_pair(self):
         layout = assemble_join(
-            _raw(), PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED
+            _raw(), PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_SEPARATE
         )
         with pytest.raises(KeyError, match="No channel block"):
             layout.block_of("PSI999", CONDITIONS[0])
@@ -159,14 +159,14 @@ class TestFitJointIca:
 
     def test_filter_and_pattern_are_a_pseudo_inverse_pair(self):
         layout = assemble_join(
-            _raw(), PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED
+            _raw(), PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_SEPARATE
         )
         result = fit_joint_ica(layout, n_ica=3, max_iter=200)
         assert result.identity_error() < IDENTITY_TOLERANCE
 
     def test_retained_variance_is_a_fraction(self):
         layout = assemble_join(
-            _raw(), PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED
+            _raw(), PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_SEPARATE
         )
         result = fit_joint_ica(layout, n_ica=3, max_iter=200)
         assert 0.0 < result.retained <= 1.0
@@ -184,7 +184,7 @@ class TestFitJointIca:
     def test_loading_is_proportional_to_the_squared_block_norm(self):
         """The claim the loading figures rest on: energy share == ||pattern block||^2."""
         layout = assemble_join(
-            _raw(), PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED
+            _raw(), PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_SEPARATE
         )
         result = fit_joint_ica(layout, n_ica=3, max_iter=200)
         ratio = result.block_ic_energy / (result.patterns**2).sum(axis=2)
@@ -204,7 +204,7 @@ class TestFitJointIca:
         must be bounded by the FEATURE count, not the sample count.
         """
         layout = assemble_join(
-            _raw(), PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED
+            _raw(), PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_SEPARATE
         )
         seen = []
         real_svd = scipy.linalg.svd
@@ -268,7 +268,7 @@ class TestFitJointIca:
 
     def test_n_ica_outside_the_feature_count_is_refused(self):
         layout = assemble_join(
-            _raw(), PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED
+            _raw(), PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_SEPARATE
         )
         with pytest.raises(ValueError, match="n_ica must be between"):
             fit_joint_ica(layout, n_ica=0)
@@ -277,7 +277,7 @@ class TestFitJointIca:
 
     def test_convergence_is_reported_not_hidden(self):
         layout = assemble_join(
-            _raw(), PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED
+            _raw(), PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_SEPARATE
         )
         # One iteration cannot converge, and the flag has to say so rather than the
         # warning being printed once and lost.
@@ -286,7 +286,7 @@ class TestFitJointIca:
 
 
 class TestOrientComponents:
-    def _fitted(self, join=ConditionVariants.JOINED):
+    def _fitted(self, join=ConditionVariants.JOINED_SEPARATE):
         layout = assemble_join(_raw(), PARTICIPANTS, CONDITIONS, join)
         return layout, fit_joint_ica(layout, n_ica=3, max_iter=200)
 
@@ -338,7 +338,7 @@ class TestRecordingOperators:
 
     def test_joined_gives_each_condition_its_own_operator(self):
         layout = assemble_join(
-            _raw(), PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED
+            _raw(), PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_SEPARATE
         )
         result = fit_joint_ica(layout, n_ica=3, max_iter=200)
         assert not np.array_equal(
@@ -362,7 +362,7 @@ class TestRecordingOperators:
 
     def test_a_mismatched_layout_is_refused(self):
         layout = assemble_join(
-            _raw(), PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED
+            _raw(), PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_SEPARATE
         )
         other = assemble_join(
             _raw(), PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_TRACKS
@@ -382,7 +382,7 @@ class TestSubspaceReference:
 
     MASK = np.array([True, True, False, False, True, False])  # 3 of C = 6 channels
 
-    def _fitted(self, join=ConditionVariants.JOINED, n_ica=3):
+    def _fitted(self, join=ConditionVariants.JOINED_SEPARATE, n_ica=3):
         layout = assemble_join(_raw(), PARTICIPANTS, CONDITIONS, join)
         return layout, fit_joint_ica(layout, n_ica=n_ica, max_iter=200)
 
@@ -477,7 +477,7 @@ class TestSubspaceReference:
         """A recording join gives each condition its own block; a time join does not."""
         raw = _raw()
         weights = self._weights()
-        joined = assemble_join(raw, PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED)
+        joined = assemble_join(raw, PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_SEPARATE)
         result = fit_joint_ica(joined, n_ica=3, max_iter=200)
         rows = subspace_mask_rows(result, weights)
         reference = subspace_reference_rows(raw, joined, rows, [1], zscore=False)

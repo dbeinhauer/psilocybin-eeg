@@ -1,8 +1,8 @@
 """
 CLI script reproducing
-``notebooks/06-iva-condition-comparison/wavelet_iva_channel_joined.ipynb``:
+``notebooks/06-iva-condition-comparison/wavelet_iva_channel_joined_separate.ipynb``:
 the channel-as-independent IVA-G decomposition of wavelet power run on the
-**joined** condition (:attr:`~src.definitions.fields.ConditionVariants.JOINED`),
+**joined** condition (:attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE`),
 with Placebo and Psilocybin pooled on the **subject** axis, followed by the
 Placebo/Psilocybin comparison of the recovered components.
 
@@ -24,7 +24,7 @@ contrast of the patterns meaningful.
 from the existing per-condition caches by
 :func:`~scripts.notebook_helpers.load_joined_condition_wavelets`, which is
 possible because the alignment was fitted over every recording of both
-conditions, so they already share one time base. Asking for a ``Joined_*``
+conditions, so they already share one time base. Asking for a ``JoinedSeparate_*``
 label directly would instead write a second, redundant copy of the cache.
 
 Pass ``--subset_cache`` to additionally keep a **per-extent** copy of each
@@ -69,13 +69,13 @@ Figures, in three views (see
 
 Output (canonical per-condition layout)::
 
-    plots/06-iva-condition-comparison/Joined_<MusicType>/
-        broadband/iva_channel_joined/pca_<n_pca>/     # default (no --band)
+    plots/06-iva-condition-comparison/JoinedSeparate_<MusicType>/
+        broadband/iva_channel_joined_separate/pca_<n_pca>/     # default (no --band)
             condition_mean_topomaps.png
             condition_mean_tf_maps.png
             condition_mean_tf_maps_onset.png
             participants/*.png
-        bands/iva_channel_joined/pca_<n_pca>/          # --band / --band_range
+        bands/iva_channel_joined_separate/pca_<n_pca>/          # --band / --band_range
             <band>_condition_mean_topomaps.png
             ...
 
@@ -162,7 +162,7 @@ _logger = logging.getLogger(__name__)
 _STAGE_DIR = "06-iva-condition-comparison"
 
 #: Analysis-type subdirectory, naming the independent (mixing) axis and the join.
-_ANALYSIS_DIR = IvaVariants.CHANNEL_JOINED.value
+_ANALYSIS_DIR = IvaVariants.CHANNEL_JOINED_SEPARATE.value
 
 #: What the final sign alignment was, printed on every figure.
 _ALIGNMENT_NOTE = "corr(topography, ASSR electrode mask), per (recording, component)"
@@ -190,7 +190,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "Run the channel-as-independent IVA decomposition on the joined "
             "condition (Placebo + Psilocybin pooled on the subject axis) and draw "
             "the per-component condition comparison. Reproduces "
-            "wavelet_iva_channel_joined.ipynb."
+            "wavelet_iva_channel_joined_separate.ipynb."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -565,13 +565,13 @@ def run_condition_comparison(
         pooled = pooled.select_participants(keep)
         _logger.info(f"Restricted to {len(keep)} participant(s): {keep}")
 
-    # The canonical JOINED product name, as in run_iva_condition_tracks.py.
+    # The canonical JOINED_SEPARATE product name, as in run_iva_condition_tracks.py.
     # Deliberately NOT pooled.data.label: that is a *data* label, and the wavelet
-    # transform appends the representation to it ("Joined_ASSR (wavelet power
+    # transform appends the representation to it ("JoinedSeparate_ASSR (wavelet power
     # 1-50 Hz)"). Using it here would put spaces, parentheses and a frequency range
     # into the plot directory and into every figure filename, and would disagree
     # with the component store, which names the condition from the enum.
-    label = f"{ConditionVariants.JOINED.value}_{music_type.value}"
+    label = f"{ConditionVariants.JOINED_SEPARATE.value}_{music_type.value}"
     sfreq = pooled.data.sfreq
     # One canonical name for the restriction, used by the store, the plot
     # directory and every figure filename. A named band keeps its name so
@@ -675,8 +675,8 @@ def run_condition_comparison(
             )
         save_iva_components(
             experiment=experiment_name,
-            condition=ConditionVariants.JOINED,
-            variant=IvaVariants.CHANNEL_JOINED,
+            condition=ConditionVariants.JOINED_SEPARATE,
+            variant=IvaVariants.CHANNEL_JOINED_SEPARATE,
             music_type=music_type,
             band=band_name,
             n_pca=n_pca,

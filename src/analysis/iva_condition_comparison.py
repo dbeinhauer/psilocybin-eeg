@@ -2,7 +2,7 @@
 Sign alignment and per-condition aggregation for a subject-axis-pooled IVA run.
 
 When Placebo and Psilocybin are pooled on the **subject** axis
-(:attr:`~src.definitions.fields.ConditionVariants.JOINED`, assembled by
+(:attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE`, assembled by
 :func:`~src.analysis.condition_tracks.pool_condition_subjects`), IVA returns one
 aligned set of sources but a **per-recording** sign for each of them. Two things
 follow, and this module handles both.
@@ -171,7 +171,7 @@ def stack_conditions_on_subject_axis(
     one ``(P, K, ...)`` array *per condition*. The comparison figures in
     :mod:`src.visualization.iva_condition_plots` instead index a single ``(S, K, ...)``
     array by per-recording bookkeeping, the layout a subject-axis
-    (:attr:`~src.definitions.fields.ConditionVariants.JOINED`) run produces natively.
+    (:attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE`) run produces natively.
     This restacks the former into the latter, so **one set of figures serves both
     variants**.
 

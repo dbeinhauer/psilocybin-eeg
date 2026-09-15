@@ -21,7 +21,7 @@ workflow at reduced scale. They call the same code; the script is the ground tru
 IVA estimates components jointly across datasets, assuming component *k* is the same
 source in every dataset. What counts as "a dataset" is the choice the two variants make:
 
-- **`iva_channel_joined`** (subject axis) — one dataset per **recording**, so rows
+- **`iva_channel_joined_separate`** (subject axis) — one dataset per **recording**, so rows
   `0..P-1` are Placebo and `P..2P-1` Psilocybin. A participant occupies two rows with two
   mixing matrices, so topographies are per recording and a topography contrast between
   conditions is meaningful. A bare participant label addresses two rows, so rows are

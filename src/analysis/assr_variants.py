@@ -41,7 +41,7 @@ def row_resolver(results, variant: IvaVariants):
     (``channel_joined_tracks``) has one row per participant, shared by both conditions,
     so the condition is ignored.
     """
-    per_recording = variant == IvaVariants.CHANNEL_JOINED
+    per_recording = variant == IvaVariants.CHANNEL_JOINED_SEPARATE
 
     def resolve(participant: str, condition: str) -> int:
         if per_recording:

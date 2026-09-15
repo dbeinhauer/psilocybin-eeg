@@ -460,13 +460,12 @@ class TestRunAnalysisArgValidation:
                     # intentionally omitting --wavelet_keep_frequency_dim
                 ],
             ),
-            pytest.raises(SystemExit) as exc_info,
+            pytest.raises(ValueError, match="requires --wavelet_keep_frequency_dim"),
         ):
             runpy.run_path(
                 str(Path(__file__).parent.parent / "scripts" / "run_analysis.py"),
                 run_name="__main__",
             )
-        assert exc_info.value.code != 0
 
 
 class TestRunWaveletWorkflowReshapeRaisesInWorkflow:
@@ -558,7 +557,7 @@ class TestParticipantLabels:
 
 
 class TestSubjectConditionHelpers:
-    """Separating the conditions back out of a pooled (JOINED) subject axis."""
+    """Separating the conditions back out of a pooled (JOINED_SEPARATE) subject axis."""
 
     @staticmethod
     def _metadata(participant_ids, conditions, person_indices=None):

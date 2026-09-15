@@ -153,7 +153,7 @@ class TestConditionComponentMeans:
 
     def test_absent_condition_raises(self, sources, subject_conditions):
         with pytest.raises(ValueError, match="has no recordings"):
-            condition_component_means(sources, subject_conditions, ["Joined"])
+            condition_component_means(sources, subject_conditions, ["JoinedSeparate"])
 
 
 class TestConditionDifference:
@@ -181,7 +181,7 @@ class TestConditionDifference:
     def test_missing_mean_raises(self, sources, subject_conditions, conditions):
         means = condition_component_means(sources, subject_conditions, conditions)
         with pytest.raises(ValueError, match="No mean for condition"):
-            condition_difference(means, ["Placebo", "Joined"])
+            condition_difference(means, ["Placebo", "JoinedSeparate"])
 
     def test_shape_mismatch_raises(self):
         with pytest.raises(ValueError, match="disagree in shape"):

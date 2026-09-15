@@ -25,7 +25,7 @@ two virtual conditions in :class:`~src.definitions.fields.ConditionVariants` nam
   time bases here and need not even have the same length.
 
 * :func:`pool_condition_subjects` pools along the **subject** axis
-  (:attr:`~src.definitions.fields.ConditionVariants.JOINED`) — every recording is one
+  (:attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE`) — every recording is one
   subject, so a participant appears once per condition and the mixing is estimated per
   recording. Read either condition's half back out with
   :meth:`PooledConditionSubjects.condition_subjects`. This one *does* require the two
@@ -384,7 +384,7 @@ def concatenate_condition_tracks(
         condition (e.g. ``analyzer.stimulus_onsets``). Carried through to
         :meth:`PairedConditionTracks.condition_onsets`.
     :param label: Label for the concatenated dataset. Defaults to the input labels
-        joined with ``+``, which cannot collide with the crop-based ``Joined_*``
+        joined with ``+``, which cannot collide with the crop-based ``JoinedSeparate_*``
         products.
     :return: The concatenated dataset plus the segment bookkeeping needed to split it
         back apart.
@@ -494,7 +494,7 @@ def concatenate_condition_tracks(
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Pooling on the subject axis (ConditionVariants.JOINED)
+# Pooling on the subject axis (ConditionVariants.JOINED_SEPARATE)
 # ──────────────────────────────────────────────────────────────────────
 
 
@@ -506,7 +506,7 @@ class PooledConditionSubjects:
     participant-matched cohort, joined along the **subject** axis instead of the time
     axis, so every *recording* is one subject and each participant appears once per
     condition. This is the array layout
-    :attr:`~src.definitions.fields.ConditionVariants.JOINED` names.
+    :attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE` names.
 
     .. code-block:: text
 
@@ -717,19 +717,19 @@ def _joined_label(
     tracks: Mapping[ConditionVariants, AnalysisData],
     conditions: Sequence[ConditionVariants],
 ) -> str:
-    """``Joined_<rest>`` label for a pooled dataset, from the input labels.
+    """``JoinedSeparate_<rest>`` label for a pooled dataset, from the input labels.
 
     Per-condition labels follow ``"<Condition>_<rest>"``, so when every track agrees on
     the part after the condition the pooled label is the same name under the virtual
-    :attr:`~src.definitions.fields.ConditionVariants.JOINED` condition. Falls back to
+    :attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE` condition. Falls back to
     the input labels joined with ``+`` when they do not share that suffix.
 
     **Not a path-safe product name.** This is a *data* label and it reproduces whatever
     the inputs carried after the condition — which, for anything that has been through
     :func:`~src.analysis.data_representations.to_wavelet_power`, includes the
-    representation annotation, giving ``"Joined_ASSR (wavelet power 1-50 Hz)"``. That
+    representation annotation, giving ``"JoinedSeparate_ASSR (wavelet power 1-50 Hz)"``. That
     describes the array correctly but is unfit to name a directory or a figure file.
-    A caller naming an output must build ``f"{ConditionVariants.JOINED.value}_{music_type.value}"``
+    A caller naming an output must build ``f"{ConditionVariants.JOINED_SEPARATE.value}_{music_type.value}"``
     itself, as ``scripts/run_iva_condition_comparison.py`` and
     ``scripts/run_iva_condition_tracks.py`` both do, so the plot tree agrees with the
     component store (:mod:`src.io.iva_store`), which names the condition from the enum.
@@ -744,7 +744,7 @@ def _joined_label(
         if "_" in tracks[condition].label
     }
     if len(suffixes) == 1:
-        return f"{ConditionVariants.JOINED.value}_{suffixes.pop()}"
+        return f"{ConditionVariants.JOINED_SEPARATE.value}_{suffixes.pop()}"
     return "+".join(tracks[condition].label for condition in conditions)
 
 
@@ -759,7 +759,7 @@ def pool_condition_subjects(
     """Match participants across conditions and stack them on the subject axis.
 
     The subject-axis counterpart of :func:`concatenate_condition_tracks`, and the
-    array :attr:`~src.definitions.fields.ConditionVariants.JOINED` describes. Like the
+    array :attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE` describes. Like the
     time-axis join it consumes the per-condition datasets **as they already exist** —
     typically the wavelet power loaded from the existing per-condition caches by
     :func:`~scripts.notebook_helpers.compute_wavelet_datasets` — so nothing upstream is
@@ -794,7 +794,7 @@ def pool_condition_subjects(
         ``analyzer.stimulus_onsets``). Carried through to
         :meth:`PooledConditionSubjects.condition_onsets`.
     :param label: Label for the pooled dataset. Defaults to the canonical
-        ``Joined_<MusicType>`` when the inputs share that suffix.
+        ``JoinedSeparate_<MusicType>`` when the inputs share that suffix.
     :return: The pooled dataset plus the per-subject participant/condition bookkeeping
         needed to split it back apart.
     :raises ValueError: If a condition is missing from *tracks* or *participants*, the

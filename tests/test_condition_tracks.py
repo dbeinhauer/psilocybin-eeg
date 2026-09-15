@@ -1,6 +1,6 @@
 """
 Tests for src/analysis/condition_tracks.py — participant-matched two-condition
-datasets, joined along time (``JOINED_TRACKS``) or along the subject axis (``JOINED``).
+datasets, joined along time (``JOINED_TRACKS``) or along the subject axis (``JOINED_SEPARATE``).
 """
 
 import dataclasses
@@ -516,7 +516,7 @@ class TestFromAnalyzer:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Subject-axis pooling (ConditionVariants.JOINED)
+# Subject-axis pooling (ConditionVariants.JOINED_SEPARATE)
 # ──────────────────────────────────────────────────────────────────────
 
 
@@ -583,7 +583,7 @@ class TestPoolConditionSubjects:
         self, shared_base_tracks, participants
     ):
         pooled = pool_condition_subjects(shared_base_tracks, participants)
-        assert pooled.data.label == "Joined_ASSR"
+        assert pooled.data.label == "JoinedSeparate_ASSR"
 
     def test_label_falls_back_when_the_suffixes_disagree(self, participants):
         tracks = {
@@ -685,7 +685,7 @@ class TestPooledReverseAccess:
 
     def test_unknown_condition_raises(self, pooled):
         with pytest.raises(KeyError, match="not part of this pooling"):
-            pooled.condition_mask(ConditionVariants.JOINED)
+            pooled.condition_mask(ConditionVariants.JOINED_SEPARATE)
 
     def test_partner_index_pairs_the_two_blocks(self, pooled):
         assert pooled.partner_index.tolist() == [2, 3, 0, 1]

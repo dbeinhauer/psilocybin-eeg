@@ -97,7 +97,7 @@ class DatasetParser(LoggerMixin):
         :param condition_value: One letter code of the condition (either 'A' or 'B')
         :param participant_id: Numerical 3 digit part of the participant ID (e.g. '001', '023', etc.)
         :return: Returns corresponding ConditionVariants enum if valid, None otherwise.
-            :attr:`~src.definitions.fields.ConditionVariants.JOINED` is never returned:
+            :attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE` is never returned:
             it is a selector over both real conditions, so a recording can never carry
             it and a mapping row claiming it is a data error.
         """
@@ -121,10 +121,10 @@ class DatasetParser(LoggerMixin):
             return None
 
         condition = check_enum_value_in_variants(ConditionVariants, condition_string)
-        if condition is ConditionVariants.JOINED:
+        if condition is ConditionVariants.JOINED_SEPARATE:
             raise ValueError(
                 f"Participant mapping assigns the virtual condition "
-                f"'{ConditionVariants.JOINED.value}' to participant {participant_id} / "
+                f"'{ConditionVariants.JOINED_SEPARATE.value}' to participant {participant_id} / "
                 f"EEG{condition_value}. It selects both real conditions and cannot "
                 "describe a recording; fix the mapping CSV."
             )

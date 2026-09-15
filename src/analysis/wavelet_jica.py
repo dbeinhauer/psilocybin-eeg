@@ -232,7 +232,7 @@ class JoinLayout:
 
     The whole of the difference between the two joins lives in :attr:`blocks`::
 
-        JOINED         [(participant, condition), ...]   B = 2P
+        JOINED_SEPARATE         [(participant, condition), ...]   B = 2P
         JOINED_TRACKS  [(participant, None),      ...]   B = P
 
     and :meth:`block_of` hides it, so a caller can ask for "this recording's filter"
@@ -276,7 +276,7 @@ class JoinLayout:
         """
         key = (
             participant,
-            condition if self.join is ConditionVariants.JOINED else None,
+            condition if self.join is ConditionVariants.JOINED_SEPARATE else None,
         )
         index = {block: b for b, block in enumerate(self.blocks)}
         if key not in index:
@@ -322,7 +322,7 @@ def assemble_join(
         power, participant-matched row for row.
     :param participants: Participant label per row, in row order.
     :param conditions: Conditions in the order they should be joined.
-    :param join: :attr:`~src.definitions.fields.ConditionVariants.JOINED` (one block
+    :param join: :attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE` (one block
         per recording) or
         :attr:`~src.definitions.fields.ConditionVariants.JOINED_TRACKS` (one block
         per participant, sample axis spanning both tracks).
@@ -333,9 +333,9 @@ def assemble_join(
     """
     conditions = [str(c) for c in conditions]
     participants = [str(p) for p in participants]
-    if join not in (ConditionVariants.JOINED, ConditionVariants.JOINED_TRACKS):
+    if join not in (ConditionVariants.JOINED_SEPARATE, ConditionVariants.JOINED_TRACKS):
         raise ValueError(
-            f"join must be JOINED or JOINED_TRACKS; got {join}. Those are the two "
+            f"join must be JOINED_SEPARATE or JOINED_TRACKS; got {join}. Those are the two "
             "ways this module knows how to tie the recordings together."
         )
     if len(conditions) < 2:
@@ -368,7 +368,7 @@ def assemble_join(
     _n_participants, n_channels, n_freqs, _ = reference.shape
     standardised = [zscore_by_time(np.asarray(raw_by_condition[c])) for c in conditions]
 
-    if join is ConditionVariants.JOINED:
+    if join is ConditionVariants.JOINED_SEPARATE:
         # One block per recording: stack on the block axis, condition-major, so the
         # feature order matches `blocks` below.
         block_data = np.concatenate(standardised, axis=0)
@@ -796,7 +796,7 @@ def cohort_mean_pattern(
     on, because a difference could then come from the operator having changed rather
     than from the signal. (Under
     :attr:`~src.definitions.fields.ConditionVariants.JOINED_TRACKS` the patterns are
-    shared anyway, so this only bites under ``JOINED``.)
+    shared anyway, so this only bites under ``JOINED_SEPARATE``.)
 
     Each pattern is scaled to **unit L2 norm** first. That matters more here than it
     does for IVA: jICA's per-block loadings are unconstrained and can be wildly uneven,
@@ -1080,13 +1080,13 @@ def subspace_reference_rows(
             raise ValueError(f"No array supplied for condition {condition!r}.")
 
     selection = np.asarray(bins, dtype=int)
-    # Under JOINED every block already names its own condition, so one stacked array
+    # Under JOINED_SEPARATE every block already names its own condition, so one stacked array
     # serves both; under JOINED_TRACKS a block is a participant and the array is that
     # condition's own track. Keyed accordingly so the shared case is built once.
     stacked_by_key: dict[Optional[str], np.ndarray] = {}
     out: dict[str, np.ndarray] = {}
     for condition in layout.conditions:
-        key = None if layout.join is ConditionVariants.JOINED else condition
+        key = None if layout.join is ConditionVariants.JOINED_SEPARATE else condition
         if key not in stacked_by_key:
             stacked_by_key[key] = _stacked_band(
                 raw_by_condition, layout, condition, selection, zscore=zscore

@@ -6,7 +6,7 @@
 #PBS -j oe
 
 # ---------------------------------------------------------------------------
-# Stage-06 IVA — condition comparison on the Joined condition,
+# Stage-06 IVA — condition comparison on the JoinedSeparate condition,
 # restricted to the 30-50 Hz ASSR neighbourhood.
 #
 # Identical to run_condition_comparison.pbs in every respect but one:
@@ -35,9 +35,9 @@
 # OUTPUT, and why nothing is overwritten. The band token '30-50hz' goes into the
 # store filename and the plot path, so this run sits BESIDE the broadband one
 # rather than replacing it — which is what makes the comparison possible:
-#   data/processed/assr/iva_results/Joined/
-#       iva_channel_joined__ASSR__30-50hz__pca<N>.npz
-#   plots/06-iva-condition-comparison/Joined_ASSR/bands/iva_channel_joined/pca_<N>/
+#   data/processed/assr/iva_results/JoinedSeparate/
+#       iva_channel_joined_separate__ASSR__30-50hz__pca<N>.npz
+#   plots/06-iva-condition-comparison/JoinedSeparate_ASSR/bands/iva_channel_joined_separate/pca_<N>/
 #       30-50hz_*.png
 #
 # RESOURCES are the parent's. A band run shrinks the IVA sample axis to ~40% but

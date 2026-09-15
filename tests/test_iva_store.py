@@ -143,8 +143,8 @@ class TestPaths:
     def test_default_paths_live_under_the_project_processed_data_dir(self):
         path = iva_results_path(
             ExperimentNames.PSILO_MUSIC,
-            ConditionVariants.JOINED,
-            IvaVariants.CHANNEL_JOINED,
+            ConditionVariants.JOINED_SEPARATE,
+            IvaVariants.CHANNEL_JOINED_SEPARATE,
             MusicTypeVariants.CLASSICAL,
             None,
             20,
@@ -276,8 +276,8 @@ class TestParticipantMapping:
         loaded = load_iva_components(
             _save(
                 tmp_path,
-                condition=ConditionVariants.JOINED,
-                variant=IvaVariants.CHANNEL_JOINED,
+                condition=ConditionVariants.JOINED_SEPARATE,
+                variant=IvaVariants.CHANNEL_JOINED_SEPARATE,
                 participants=["031", "032", "031", "032"],
                 subject_conditions=[
                     "Placebo",
@@ -295,7 +295,7 @@ class TestParticipantMapping:
         loaded = load_iva_components(
             _save(
                 tmp_path,
-                condition=ConditionVariants.JOINED,
+                condition=ConditionVariants.JOINED_SEPARATE,
                 participants=["031", "032", "031", "032"],
                 subject_conditions=["Placebo", "Placebo", "Psilocybin", "Psilocybin"],
             )
@@ -327,7 +327,7 @@ class TestParticipantMapping:
         loaded = load_iva_components(
             _save(
                 tmp_path,
-                condition=ConditionVariants.JOINED,
+                condition=ConditionVariants.JOINED_SEPARATE,
                 participants=["031", "032", "031", "032"],
                 subject_conditions=["Placebo", "Placebo", "Psilocybin", "Psilocybin"],
             )
@@ -455,8 +455,8 @@ class TestTimeAxisJoin:
 
     def test_an_unknown_segment_raises(self, tmp_path):
         loaded = self._tracks(tmp_path)
-        with pytest.raises(KeyError, match="Joined"):
-            loaded.segment_slice(ConditionVariants.JOINED)
+        with pytest.raises(KeyError, match="JoinedSeparate"):
+            loaded.segment_slice(ConditionVariants.JOINED_SEPARATE)
 
     def test_a_single_condition_run_has_no_segments(self, tmp_path):
         loaded = load_iva_components(_save(tmp_path))

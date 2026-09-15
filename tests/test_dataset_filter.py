@@ -234,7 +234,7 @@ def paired_metadata():
     """Metadata for a crossover design, deliberately not in condition order.
 
     Participants 001 and 002 have both conditions; 003 has only Placebo, so it is not
-    a complete pair and must be dropped from a JOINED selection.
+    a complete pair and must be dropped from a JOINED_SEPARATE selection.
     """
     return pd.DataFrame(
         {
@@ -287,14 +287,14 @@ class TestExpandConditions:
 
     def test_joined_expands_to_both(self):
         expanded, is_joined = DatasetFilter.expand_conditions(
-            [ConditionVariants.JOINED]
+            [ConditionVariants.JOINED_SEPARATE]
         )
         assert expanded == [ConditionVariants.PLACEBO, ConditionVariants.PSILOCYBIN]
         assert is_joined is True
 
     def test_joined_alongside_real_condition_deduplicates(self):
         expanded, _ = DatasetFilter.expand_conditions(
-            [ConditionVariants.PSILOCYBIN, ConditionVariants.JOINED]
+            [ConditionVariants.PSILOCYBIN, ConditionVariants.JOINED_SEPARATE]
         )
         assert expanded == [ConditionVariants.PSILOCYBIN, ConditionVariants.PLACEBO]
 
@@ -305,7 +305,7 @@ class TestJoinedCondition:
             paired_metadata,
             no_exclusions,
             [MusicTypeVariants.CLASSICAL],
-            [ConditionVariants.JOINED],
+            [ConditionVariants.JOINED_SEPARATE],
             [],
         )
         # 003 has no Psilocybin recording, so the pair is incomplete.
@@ -323,7 +323,7 @@ class TestJoinedCondition:
             paired_metadata,
             no_exclusions,
             [MusicTypeVariants.CLASSICAL],
-            [ConditionVariants.JOINED],
+            [ConditionVariants.JOINED_SEPARATE],
             [],
         )
         conditions = result[SingleDataMetadata.CONDITION].tolist()
@@ -339,7 +339,7 @@ class TestJoinedCondition:
             paired_metadata,
             no_exclusions,
             [MusicTypeVariants.CLASSICAL],
-            [ConditionVariants.JOINED],
+            [ConditionVariants.JOINED_SEPARATE],
             [],
         )
         participants = result[SingleDataMetadata.PARTICIPANT_ID].tolist()
@@ -353,10 +353,10 @@ class TestJoinedCondition:
             paired_metadata,
             no_exclusions,
             [MusicTypeVariants.CLASSICAL],
-            [ConditionVariants.JOINED],
+            [ConditionVariants.JOINED_SEPARATE],
             [],
         )
-        assert ConditionVariants.JOINED not in result[SingleDataMetadata.CONDITION]
+        assert ConditionVariants.JOINED_SEPARATE not in result[SingleDataMetadata.CONDITION]
 
     def test_exclusion_in_one_condition_drops_the_whole_pair(self, paired_metadata):
         """A participant excluded under one condition cannot form a pair."""
@@ -372,7 +372,7 @@ class TestJoinedCondition:
             paired_metadata,
             excluded,
             [MusicTypeVariants.CLASSICAL],
-            [ConditionVariants.JOINED],
+            [ConditionVariants.JOINED_SEPARATE],
             [ExclusionCategories.ARTIFACTS],
         )
         assert result[SingleDataMetadata.PARTICIPANT_ID].tolist() == ["002", "002"]
@@ -408,7 +408,7 @@ class TestJoinedCondition:
             metadata,
             no_exclusions,
             [MusicTypeVariants.CLASSICAL],
-            [ConditionVariants.JOINED],
+            [ConditionVariants.JOINED_SEPARATE],
             [],
         )
         assert result[SingleDataMetadata.PARTICIPANT_ID].tolist() == ["001", "001"]
@@ -426,7 +426,7 @@ class TestJoinedTracksMatchesJoined:
             paired_metadata,
             no_exclusions,
             [MusicTypeVariants.CLASSICAL],
-            [ConditionVariants.JOINED],
+            [ConditionVariants.JOINED_SEPARATE],
             [],
         )
         tracks = DatasetFilter.filter_dataset_by_all_categories(

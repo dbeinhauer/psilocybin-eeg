@@ -28,8 +28,8 @@
 #
 # OUTPUT. The band token keeps this run's products apart from the broadband
 # ones, so both can be compared side by side:
-#   results/assr/assr_snr_grid__iva_channel_joined__30-50hz__pca<N>.csv
-#   plots/06-iva-condition-comparison/Joined_ASSR/bands/assr_snr_grid/
+#   results/assr/assr_snr_grid__iva_channel_joined_separate__30-50hz__pca<N>.csv
+#   plots/06-iva-condition-comparison/JoinedSeparate_ASSR/bands/assr_snr_grid/
 #       pca_<N>/<selection>/<window>/30-50hz_*.png
 #       pca_<N>/30-50hz_{mean,mean_masked}_filter_topomaps.png
 #
@@ -78,8 +78,8 @@ BAND="30-50hz"
 
 python /mnt/scripts/run_assr_snr_grid.py \
     --experiment assr \
-    --variant iva_channel_joined \
-    --store_condition Joined \
+    --variant iva_channel_joined_separate \
+    --store_condition JoinedSeparate \
     --music_type ASSR \
     --conditions Placebo Psilocybin \
     --band "$BAND" \
@@ -100,8 +100,8 @@ python /mnt/scripts/run_assr_snr_grid.py \
 # for N_PCA in 5 10; do
 #     echo "=== band $BAND, pca $N_PCA at $(date) ==="
 #     python /mnt/scripts/run_assr_snr_grid.py \
-#         --experiment assr --variant iva_channel_joined \
-#         --store_condition Joined --music_type ASSR \
+#         --experiment assr --variant iva_channel_joined_separate \
+#         --store_condition JoinedSeparate --music_type ASSR \
 #         --conditions Placebo Psilocybin --band "$BAND" --n_pca "$N_PCA" \
 #         --halfwidths 0 5 --stimulus_intervals 0:0.5 0.2:0.5 \
 #         --store_dir "$DATA_DIR" --wavelet_data_dir "$DATA_DIR" \

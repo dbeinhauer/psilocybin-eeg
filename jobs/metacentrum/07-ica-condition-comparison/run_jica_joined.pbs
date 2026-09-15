@@ -6,7 +6,7 @@
 #PBS -j oe
 
 # ---------------------------------------------------------------------------
-# Stage-07 joint ICA (jICA) — the RECORDING-axis join (JOINED).
+# Stage-07 joint ICA (jICA) — the RECORDING-axis join (JOINED_SEPARATE).
 #
 # The companion of run_jica_tracks.pbs: identical pipeline, identical
 # participants, the recordings tied together along a different axis. Read that
@@ -36,7 +36,7 @@
 # So the two jobs are complements, not alternatives: between them they cover both
 # sides of the decomposition, and neither covers both alone.
 #
-#   this job (JOINED)             run_jica_tracks.pbs (JOINED_TRACKS)
+#   this job (JOINED_SEPARATE)             run_jica_tracks.pbs (JOINED_TRACKS)
 #   ---------------------------   ------------------------------------
 #   blocks: 2P (per recording)    blocks: P (per participant)
 #   TF maps: SHARED, one row      TF maps: split per condition + difference
@@ -108,8 +108,8 @@
 # that row.
 #
 # Output:
-#   plots/07-ica-condition-comparison/Joined_ASSR/broadband/
-#       ica_channel_joined/ica_<N>/*.png
+#   plots/07-ica-condition-comparison/JoinedSeparate_ASSR/broadband/
+#       ica_channel_joined_separate/ica_<N>/*.png
 #       ica_component_analysis/ica_<N>/*.png
 #   results/assr/jica_tests__joined__ASSR__ica<N>.csv
 #

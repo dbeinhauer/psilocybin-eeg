@@ -26,7 +26,7 @@ Both conditions are aligned together during preprocessing, so they share one tim
 and carry the same stimuli. Selecting a condition — including the two virtual ones — is
 therefore pure filtering, and needs no extra preprocessing or wavelet recomputation:
 
-* :attr:`~src.definitions.fields.ConditionVariants.JOINED` pools the conditions on the
+* :attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE` pools the conditions on the
   **subject** axis, so a participant appears twice. Build it from the existing
   per-condition caches with :func:`load_joined_condition_wavelets`.
 * :attr:`~src.definitions.fields.ConditionVariants.JOINED_TRACKS` pools them along
@@ -524,7 +524,7 @@ def load_paired_condition_wavelets(
     upstream is re-run or re-aligned.
 
     Contrast with :func:`load_joined_condition_wavelets`
-    (:attr:`~src.definitions.fields.ConditionVariants.JOINED`), which pools the same
+    (:attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE`), which pools the same
     cohort on the *subject* axis and therefore needs the two conditions to share one
     time base. Here they keep their own time bases and are pooled along *time* instead,
     so each participant is one subject carrying both tracks.
@@ -660,12 +660,12 @@ def load_joined_condition_wavelets(
     """Load each condition's wavelets and stack the participant-matched recordings.
 
     The one-call path to the subject-axis joined dataset — the layout
-    :attr:`~src.definitions.fields.ConditionVariants.JOINED` names. It loads each
+    :attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE` names. It loads each
     condition exactly as any single-condition workflow does, **reusing the existing
     per-condition wavelet caches**, then hands both to
     :func:`~src.analysis.condition_tracks.pool_condition_subjects`. Nothing upstream is
     re-run or re-aligned, and — unlike asking
-    :func:`compute_wavelet_datasets` for a ``Joined_*`` label directly — no second copy
+    :func:`compute_wavelet_datasets` for a ``JoinedSeparate_*`` label directly — no second copy
     of the cache is written for the pooled cohort.
 
     Contrast with :func:`load_paired_condition_wavelets`, which pools the same cohort

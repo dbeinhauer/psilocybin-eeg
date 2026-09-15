@@ -6,10 +6,10 @@
 #PBS -j oe
 
 # ---------------------------------------------------------------------------
-# Stage-06 IVA — condition comparison on the JOINED condition.
+# Stage-06 IVA — condition comparison on the JOINED_SEPARATE condition.
 #
 # Runs the same pipeline as
-# notebooks/06-iva-condition-comparison/wavelet_iva_channel_joined.ipynb
+# notebooks/06-iva-condition-comparison/wavelet_iva_channel_joined_separate.ipynb
 # on full data (no channel/time subset). Placebo and Psilocybin are pooled on
 # the SUBJECT axis, so every recording is one IVA dataset: K = 2P recordings,
 # IVA mixing = channels, samples = the joint time × frequency axis, per-
@@ -51,11 +51,11 @@
 # limit nor the condition means are driven by the loudest few recordings.
 #
 # Output:
-#   plots/06-iva-condition-comparison/Joined_ASSR/
-#       broadband/iva_channel_joined/pca_10/*.png
-#       broadband/iva_channel_joined/pca_10/participants/*.png
-#   data/processed/assr/iva_results/Joined/
-#       iva_channel_joined__ASSR__broadband__pca<N>.npz
+#   plots/06-iva-condition-comparison/JoinedSeparate_ASSR/
+#       broadband/iva_channel_joined_separate/pca_10/*.png
+#       broadband/iva_channel_joined_separate/pca_10/participants/*.png
+#   data/processed/assr/iva_results/JoinedSeparate/
+#       iva_channel_joined_separate__ASSR__broadband__pca<N>.npz
 #
 # STORED COMPONENTS (--store_components). The figures are lossy summaries — a
 # condition-mean grid cannot be re-split per participant and a plotted TF map

@@ -3,7 +3,7 @@ CLI script reproducing the stage-07 joint-ICA (jICA) notebooks headlessly.
 
 Runs both halves of ``notebooks/07-ica-condition-comparison/`` in one pass:
 
-1. **The decomposition** (``wavelet_ica_channel_joined.ipynb`` /
+1. **The decomposition** (``wavelet_ica_channel_joined_separate.ipynb`` /
    ``wavelet_ica_channel_joined_tracks.ipynb``) — the component time-frequency maps,
    the per-recording channel topographies and the per-recording loading.
 2. **The 40 Hz read-out** (``ica_component_analysis.ipynb``) — the recovered filters
@@ -296,7 +296,7 @@ _CONDITION_COLORS = {
 
 #: How the two joins map onto their plot subdirectory and product label.
 _JOIN_CHOICES = {
-    "joined": (ConditionVariants.JOINED, JicaVariants.CHANNEL_JOINED),
+    "joined_separate": (ConditionVariants.JOINED_SEPARATE, JicaVariants.CHANNEL_JOINED_SEPARATE),
     "joined_tracks": (
         ConditionVariants.JOINED_TRACKS,
         JicaVariants.CHANNEL_JOINED_TRACKS,
@@ -783,7 +783,7 @@ def _load_cohort(
         reuse_subset_cache=reuse_subset_cache,
         n_jobs=n_jobs,
     )
-    if join is ConditionVariants.JOINED:
+    if join is ConditionVariants.JOINED_SEPARATE:
         pooled, analyzers = load_joined_condition_wavelets(
             music_type, exclusion_categories, freqs, **common
         )
@@ -889,7 +889,7 @@ def _write_decomposition_plots(
     * ``JOINED_TRACKS`` — the sample axis spans both tracks, so the TF maps split
       into a genuine per-condition contrast with a difference row, while the
       topography and the loading are **shared** and get a single row.
-    * ``JOINED`` — the sample axis is common to both conditions, so the TF maps get a
+    * ``JOINED_SEPARATE`` — the sample axis is common to both conditions, so the TF maps get a
       single shared row while the topographies and loadings carry the contrast.
 
     Drawing a shared quantity as a two-row comparison would produce two identical rows

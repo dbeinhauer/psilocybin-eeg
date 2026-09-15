@@ -211,7 +211,7 @@ class ProjectPaths:
 
         The store is split by condition one level down because a condition is the
         coarsest thing a decomposition is *of*: a run never mixes conditions except
-        through the virtual :attr:`~src.definitions.fields.ConditionVariants.JOINED`
+        through the virtual :attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE`
         and :attr:`~src.definitions.fields.ConditionVariants.JOINED_TRACKS` labels,
         which are themselves conditions here and get their own subdirectory.
 

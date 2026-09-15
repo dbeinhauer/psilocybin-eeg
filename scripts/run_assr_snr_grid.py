@@ -78,7 +78,7 @@ stimulus-window grid in one pass, which is exactly what a job wants:
   single run covers e.g. 40 Hz and 35-45 Hz crossed with 0-500 ms and 200-500 ms.
 
 **Both decomposition variants.** ``--variant iva_channel_joined_tracks`` shares one
-filter per participant across the conditions; ``--variant iva_channel_joined`` has a
+filter per participant across the conditions; ``--variant iva_channel_joined_separate`` has a
 separate
 topography per recording, so every projection and polarity anchor is resolved per
 (participant, condition) through ``results.row``. Nothing else differs.
@@ -104,7 +104,7 @@ over a band-restricted decomposition never lands on top of the broadband one.
 Examples::
 
     # The job grid: both frequencies x both windows, every variant of signal.
-    python scripts/run_assr_snr_grid.py --experiment assr --variant iva_channel_joined \\
+    python scripts/run_assr_snr_grid.py --experiment assr --variant iva_channel_joined_separate \\
         --n_pca 5 --halfwidths 0 5 --stimulus_intervals 0:0.5 0.2:0.5
 
     # A quick shape check without decompressing the whole cache.
@@ -243,9 +243,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     stored.add_argument("--experiment", default=ExperimentNames.ASSR.value)
     stored.add_argument(
         "--variant",
-        default=IvaVariants.CHANNEL_JOINED.value,
+        default=IvaVariants.CHANNEL_JOINED_SEPARATE.value,
         choices=[
-            IvaVariants.CHANNEL_JOINED.value,
+            IvaVariants.CHANNEL_JOINED_SEPARATE.value,
             IvaVariants.CHANNEL_JOINED_TRACKS.value,
         ],
         help="channel_joined = per-recording topography; _tracks = shared per participant.",
@@ -253,7 +253,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     stored.add_argument(
         "--store_condition",
         default=None,
-        help="Store condition; defaults per variant (Joined / JoinedTracks).",
+        help="Store condition; defaults per variant (JoinedSeparate / JoinedTracks).",
     )
     stored.add_argument("--music_type", default=MusicTypeVariants.ASSR.value)
     stored.add_argument("--band", default=None)
@@ -405,7 +405,7 @@ def _default_store_condition(variant: IvaVariants) -> ConditionVariants:
     """The store condition each variant was written under."""
     if variant == IvaVariants.CHANNEL_JOINED_TRACKS:
         return ConditionVariants.JOINED_TRACKS
-    return ConditionVariants.JOINED
+    return ConditionVariants.JOINED_SEPARATE
 
 
 

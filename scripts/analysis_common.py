@@ -626,7 +626,7 @@ def subject_conditions(filtered_df, n_subjects: int) -> list[str]:
     """Map each concatenated subject index to its condition.
 
     Needed whenever the dataset pools both conditions
-    (:attr:`~src.definitions.fields.ConditionVariants.JOINED`), where the subject axis
+    (:attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE`), where the subject axis
     holds every participant twice and the array alone cannot say which half is which.
 
     :param filtered_df: The analyser's ``filtered_df`` metadata table.
@@ -682,7 +682,7 @@ def paired_subject_index(filtered_df, n_subjects: int) -> np.ndarray:
 
     Lets paired (within-subject) statistics index directly into the subject axis
     without re-deriving the pairing. In a
-    :attr:`~src.definitions.fields.ConditionVariants.JOINED` dataset every participant
+    :attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE` dataset every participant
     contributes exactly two recordings, so every entry is a valid partner index.
 
     :param filtered_df: The analyser's ``filtered_df`` metadata table.

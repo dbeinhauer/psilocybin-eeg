@@ -46,7 +46,7 @@ A full run decomposes and then analyses. Either half can be skipped:
 | `--skip_analysis` | the decomposition and its component figures only |
 | `--skip_decomposition_plots` | the tests and the summary figures only |
 
-The notebooks use that split: `wavelet_ica_channel_joined*.ipynb` look at the
+The notebooks use that split: `wavelet_ica_channel_joined_separate*.ipynb` look at the
 decomposition, `ica_component_analysis.ipynb` looks at the tests.
 
 ## Polarity
