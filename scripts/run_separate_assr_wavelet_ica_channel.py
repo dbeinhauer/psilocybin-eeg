@@ -649,7 +649,7 @@ def plot_stimulus_correlation(
 # --------------------------------------------------------------------------- #
 #  Orchestration                                                              #
 # --------------------------------------------------------------------------- #
-def run_separate_ica(args: argparse.Namespace) -> None:
+def run(args: argparse.Namespace) -> None:
     """Run the per-participant channel ICA for one condition, writing all outputs."""
     experiment = ExperimentNames(args.experiment)
     condition = ConditionVariants(args.condition)
@@ -888,7 +888,7 @@ def run_separate_ica(args: argparse.Namespace) -> None:
     print(f"[DONE] {label}: plots written to {plots_dir}", flush=True)
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _build_arg_parser() -> argparse.ArgumentParser:
     """Build the command-line argument parser."""
     parser = argparse.ArgumentParser(
         description=(
@@ -1042,5 +1042,13 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def main(argv: list[str] | None = None) -> None:
+    """Parse arguments and run.
+
+    :param argv: Command-line arguments; ``None`` reads ``sys.argv``.
+    """
+    run(_build_arg_parser().parse_args(argv))
+
+
 if __name__ == "__main__":
-    run_separate_ica(build_parser().parse_args())
+    main()

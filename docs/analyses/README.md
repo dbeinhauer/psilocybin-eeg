@@ -10,10 +10,10 @@ why — the reasoning that is too long to sit in a notebook cell or a docstring.
 | `01-raw-mean-variance-analysis` | — |
 | `02-isc-broadband-analysis` | — |
 | `03-wavelet-analysis` | — |
-| `04-wavelet-ica-analysis` | — |
-| `05-wavelet-iva-analysis` | — |
+| `04-wavelet-ica-analysis` | [README](04-wavelet-ica-analysis/README.md) |
+| `05-wavelet-iva-analysis` | [README](05-wavelet-iva-analysis/README.md) |
 | `06-iva-condition-comparison` | [README](06-iva-condition-comparison/README.md) |
-| `07-ica-condition-comparison` | — |
+| `07-ica-condition-comparison` | [README](07-ica-condition-comparison/README.md) |
 
 ## What goes where
 

@@ -1112,6 +1112,8 @@ def _run_iva(
         (top_indices, top_labels, f"TOP {n_top}", "top"),
         (bottom_indices, bot_labels, f"BOTTOM {n_bottom}", "bottom"),
     ):
+        if len(indices) == 0:
+            continue  # --n_top or --n_bottom of 0 asks for no group at all
         source_corr = np.stack([np.corrcoef(iva_scores_pca[:, k, :]) for k in indices])
         _plot_isc_grid(
             source_corr,
