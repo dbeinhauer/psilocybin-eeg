@@ -336,7 +336,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 
 # ---------------------------------------------------------------------------
-# Inputs (mirrored from run_assr_trial_stats.py — same cache/onset conventions)
+# Inputs (cache/onset conventions shared with the rest of the ASSR scripts)
 # ---------------------------------------------------------------------------
 
 

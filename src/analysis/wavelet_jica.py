@@ -567,8 +567,8 @@ def fit_joint_ica(
         unmixing = ica.components_ @ P                 # (K, n_features)
         mixing   = P.T @ ica.mixing_ = pinv(unmixing)  # (n_features, K)
 
-    which is the same composition :func:`~src.analysis.wavelet_ica._run_pca_ica` and
-    :func:`~src.analysis.wavelet_ica.iva_component_patterns` use, so
+    which is the same composition :func:`~src.analysis.wavelet_ica.iva_component_patterns`
+    uses, so
     :meth:`JointIcaResult.identity_error` still holds exactly.
 
     :param layout: The assembled join, carrying both the matrix and the axis sizes.

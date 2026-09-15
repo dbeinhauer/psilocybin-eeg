@@ -149,9 +149,6 @@ class ProjectPaths:
     IVA_RESULTS_DIR_NAME = "iva_results"  # Subdirectory name, under an experiment's processed-data directory, holding the stored IVA component products (one sub-subdirectory per condition). See `src.io.iva_store`.
     MARKER_SHIFT_MAPPING_SUFFIX = "_time_shift.csv"  # Filename suffix, appended to the experiment name, of the per-recording stimulus-marker shift mapping in `PARTICIPANT_MAPPING_DIR`.
     PLOTS_PATH = PROJECT_ROOT / "plots"  # Path to all project plots.
-    RESULTS_DB_PATH = (
-        PROJECT_ROOT / "results_db"
-    )  # Path to the CSV results database for the Interactive Explorer.
     NOTEBOOKS_DIR = PROJECT_ROOT / "notebooks"  # Path to all project notebooks.
     EXCLUDED_PARTICIPANTS_DIR = (
         DATA_DIR / "excluded_participants"

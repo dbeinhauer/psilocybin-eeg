@@ -151,28 +151,6 @@ class LogLevel:
         self.logger.setLevel(self.original_level)
 
 
-# Example logging configurations for different scenarios
-def setup_debug_logging() -> logging.Logger:
-    """
-    Set up logging for debugging (verbose output).
-
-    :return: Configured logger
-    """
-    return setup_logging(log_level=logging.DEBUG, log_to_file=True, log_to_console=True)
-
-
-def setup_production_logging(log_dir: Path) -> logging.Logger:
-    """
-    Set up logging for production (less verbose, file only).
-
-    :param log_dir: Directory for log files
-    :return: Configured logger
-    """
-    return setup_logging(
-        log_level=logging.INFO, log_dir=log_dir, log_to_file=True, log_to_console=False
-    )
-
-
 def setup_testing_logging() -> logging.Logger:
     """
     Set up logging for testing (warnings and errors only).
@@ -182,30 +160,3 @@ def setup_testing_logging() -> logging.Logger:
     return setup_logging(
         log_level=logging.WARNING, log_to_file=False, log_to_console=True
     )
-
-
-# Example usage
-if __name__ == "__main__":
-    # Setup logging
-    logger = setup_logging(log_level=logging.DEBUG)
-
-    # Test different log levels
-    logger.debug("This is a debug message")
-    logger.info("This is an info message")
-    logger.warning("This is a warning message")
-    logger.error("This is an error message")
-    logger.critical("This is a critical message")
-
-    # Test LoggerMixin
-    class TestClass(LoggerMixin):
-        def test_method(self):
-            self.logger.info("Logging from TestClass")
-
-    test_obj = TestClass()
-    test_obj.test_method()
-
-    # Test context manager
-    logger.info("Normal log level")
-    with LogLevel(logging.DEBUG):
-        logger.debug("Temporary debug level")
-    logger.debug("This won't show if original level was INFO")

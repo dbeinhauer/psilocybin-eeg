@@ -17,10 +17,9 @@
 # subject-axis join estimates ONE mixing matrix PER RECORDING, so a participant's
 # Placebo and Psilocybin rows do NOT share a filter, a topography or a PCA subspace.
 # run_assr_snr_grid.py handles that: it resolves the filter, the PCA-mask operator
-# AND the polarity anchor per (participant, condition) through results.row. (This is
-# exactly the assumption the older run_assr_trial_stats.py could not make, which is
-# why that script is time-axis only.) Everything else — the three references, the seven
-# signal variants, the three test families, the grid — is identical.
+# AND the polarity anchor per (participant, condition) through results.row. Everything
+# else — the three references, the seven signal variants, the three test families, the
+# grid — is identical.
 #
 # THE GRID this job runs at once:
 #   --halfwidths 0 5            -> 40 Hz single bin AND 35-45 Hz band mean

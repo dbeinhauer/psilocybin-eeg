@@ -368,35 +368,6 @@ def to_wavelet_phase(
     )
 
 
-def to_wavelet_tfr(
-    ad: AnalysisData,
-    freqs: np.ndarray,
-    n_cycles: Optional[Union[np.ndarray, float]] = None,
-    output: str = "power",
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Full Morlet time-frequency decomposition (no averaging).
-
-    :param ad: Input data.
-    :param freqs: Frequencies of interest (Hz).
-    :param n_cycles: Number of wavelet cycles per frequency.
-    :param output: ``'power'``, ``'complex'``, or ``'phase'``.
-    :return: ``(tfr, freqs)`` where *tfr* has shape
-        ``(n_items, n_features, n_freqs, n_samples)``.
-    """
-    if n_cycles is None:
-        n_cycles = freqs / 2.0
-    tfr = tfr_array_morlet(
-        ad.data.astype(float),
-        sfreq=ad.sfreq,
-        freqs=freqs,
-        n_cycles=n_cycles,
-        output=output,
-        verbose=False,
-    )
-    return tfr, freqs
-
-
 def extract_ica_activations(
     raws: list,
     icas: list,
@@ -420,28 +391,3 @@ def extract_ica_activations(
 
     min_samples = min(s.shape[1] for s in sources)
     return np.array([s[:, :min_samples] for s in sources])
-
-
-def to_ica_activations(
-    raws: list,
-    icas: list,
-    sfreq: float = 250.0,
-    label: str = "ICA Activations",
-) -> AnalysisData:
-    """
-    Build an ``AnalysisData`` from ICA source activations.
-
-    :param raws: List of ``mne.io.Raw`` objects (one per subject).
-    :param icas: List of ``mne.preprocessing.ICA`` objects.
-    :param sfreq: Target sampling frequency (Hz).
-    :param label: Human-readable label.
-    """
-    data = extract_ica_activations(raws, icas, sfreq=sfreq)
-    n_components = data.shape[1]
-    return AnalysisData(
-        data=data,
-        sfreq=sfreq,
-        representation=DataRepresentation.ICA_ACTIVATIONS,
-        label=label,
-        feature_names=[f"IC{i}" for i in range(n_components)],
-    )
