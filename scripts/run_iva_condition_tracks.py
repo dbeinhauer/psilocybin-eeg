@@ -947,18 +947,14 @@ def run_condition_tracks(
 # ---------------------------------------------------------------------------
 
 
-def main(argv: list[str] | None = None) -> None:
-    """Parse arguments and run the time-concatenated join for every music type.
+def run(args: argparse.Namespace) -> None:
+    """Run the analysis for an already-parsed argument namespace.
 
-    :param argv: Command-line arguments; ``None`` reads ``sys.argv``.
+    Split out of :func:`main` so a notebook can drive the same code path the CLI and the
+    PBS job take, without going through ``sys.argv``.
+
+    :param args: Parsed arguments, as :func:`_build_arg_parser` produces.
     """
-    args = _build_arg_parser().parse_args(argv)
-
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-
     experiment_name = ExperimentNames(args.experiment)
     if args.music_type is not None:
         music_types = [MusicTypeVariants(mt) for mt in args.music_type]
@@ -1052,6 +1048,22 @@ def main(argv: list[str] | None = None) -> None:
             coordinate_system=CoordinateSystems(args.coordinate_system),
             lenient_mask=args.lenient_mask,
         )
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Parse arguments and run the time-concatenated join for every music type.
+
+    :param argv: Command-line arguments; ``None`` reads ``sys.argv``.
+    """
+    args = _build_arg_parser().parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+    run(args)
+
 
 
 if __name__ == "__main__":
