@@ -98,7 +98,12 @@ TF_VARIANT_TAG = "wavelet_tf"
 # ---------------------------------------------------------------------------
 
 
-def _save_fig(fig: Figure, save_path: Optional[Path]) -> None:
+def save_fig(fig: Figure, save_path: Optional[Path]) -> None:
+    """Write *fig* to *save_path*, creating parents. ``None`` writes nothing.
+
+    :param fig: Figure to write.
+    :param save_path: Destination, or ``None`` to skip saving.
+    """
     if save_path is None:
         return
     save_path = Path(save_path)
@@ -106,9 +111,18 @@ def _save_fig(fig: Figure, save_path: Optional[Path]) -> None:
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
 
 
-def _safe_vlim(arr: np.ndarray) -> float:
-    """Symmetric colour limit from the 99th percentile of ``|arr|``."""
+def safe_vlim(arr: np.ndarray) -> float:
+    """Symmetric colour limit from the 99th percentile of ``|arr|``.
+
+    :param arr: Array the limit is measured over.
+    :return: A strictly positive half-width, so an all-zero array still plots.
+    """
     return max(float(np.percentile(np.abs(arr), 99)), 1e-12)
+
+
+#: Aliases retained for the private call-sites in this module.
+_save_fig = save_fig
+_safe_vlim = safe_vlim
 
 
 def _alignment_suffix(alignment_note: Optional[str]) -> str:
@@ -125,7 +139,7 @@ def _alignment_suffix(alignment_note: Optional[str]) -> str:
     return "" if alignment_note is None else f"\nper-participant sign: {alignment_note}"
 
 
-def _participant_sort_key(subject_id: str) -> tuple[int, int, str]:
+def participant_sort_key(subject_id: str) -> tuple[int, int, str]:
     """Sort key ordering ``PSI{number}`` labels numerically.
 
     Participant IDs are ``PSI`` followed by digits (zero-padded to three in the
@@ -140,6 +154,10 @@ def _participant_sort_key(subject_id: str) -> tuple[int, int, str]:
     if match is None:
         return (1, 0, subject_id)
     return (0, int(match.group(1)), subject_id)
+
+
+#: Alias retained for the private call-sites in this module.
+_participant_sort_key = participant_sort_key
 
 
 def _grid_shape(n_panels: int, max_cols: int = 6) -> tuple[int, int]:

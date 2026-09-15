@@ -32,6 +32,8 @@ from src.preprocessing.stimulus_alignment import (
 from src.filtering.dataset_filter import DatasetFilter
 from src.definitions.constants import ProjectPaths
 from src.definitions.fields import (
+    ALIGNMENT_EXCLUSIONS,
+    REAL_CONDITIONS,
     CoordinateSystems,
     ConditionVariants,
     ExclusionCategories,
@@ -125,6 +127,17 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         )
         self.stimulus_onsets: Optional[np.ndarray] = None
 
+        # Whether the two conditions are pooled along the time axis rather than the
+        # subject axis: each participant becomes one subject whose recording is their
+        # Placebo track followed by their Psilocybin track. Set for
+        # ConditionVariants.JOINED_TRACKS only.
+        self.concatenates_condition_tracks: bool = (
+            ConditionVariants.JOINED_TRACKS in self.conditions
+        )
+        # For such a dataset, the sample index where each condition's segment starts,
+        # plus the final end (len(REAL_CONDITIONS) + 1 entries). ``None`` otherwise.
+        self.segment_boundaries: Optional[np.ndarray] = None
+
     # ------------------------------------------------------------------ #
     #  Data loading                                                         #
     # ------------------------------------------------------------------ #
@@ -140,6 +153,11 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         Results are stored in :attr:`data` (``n_subjects × n_channels × n_times``)
         and :attr:`info`.
 
+        For :attr:`~src.definitions.fields.ConditionVariants.JOINED_TRACKS` the two
+        conditions are pooled along the time axis instead, so each participant yields
+        **one** subject whose recording is their Placebo track followed by their
+        Psilocybin track (see :meth:`_prepare_condition_track_data`).
+
         :param resample_freq: Target sampling frequency in Hz (default 250).
         :param n_jobs: Number of parallel jobs for resampling (-1 = all CPUs).
         :return: Tuple ``(data, info)`` where *data* is the loaded EEG array and *info* is the MNE Info object.
@@ -150,6 +168,9 @@ class EEGSummarizedAnalyzer(LoggerMixin):
             f"(condition={[c.value for c in self.conditions]}, "
             f"music={[m.value for m in self.music_types]})."
         )
+
+        if self.concatenates_condition_tracks:
+            return self._prepare_condition_track_data(resample_freq, n_jobs)
 
         raws: list[mne.io.Raw] = []
         axis0_indices: list[int] = []
@@ -181,6 +202,141 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         self.data = np.array([r.get_data() for r in raws])  # (n_subj, n_ch, n_times)
         self.logger.info(f"Data array shape: {self.data.shape}")
 
+        return self.data, self.info
+
+    def _prepare_condition_track_data(
+        self,
+        resample_freq: float,
+        n_jobs: int,
+    ) -> tuple[np.ndarray, mne.Info]:
+        """
+        Build the time-concatenated array for
+        :attr:`~src.definitions.fields.ConditionVariants.JOINED_TRACKS`.
+
+        Each participant contributes one subject whose recording is their tracks laid
+        end to end in :data:`~src.definitions.fields.REAL_CONDITIONS` order. The
+        alignment was fitted once over every recording of both conditions, so the two
+        tracks already share a time base and carry the same stimuli; this only selects
+        and concatenates.
+
+        :attr:`filtered_df` keeps one row per *recording* (so filenames stay
+        traceable), but
+        :attr:`~src.definitions.fields.SingleDataMetadata.CONCATENATED_PERSON_INDEX`
+        is the **subject** index, so the two rows of a participant share one value.
+        :attr:`segment_boundaries` records where each condition's segment starts and
+        ends, and :attr:`stimulus_onsets` holds the first segment's onsets — use
+        :class:`~src.analysis.condition_tracks.PairedConditionTracks` for the
+        per-condition view.
+
+        :param resample_freq: Target sampling frequency in Hz.
+        :param n_jobs: Number of parallel jobs for resampling.
+        :return: Tuple ``(data, info)``.
+        :raises RuntimeError: If a participant does not contribute exactly one
+            recording per condition, which
+            :meth:`~src.filtering.dataset_filter.DatasetFilter.restrict_to_complete_pairs`
+            should already have guaranteed.
+        """
+        conditions = list(REAL_CONDITIONS)
+        # Preserve the block ordering the filter produced: the first block's order is
+        # the participant order of the concatenated subject axis.
+        by_participant: dict[str, dict[ConditionVariants, str]] = {}
+        order: list[str] = []
+        for _, row in self.filtered_df.iterrows():
+            participant = str(row[SingleDataMetadata.PARTICIPANT_ID])
+            condition = row[SingleDataMetadata.CONDITION]
+            if not isinstance(condition, ConditionVariants):
+                condition = ConditionVariants(condition)
+            if participant not in by_participant:
+                by_participant[participant] = {}
+                order.append(participant)
+            by_participant[participant][condition] = row[SingleDataMetadata.FILENAME]
+
+        incomplete = [
+            participant
+            for participant in order
+            if any(c not in by_participant[participant] for c in conditions)
+        ]
+        if incomplete:
+            raise RuntimeError(
+                f"Participant(s) {incomplete} do not contribute a recording to every "
+                f"condition {[c.value for c in conditions]}; a JOINED_TRACKS dataset "
+                "requires complete pairs."
+            )
+
+        # Load condition by condition so every subject's segment for a given condition
+        # is built the same way, then concatenate per participant.
+        per_condition_arrays: dict[ConditionVariants, list[np.ndarray]] = {}
+        first_raw: Optional[mne.io.Raw] = None
+        for condition in conditions:
+            arrays: list[np.ndarray] = []
+            for participant in order:
+                raw = self.dataset_handler.load_data_file(
+                    by_participant[participant][condition],
+                    is_processed=True,
+                    processed_data_type=PreprocessedDataVariants.RAW_CROPPED,
+                    preload=True,
+                ).pick(["eeg"])
+                raw = raw.resample(resample_freq, n_jobs=n_jobs)
+                if first_raw is None:
+                    first_raw = raw
+                arrays.append(raw.get_data())
+            per_condition_arrays[condition] = arrays
+
+        # Every recording of one condition shares that condition's aligned length.
+        segment_lengths = [
+            per_condition_arrays[condition][0].shape[-1] for condition in conditions
+        ]
+        for condition, length in zip(conditions, segment_lengths):
+            mismatched = [
+                order[index]
+                for index, array in enumerate(per_condition_arrays[condition])
+                if array.shape[-1] != length
+            ]
+            if mismatched:
+                raise RuntimeError(
+                    f"Recordings of condition {condition.value} have differing lengths "
+                    f"(participant(s) {mismatched} differ from {length} samples); the "
+                    "within-condition alignment is inconsistent."
+                )
+
+        self.data = np.stack(
+            [
+                np.concatenate(
+                    [per_condition_arrays[c][index] for c in conditions], axis=-1
+                )
+                for index in range(len(order))
+            ]
+        )
+
+        edges = [0]
+        for length in segment_lengths:
+            edges.append(edges[-1] + int(length))
+        self.segment_boundaries = np.asarray(edges, dtype=int)
+
+        # Subject index is the participant's position, so a participant's two rows
+        # share it.
+        participant_index = {p: index for index, p in enumerate(order)}
+        self.filtered_df[SingleDataMetadata.CONCATENATED_PERSON_INDEX] = [
+            participant_index[str(row[SingleDataMetadata.PARTICIPANT_ID])]
+            for _, row in self.filtered_df.iterrows()
+        ]
+
+        assert first_raw is not None
+        self._refresh_info(first_raw.info)
+        self.resample_freq = resample_freq
+
+        # Onsets of the *first* segment, on the concatenated grid (its segment starts
+        # at 0, so no shift is needed). Later segments have their own onset grids;
+        # PairedConditionTracks resolves them per condition.
+        self.stimulus_onsets = self._extract_stimulus_onsets(
+            first_raw, by_participant[order[0]][conditions[0]]
+        )
+
+        self.logger.info(
+            f"Concatenated {len(order)} participant-matched track pair(s): "
+            f"shape {self.data.shape}, segment lengths {segment_lengths}, "
+            f"boundaries {self.segment_boundaries.tolist()}."
+        )
         return self.data, self.info
 
     def _extract_stimulus_onsets(
@@ -225,7 +381,12 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         keep_tail_sec: float = 0.1,
         pre_window_sec: Optional[float] = None,
         post_window_sec: Optional[float] = None,
-    ) -> tuple[list[np.ndarray], StimulusAligner, Optional[mne.Info]]:
+    ) -> tuple[
+        list[np.ndarray],
+        list[list[tuple[int, int]]],
+        StimulusAligner,
+        Optional[mne.Info],
+    ]:
         """
         Load per-subject ``RAW_AFTER_ICA`` data for pre-wavelet stimulus alignment.
 
@@ -240,14 +401,14 @@ class EEGSummarizedAnalyzer(LoggerMixin):
 
         Typical usage::
 
-            arrays, aligner, info = analyzer.load_pre_alignment_data(resample_freq=250)
+            arrays, segments, aligner, info = analyzer.load_pre_alignment_data(resample_freq=250)
             # arrays[i]: (n_channels, n_times_i)  — variable lengths
             wavelet_aligned = []
-            for arr, segments in zip(arrays, aligner.keep_segments):
+            for arr, keep in zip(arrays, segments):
                 ad = from_array(arr[np.newaxis], sfreq=250, ...)
                 wd = to_wavelet_power(ad, freqs, keep_frequency_dim=True)
                 # wd.data: (1, n_ch, n_freqs, n_times_i)
-                trimmed = apply_keep_segments_to_array(wd.data[0], segments)
+                trimmed = apply_keep_segments_to_array(wd.data[0], keep)
                 # trimmed: (n_ch, n_freqs, aligner.total_length)
                 wavelet_aligned.append(trimmed)
             data_4d = np.stack(wavelet_aligned)  # (n_subj, n_ch, n_freqs, n_times_aligned)
@@ -266,14 +427,19 @@ class EEGSummarizedAnalyzer(LoggerMixin):
             ``None`` keeps the per-subject shortest available lead-in.
         :param post_window_sec: Cap on the window kept after the last onset.
             ``None`` keeps the per-subject shortest available lead-out.
-        :return: Tuple ``(arrays, aligner, info)`` where
+        :return: Tuple ``(arrays, segments, aligner, info)`` where
 
-            * ``arrays`` is a list of ``(n_channels, n_times_i)`` numpy arrays
-              — one per subject, variable length before trimming.
-            * ``aligner`` is the fitted :class:`~src.preprocessing.stimulus_alignment.StimulusAligner`;
-              use ``aligner.keep_segments[i]`` with
+            * ``arrays`` is a list of ``(n_channels, n_times_i)`` numpy arrays — one per
+              recording **selected by this analyser**, in its metadata order, variable
+              length before trimming.
+            * ``segments`` is the matching list of keep-segments; pass ``segments[i]``
+              with
               :func:`~src.preprocessing.stimulus_alignment.apply_keep_segments_to_array`
-              to trim subject *i*'s wavelet output.
+              to trim subject *i*'s wavelet output. Use these rather than
+              ``aligner.keep_segments``, which is indexed by the **whole** alignment
+              cohort, not by this analyser's selection.
+            * ``aligner`` is the fitted :class:`~src.preprocessing.stimulus_alignment.StimulusAligner`,
+              fitted over every recording of both conditions.
             * ``info`` is the MNE Info object from the first loaded recording.
 
         :raises ValueError: If the experiment has no registered stimulus label
@@ -288,26 +454,40 @@ class EEGSummarizedAnalyzer(LoggerMixin):
                 f"Experiment '{self._experiment_name.value}' has no registered "
                 "stimulus label. Pass stimulus_label explicitly."
             )
+
+        # The aligner must be fitted on the SAME group the stored crops were fitted on
+        # — every recording of both conditions — not on this analyser's selection.
+        # Fitting it on a subset would give different group minima, so the wavelet
+        # cache would describe a different splice than the RAW_CROPPED it is supposed
+        # to match, and the two conditions would drift apart again.
+        cohort_df = DatasetFilter.filter_dataset_by_all_categories(
+            self.dataset_handler.dataset_metadata,
+            self.dataset_handler.excluded_participants_metadata,
+            self.music_types,
+            list(REAL_CONDITIONS),
+            list(ALIGNMENT_EXCLUSIONS.get(self._experiment_name, ())),
+        )
+        cohort_filenames = [
+            row[SingleDataMetadata.FILENAME] for _, row in cohort_df.iterrows()
+        ]
         # The offset always comes from the experiment's registered marker: an
         # explicit label override selects *which* annotation to read, not how it
         # relates in time to the stimulus. It is resolved per recording, since the
         # marker error differs between recordings.
-        filenames = [
-            row[SingleDataMetadata.FILENAME] for _, row in self.filtered_df.iterrows()
-        ]
         onset_offsets = (
-            self._stimulus_marker.offsets_for(filenames)
+            self._stimulus_marker.offsets_for(cohort_filenames)
             if self._stimulus_marker is not None
-            else [0.0] * len(filenames)
+            else [0.0] * len(cohort_filenames)
         )
 
         self.logger.info(
-            f"Loading {len(self.filtered_df)} RAW_AFTER_ICA recording(s) for "
-            f"pre-alignment wavelet computation (resample → {resample_freq} Hz)."
+            f"Loading {len(cohort_filenames)} RAW_AFTER_ICA recording(s) to fit the "
+            f"alignment (resample → {resample_freq} Hz); "
+            f"{len(self.filtered_df)} of them are in this analyser's selection."
         )
 
         raws: list[mne.io.Raw] = []
-        for filename in filenames:
+        for filename in cohort_filenames:
             raw = (
                 self.dataset_handler.load_data_file(
                     filename,
@@ -336,17 +516,33 @@ class EEGSummarizedAnalyzer(LoggerMixin):
             post_window_sec=post_window_sec,
         )
 
-        arrays = [raw.get_data() for raw in raws]
+        # Return only this analyser's recordings, in ITS metadata order, together with
+        # their keep-segments — the plan is group-wide, the data is not.
+        cohort_index = {name: index for index, name in enumerate(cohort_filenames)}
+        selected = []
+        for _, row in self.filtered_df.iterrows():
+            filename = row[SingleDataMetadata.FILENAME]
+            if filename not in cohort_index:
+                raise RuntimeError(
+                    f"Recording {filename} is selected for analysis but is not in the "
+                    "alignment cohort, so it was never aligned. Widen "
+                    "ALIGNMENT_EXCLUSIONS or drop it from the analysis."
+                )
+            selected.append(cohort_index[filename])
+
+        arrays = [raws[index].get_data() for index in selected]
+        segments = [aligner.keep_segments[index] for index in selected]
 
         self._refresh_info(raws[0].info)
         self.resample_freq = resample_freq
 
         self.logger.info(
-            f"Pre-alignment load complete: {len(arrays)} subject(s), "
-            f"lengths {[a.shape[-1] for a in arrays]}, "
-            f"aligned total_length={aligner.total_length} samples."
+            f"Pre-alignment load complete: {len(arrays)} selected subject(s) of "
+            f"{len(raws)} in the alignment cohort, "
+            f"aligned total_length={aligner.total_length} samples "
+            f"(common stimulus count {aligner.common_count})."
         )
-        return arrays, aligner, self.info
+        return arrays, segments, aligner, self.info
 
     def _refresh_info(self, info: mne.Info) -> None:
         """Store an mne.Info copy taken from the first loaded raw object."""
@@ -407,6 +603,14 @@ class EEGSummarizedAnalyzer(LoggerMixin):
                 f"({len(self.stimulus_onsets)} onsets)."
             )
 
+        if self.segment_boundaries is not None:
+            boundaries_path = self._segment_boundaries_path(save_path)
+            np.save(boundaries_path, self.segment_boundaries)
+            self.logger.info(
+                f"Condition-track segment boundaries saved to {boundaries_path} "
+                f"({self.segment_boundaries.tolist()})."
+            )
+
         if self.filtered_df is not None:
             resolved_metadata_path = (
                 Path(metadata_path)
@@ -465,6 +669,14 @@ class EEGSummarizedAnalyzer(LoggerMixin):
                 f"({len(self.stimulus_onsets)} onsets)."
             )
 
+        boundaries_path = self._segment_boundaries_path(load_path)
+        if boundaries_path.exists():
+            self.segment_boundaries = np.load(boundaries_path)
+            self.logger.info(
+                f"Condition-track segment boundaries loaded from {boundaries_path} "
+                f"({self.segment_boundaries.tolist()})."
+            )
+
         if metadata_path is not None:
             candidate_metadata_paths = [Path(metadata_path)]
         else:
@@ -518,6 +730,22 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         (e.g. ``Placebo_ASSR.npy`` -> ``Placebo_ASSR.stimulus_onsets.npy``).
         """
         return data_path.parent / (data_path.stem + ProjectPaths.STIMULUS_ONSETS_SUFFIX)
+
+    @staticmethod
+    def _segment_boundaries_path(data_path: Path) -> Path:
+        """
+        Build the segment-boundaries file path for a concatenated data array.
+
+        Same prefix as the data array, with the
+        :attr:`~src.definitions.constants.ProjectPaths.SEGMENT_BOUNDARIES_SUFFIX`
+        suffix (e.g. ``JoinedTracks_ASSR.npy`` ->
+        ``JoinedTracks_ASSR.segment_boundaries.npy``). Only written for
+        :attr:`~src.definitions.fields.ConditionVariants.JOINED_TRACKS` datasets, and
+        what lets the per-condition split be reconstructed from disk alone.
+        """
+        return data_path.parent / (
+            data_path.stem + ProjectPaths.SEGMENT_BOUNDARIES_SUFFIX
+        )
 
     def _default_metadata_save_path(self) -> Path:
         """

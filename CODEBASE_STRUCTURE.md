@@ -39,7 +39,8 @@ psilocybin-eeg/
 │   │   ├── __init__.py
 │   │   ├── parsing.py             #     Filename → metadata extraction
 │   │   ├── loading.py             #     Loading raw / processed files
-│   │   └── saving.py              #     Saving processed outputs
+│   │   ├── saving.py              #     Saving processed outputs
+│   │   └── iva_store.py           #     IVA component store (TF maps, topographies + participant mapping)
 │   │
 │   ├── preprocessing/             #   Signal preprocessing pipeline
 │   │   ├── __init__.py
@@ -78,6 +79,10 @@ psilocybin-eeg/
 │   ├── run_time_alignment.py      #   Stimulus-based time alignment
 │   ├── run_isc.py                 #   ISC analysis (broadband, per-band, mean-field)
 │   ├── run_mean_variance.py       #   Mean-variance synchrony analysis
+│   ├── run_wavelet_iva_channel.py #   Wavelet IVA, channel as the independent axis
+│   ├── run_iva_condition_comparison.py  #   Joined IVA (subject axis) + condition comparison
+│   ├── run_iva_condition_tracks.py      #   Joined IVA (time axis) + condition comparison
+│   ├── notebook_helpers.py        #   Notebook-facing import surface (+ wavelet subset cache)
 │   ├── run_analysis.py            #   Legacy ISC & group-level analysis entry point
 │   ├── organize_plots.sh          #   Organize plot files by participant
 │   └── zip_data_subset.sh         #   Create zip archives of processed data
@@ -87,12 +92,17 @@ psilocybin-eeg/
 │   ├── 01-raw-mean-variance-analysis/  #   Mean-variance synchrony (broadband + per-band)
 │   ├── 02-isc-broadband-analysis/ #   ISC analysis (broadband + per-band)
 │   ├── 03-wavelet-analysis/       #   Wavelet power and phase exploration
+│   ├── 04-wavelet-ica-analysis/   #   ICA of wavelet power (per-axis variants)
+│   ├── 05-wavelet-iva-analysis/   #   IVA-G of wavelet power (+ component quality)
+│   ├── 06-iva-condition-comparison/  #   IVA over both conditions pooled (JOINED / JOINED_TRACKS)
+│   │                              #     + iva_component_analysis_*.ipynb: analyse the stored components
 │   └── [legacy notebooks]         #   data_analysis.ipynb, time_alignment.ipynb, etc.
 │
 ├── tests/                         # ── Tests ──────────────────────────
 │   ├── conftest.py                #   Shared fixtures
 │   ├── test_dataset_parsing.py
 │   ├── test_isc.py
+│   ├── test_iva_store.py
 │   ├── test_mean_variance.py
 │   ├── test_visualization.py
 │   └── [further test modules]     #   One per src/ module
@@ -103,6 +113,9 @@ psilocybin-eeg/
 │       ├── 01-raw-mean-variance-analysis/  #   Mean-variance job script
 │       ├── 02-isc-broadband-analysis/      #   ISC job script
 │       ├── 03-wavelet-analysis/   #   Wavelet power/phase job scripts
+│       ├── 04-wavelet-ica-analysis/        #   Wavelet-ICA job scripts (per axis)
+│       ├── 05-wavelet-iva-analysis/        #   Wavelet-IVA job scripts (per axis, + quality)
+│       ├── 06-iva-condition-comparison/    #   Joined-condition IVA comparison job
 │       ├── preprocessing_job_template.pbs  #   Legacy flat scripts
 │       ├── run_excluded_plot.pbs
 │       ├── run_full_preprocessing.pbs
@@ -122,7 +135,9 @@ To keep the codebase consistent, the following conventions are used:
 - **Enum values** are the single source of truth for categorical labels.
   Use `ConditionVariants.PLACEBO` / `ConditionVariants.PSILOCYBIN` and
   `MusicTypeVariants.CLASSICAL` / `MusicTypeVariants.PSYTRANCE` instead of
-  hard-coded strings.
+  hard-coded strings. `ConditionVariants.JOINED` is a virtual condition selecting
+  both real ones (paired participants only) — iterate `REAL_CONDITIONS` when the
+  code maps a *recording* to a condition.
 - **DataFrame column names** use lowercase `snake_case` (e.g. `"condition"`, `"music_type"`),
   matching the values in `SingleDataMetadata`.
 - **File and directory names** use lowercase `snake_case`.

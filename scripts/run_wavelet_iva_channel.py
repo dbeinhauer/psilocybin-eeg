@@ -191,6 +191,14 @@ Usage::
     python scripts/run_wavelet_iva_channel.py \\
         --experiment assr --condition Placebo \\
         --n_pca 10 --n_top 10 --n_bottom 0 --quality --reuse_wavelets
+
+Pass ``--store_components`` to additionally keep the recovered components under
+``data/processed/<experiment>/iva_results/<Condition>/``: the per-recording
+``(components, frequencies, times)`` TF maps, the ``(components, channels)``
+topographies and both marginals, together with the participant label of every row.
+Read them back with :func:`src.io.iva_store.load_iva_components`, which resolves
+rows by participant rather than by position. Off by default — a full-length TF map
+stack is gigabytes.
 """
 
 from __future__ import annotations
@@ -220,6 +228,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from scripts.analysis_common import (  # noqa: E402
     FREQUENCY_BANDS,
     _broadband_wavelet_4d,
+    add_iva_store_args,
     add_wavelet_grid_args,
     analyzers_to_datasets,
     load_analyzers,
@@ -244,13 +253,17 @@ from src.definitions.fields import (  # noqa: E402
     ExclusionCategories,
     ExperimentNames,
     FrequencyBandNames,
+    IvaComponentArrays,
+    IvaVariants,
     MusicTypeVariants,
 )
+from src.io.iva_store import save_iva_components  # noqa: E402
 from src.visualization import iva_quality_plots as qplots  # noqa: E402
 
 _logger = logging.getLogger(__name__)
 
 _STAGE_DIR = "05-channel-wavelet-iva-analysis"
+_ANALYSIS_DIR = IvaVariants.CHANNEL.value
 
 # ---------------------------------------------------------------------------
 # Cluster-analysis constants and helpers (shared with the ICA scripts)
@@ -452,6 +465,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Base directory for output plots. Defaults to project plots/ root.",
     )
+    add_iva_store_args(parser)
     parser.add_argument(
         "--verbose",
         action="store_true",
@@ -1429,17 +1443,30 @@ def _run_iva(
     quality: bool = False,
     stimulus_onsets: np.ndarray | None = None,
     subject_ids: list[str] | None = None,
+    experiment_name: ExperimentNames | None = None,
+    condition: ConditionVariants | None = None,
+    music_type: MusicTypeVariants | None = None,
+    store_root: Path | None = None,
+    store_dtype: str = "float32",
 ) -> None:
-    """Run the channel-as-mixing IVA pipeline and save all plots."""
+    """Run the channel-as-mixing IVA pipeline, save all plots and, optionally,
+    the recovered components.
+
+    :param store_root: Processed-data root to store the recovered components under,
+        or ``None`` to store nothing. Requires *subject_ids*, *experiment_name*,
+        *condition* and *music_type*: a stored decomposition without the
+        participant and condition of every row cannot be read back.
+    :param store_dtype: Floating precision of the stored arrays.
+    """
     pca_subdir = f"pca_{n_pca}"
     if band is None:
         out_dir = (
-            save_dir / SpectrumTypeVariants.BROADBAND.value / "iva_channel" / pca_subdir
+            save_dir / SpectrumTypeVariants.BROADBAND.value / _ANALYSIS_DIR / pca_subdir
         )
         prefix = ""
     else:
         out_dir = (
-            save_dir / SpectrumTypeVariants.BANDS.value / "iva_channel" / pca_subdir
+            save_dir / SpectrumTypeVariants.BANDS.value / _ANALYSIS_DIR / pca_subdir
         )
         prefix = f"{band}_"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1602,6 +1629,66 @@ def _run_iva(
     else:
         _logger.info(
             f"[{label}] --n_bottom 0: skipping the bottom-component contrast figures."
+        )
+
+    # Step 6 — Store the recovered components before drawing anything: the arrays
+    # are the expensive product, and a figure failing on a headless node should not
+    # cost the decomposition. The participant labels go in with them — without the
+    # row-to-participant mapping the subject axis of these arrays is unreadable.
+    if store_root is not None:
+        if subject_ids is None:
+            raise ValueError(
+                f"[{label}] cannot store components without participant labels; "
+                "the subject axis would be unreadable. Check the metadata sidecar."
+            )
+        undescribed = [
+            name
+            for name, value in (
+                ("experiment_name", experiment_name),
+                ("condition", condition),
+                ("music_type", music_type),
+            )
+            if value is None
+        ]
+        if undescribed:
+            raise ValueError(
+                f"[{label}] cannot store components without {undescribed}; the store "
+                "path and the run descriptor are built from them."
+            )
+        channel_names = (
+            list(qplots.topo_info_subset(info, n_channels).ch_names)
+            if info is not None
+            else None
+        )
+        save_iva_components(
+            experiment=experiment_name,
+            condition=condition,
+            variant=IvaVariants.CHANNEL,
+            music_type=music_type,
+            band=band,
+            n_pca=n_pca,
+            sfreq=sfreq,
+            participants=subject_ids,
+            arrays={
+                IvaComponentArrays.TF_MAP: iva_sources,
+                IvaComponentArrays.CHANNEL_PATTERN: iva_components,
+                IvaComponentArrays.TIMECOURSE: iva_time,
+                IvaComponentArrays.SPECTRAL_PROFILE: iva_freq,
+            },
+            freqs=freqs,
+            times=time,
+            channel_names=channel_names,
+            extras={
+                "rank_score": rank_score,
+                "rank_order": np.asarray(order),
+                "top_indices": np.asarray(top_indices, dtype=np.int64),
+                "bottom_indices": np.asarray(bottom_indices, dtype=np.int64),
+                "pca_explained_variance_ratio": pca_evr,
+                "sign_flips": sign_flips,
+            },
+            dtype=store_dtype,
+            processed_data_dir=store_root,
+            logger=_logger,
         )
 
     # ---------- Plots ----------
@@ -1823,6 +1910,16 @@ if __name__ == "__main__":
     ]
     save_root = args.save_dir if args.save_dir is not None else ProjectPaths.PLOTS_PATH
     wavelet_dir = resolve_wavelet_dir(args.wavelet_data_dir, experiment_name)
+    # None disables storing entirely; a path (or the project default) enables it.
+    store_root = (
+        None
+        if not args.store_components
+        else (
+            Path(args.store_dir)
+            if args.store_dir is not None
+            else ProjectPaths.PROCESSED_DATA_DIR
+        )
+    )
     freqs_full = np.linspace(
         args.wavelet_freq_min,
         args.wavelet_freq_max,
@@ -1871,6 +1968,13 @@ if __name__ == "__main__":
         except ValueError as exc:
             # Labels are optional, but never fail silently — a wrong or missing
             # participant label makes every per-subject plot unreadable.
+            if store_root is not None:
+                # --store_components stands or falls on this mapping, so fail here
+                # rather than after the decomposition has been computed.
+                raise ValueError(
+                    f"[{dataset_key}] --store_components needs participant labels "
+                    f"for the subject axis, which are unavailable ({exc})."
+                ) from exc
             _logger.warning(
                 f"[{dataset_key}] Participant labels unavailable ({exc}); "
                 "quality plots will fall back to subject indices."
@@ -1888,6 +1992,7 @@ if __name__ == "__main__":
             freqs=freqs_full,
             wavelet_dir=(wavelet_dir / SpectrumTypeVariants.BROADBAND.value),
             reuse_wavelets=args.reuse_wavelets,
+            analyzer=analyzer,
         )
 
         if band_name is None:
@@ -1928,6 +2033,11 @@ if __name__ == "__main__":
             quality=args.quality,
             stimulus_onsets=stimulus_onsets,
             subject_ids=subject_ids,
+            experiment_name=experiment_name,
+            condition=condition,
+            music_type=mt,
+            store_root=store_root,
+            store_dtype=args.store_dtype,
         )
 
     _logger.info("IVA-channel analysis complete.")

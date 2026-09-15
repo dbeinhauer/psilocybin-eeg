@@ -22,9 +22,7 @@ class TestDatasetParser:
     @pytest.fixture(autouse=True)
     def _setup(self, sample_participant_map):
         """Set up test fixtures before each test method."""
-        self.parser = DatasetParser(
-            ExperimentNames.PSILO_MUSIC, sample_participant_map
-        )
+        self.parser = DatasetParser(ExperimentNames.PSILO_MUSIC, sample_participant_map)
 
     def test_parse_filename_valid_classical(self):
         filename = "PSI018_EEGA_MUSIC_CLASSIC_EC_20171124_014218.edf"
@@ -255,9 +253,7 @@ class TestDatasetParserIntegration:
     @pytest.fixture(autouse=True)
     def _setup(self, sample_participant_map):
         """Set up test fixtures before each test method."""
-        self.parser = DatasetParser(
-            ExperimentNames.PSILO_MUSIC, sample_participant_map
-        )
+        self.parser = DatasetParser(ExperimentNames.PSILO_MUSIC, sample_participant_map)
 
     def test_full_workflow(self):
         """Test the complete workflow from filename to DataFrame."""
@@ -279,3 +275,22 @@ class TestDatasetParserIntegration:
             assert row[SingleDataMetadata.CONDITION] == ConditionVariants.PLACEBO
             assert row[SingleDataMetadata.MUSIC_TYPE] == MusicTypeVariants.CLASSICAL
             assert row[SingleDataMetadata.FILENAME] == filename
+
+
+class TestVirtualConditionRejection:
+    """`Joined` selects both conditions, so no recording can carry it."""
+
+    def test_mapping_claiming_the_virtual_condition_raises(self, tmp_path):
+        mapping = tmp_path / "bad_mapping.csv"
+        pd.DataFrame(
+            {
+                "participant": ["PSI018"],
+                "eeg": ["EEGA"],
+                "participant_eeg": ["PSI018_EEGA"],
+                "condition": [ConditionVariants.JOINED.value],
+            }
+        ).to_csv(mapping, sep=";", index=False)
+
+        parser = DatasetParser(ExperimentNames.PSILO_MUSIC, mapping)
+        with pytest.raises(ValueError, match="virtual condition"):
+            parser.parse_filename("PSI018_EEGA_MUSIC_CLASSIC_EC_20171124_014218.edf")

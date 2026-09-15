@@ -227,3 +227,231 @@ class TestGetUniqueValues:
             dataset_metadata, SingleDataMetadata.CONDITION
         )
         assert set(result) == {ConditionVariants.PLACEBO, ConditionVariants.PSILOCYBIN}
+
+
+@pytest.fixture
+def paired_metadata():
+    """Metadata for a crossover design, deliberately not in condition order.
+
+    Participants 001 and 002 have both conditions; 003 has only Placebo, so it is not
+    a complete pair and must be dropped from a JOINED selection.
+    """
+    return pd.DataFrame(
+        {
+            SingleDataMetadata.PARTICIPANT_ID: [
+                "002",
+                "001",
+                "003",
+                "001",
+                "002",
+            ],
+            SingleDataMetadata.CONDITION: [
+                ConditionVariants.PSILOCYBIN,
+                ConditionVariants.PLACEBO,
+                ConditionVariants.PLACEBO,
+                ConditionVariants.PSILOCYBIN,
+                ConditionVariants.PLACEBO,
+            ],
+            SingleDataMetadata.MUSIC_TYPE: [MusicTypeVariants.CLASSICAL] * 5,
+            SingleDataMetadata.FILENAME: [
+                "p002_psilo.edf",
+                "p001_placebo.edf",
+                "p003_placebo.edf",
+                "p001_psilo.edf",
+                "p002_placebo.edf",
+            ],
+        }
+    )
+
+
+@pytest.fixture
+def no_exclusions():
+    """An empty excluded-participants table with the expected string columns."""
+    return pd.DataFrame(
+        {
+            SingleDataMetadata.PARTICIPANT_ID.value: [],
+            SingleDataMetadata.CONDITION.value: [],
+            SingleDataMetadata.MUSIC_TYPE.value: [],
+            SingleDataMetadata.EXCLUSION_EXPLANATION.value: [],
+        }
+    )
+
+
+class TestExpandConditions:
+    def test_real_conditions_pass_through(self):
+        expanded, is_joined = DatasetFilter.expand_conditions(
+            [ConditionVariants.PLACEBO]
+        )
+        assert expanded == [ConditionVariants.PLACEBO]
+        assert is_joined is False
+
+    def test_joined_expands_to_both(self):
+        expanded, is_joined = DatasetFilter.expand_conditions(
+            [ConditionVariants.JOINED]
+        )
+        assert expanded == [ConditionVariants.PLACEBO, ConditionVariants.PSILOCYBIN]
+        assert is_joined is True
+
+    def test_joined_alongside_real_condition_deduplicates(self):
+        expanded, _ = DatasetFilter.expand_conditions(
+            [ConditionVariants.PSILOCYBIN, ConditionVariants.JOINED]
+        )
+        assert expanded == [ConditionVariants.PSILOCYBIN, ConditionVariants.PLACEBO]
+
+
+class TestJoinedCondition:
+    def test_joined_keeps_only_complete_pairs(self, paired_metadata, no_exclusions):
+        result = DatasetFilter.filter_dataset_by_all_categories(
+            paired_metadata,
+            no_exclusions,
+            [MusicTypeVariants.CLASSICAL],
+            [ConditionVariants.JOINED],
+            [],
+        )
+        # 003 has no Psilocybin recording, so the pair is incomplete.
+        assert result[SingleDataMetadata.PARTICIPANT_ID].tolist() == [
+            "001",
+            "002",
+            "001",
+            "002",
+        ]
+
+    def test_joined_orders_placebo_block_then_psilocybin_block(
+        self, paired_metadata, no_exclusions
+    ):
+        result = DatasetFilter.filter_dataset_by_all_categories(
+            paired_metadata,
+            no_exclusions,
+            [MusicTypeVariants.CLASSICAL],
+            [ConditionVariants.JOINED],
+            [],
+        )
+        conditions = result[SingleDataMetadata.CONDITION].tolist()
+        assert conditions == [
+            ConditionVariants.PLACEBO,
+            ConditionVariants.PLACEBO,
+            ConditionVariants.PSILOCYBIN,
+            ConditionVariants.PSILOCYBIN,
+        ]
+
+    def test_subject_k_pairs_with_k_plus_n_pairs(self, paired_metadata, no_exclusions):
+        result = DatasetFilter.filter_dataset_by_all_categories(
+            paired_metadata,
+            no_exclusions,
+            [MusicTypeVariants.CLASSICAL],
+            [ConditionVariants.JOINED],
+            [],
+        )
+        participants = result[SingleDataMetadata.PARTICIPANT_ID].tolist()
+        n_pairs = len(participants) // 2
+        assert participants[:n_pairs] == participants[n_pairs:]
+
+    def test_joined_never_yields_the_virtual_condition(
+        self, paired_metadata, no_exclusions
+    ):
+        result = DatasetFilter.filter_dataset_by_all_categories(
+            paired_metadata,
+            no_exclusions,
+            [MusicTypeVariants.CLASSICAL],
+            [ConditionVariants.JOINED],
+            [],
+        )
+        assert ConditionVariants.JOINED not in result[SingleDataMetadata.CONDITION]
+
+    def test_exclusion_in_one_condition_drops_the_whole_pair(self, paired_metadata):
+        """A participant excluded under one condition cannot form a pair."""
+        excluded = pd.DataFrame(
+            {
+                SingleDataMetadata.PARTICIPANT_ID.value: ["001"],
+                SingleDataMetadata.CONDITION.value: ["Placebo"],
+                SingleDataMetadata.MUSIC_TYPE.value: ["CLASSIC"],
+                SingleDataMetadata.EXCLUSION_EXPLANATION.value: ["artifacts"],
+            }
+        )
+        result = DatasetFilter.filter_dataset_by_all_categories(
+            paired_metadata,
+            excluded,
+            [MusicTypeVariants.CLASSICAL],
+            [ConditionVariants.JOINED],
+            [ExclusionCategories.ARTIFACTS],
+        )
+        assert result[SingleDataMetadata.PARTICIPANT_ID].tolist() == ["002", "002"]
+
+    def test_single_condition_selection_is_unaffected(
+        self, paired_metadata, no_exclusions
+    ):
+        """The pairing restriction must not leak into normal single-condition runs."""
+        result = DatasetFilter.filter_dataset_by_all_categories(
+            paired_metadata,
+            no_exclusions,
+            [MusicTypeVariants.CLASSICAL],
+            [ConditionVariants.PLACEBO],
+            [],
+        )
+        assert sorted(result[SingleDataMetadata.PARTICIPANT_ID].tolist()) == [
+            "001",
+            "002",
+            "003",
+        ]
+
+    def test_condition_column_as_strings_after_csv_roundtrip(self, no_exclusions):
+        """A sidecar round-trip turns enum values into plain strings."""
+        metadata = pd.DataFrame(
+            {
+                SingleDataMetadata.PARTICIPANT_ID: ["001", "001", "002"],
+                SingleDataMetadata.CONDITION: ["Placebo", "Psilocybin", "Placebo"],
+                SingleDataMetadata.MUSIC_TYPE: ["CLASSIC"] * 3,
+                SingleDataMetadata.FILENAME: ["a.edf", "b.edf", "c.edf"],
+            }
+        )
+        result = DatasetFilter.filter_dataset_by_all_categories(
+            metadata,
+            no_exclusions,
+            [MusicTypeVariants.CLASSICAL],
+            [ConditionVariants.JOINED],
+            [],
+        )
+        assert result[SingleDataMetadata.PARTICIPANT_ID].tolist() == ["001", "001"]
+        assert result[SingleDataMetadata.CONDITION].tolist() == [
+            "Placebo",
+            "Psilocybin",
+        ]
+
+
+class TestJoinedTracksMatchesJoined:
+    """Both virtual conditions must select exactly the same cohort."""
+
+    def test_same_rows_as_joined(self, paired_metadata, no_exclusions):
+        joined = DatasetFilter.filter_dataset_by_all_categories(
+            paired_metadata,
+            no_exclusions,
+            [MusicTypeVariants.CLASSICAL],
+            [ConditionVariants.JOINED],
+            [],
+        )
+        tracks = DatasetFilter.filter_dataset_by_all_categories(
+            paired_metadata,
+            no_exclusions,
+            [MusicTypeVariants.CLASSICAL],
+            [ConditionVariants.JOINED_TRACKS],
+            [],
+        )
+        pd.testing.assert_frame_equal(joined, tracks)
+
+    def test_exclusions_apply_the_same_way(self, paired_metadata):
+        excluded = pd.DataFrame(
+            {
+                SingleDataMetadata.PARTICIPANT_ID.value: ["001"],
+                SingleDataMetadata.CONDITION.value: ["Psilocybin"],
+                SingleDataMetadata.MUSIC_TYPE.value: ["CLASSIC"],
+                SingleDataMetadata.EXCLUSION_EXPLANATION.value: ["artifacts"],
+            }
+        )
+        result = DatasetFilter.filter_dataset_by_all_categories(
+            paired_metadata,
+            excluded,
+            [MusicTypeVariants.CLASSICAL],
+            [ConditionVariants.JOINED_TRACKS],
+            [ExclusionCategories.ARTIFACTS],
+        )
+        assert result[SingleDataMetadata.PARTICIPANT_ID].tolist() == ["002", "002"]

@@ -7,7 +7,11 @@ import pytest
 from pathlib import Path
 
 from src.definitions.constants import AssrEpoch, ProjectPaths
-from src.definitions.fields import ExperimentNames, CoordinateSystems
+from src.definitions.fields import (
+    ConditionVariants,
+    CoordinateSystems,
+    ExperimentNames,
+)
 
 SFREQ = 250.0
 ASSR_MIN_GAP = 313  # shortest observed inter-onset gap in the ASSR dataset
@@ -78,6 +82,38 @@ class TestGetExperimentInterimDir:
     def test_interim_dir(self):
         result = ProjectPaths.get_experiment_interim_dir(ExperimentNames.PSILO_MUSIC)
         assert result == ProjectPaths.INTERIM_DATA_DIR / "psilo_music"
+
+
+class TestGetIvaResultsDir:
+    """Test get_iva_results_dir method."""
+
+    def test_store_root_without_a_condition(self):
+        result = ProjectPaths.get_iva_results_dir(ExperimentNames.PSILO_MUSIC)
+        assert result == ProjectPaths.PROCESSED_DATA_DIR / "psilo_music" / "iva_results"
+
+    def test_the_condition_is_the_subdirectory(self):
+        result = ProjectPaths.get_iva_results_dir(
+            ExperimentNames.ASSR, ConditionVariants.JOINED_TRACKS
+        )
+        assert result == (
+            ProjectPaths.PROCESSED_DATA_DIR / "assr" / "iva_results" / "JoinedTracks"
+        )
+
+    def test_a_custom_root_redirects_the_whole_store(self, tmp_path):
+        result = ProjectPaths.get_iva_results_dir(
+            ExperimentNames.ASSR,
+            ConditionVariants.PLACEBO,
+            processed_data_dir=tmp_path,
+        )
+        assert result == tmp_path / "assr" / "iva_results" / "Placebo"
+
+    def test_nothing_is_created_by_asking_for_the_path(self, tmp_path):
+        path = ProjectPaths.get_iva_results_dir(
+            ExperimentNames.ASSR,
+            ConditionVariants.PLACEBO,
+            processed_data_dir=tmp_path,
+        )
+        assert not path.exists()
 
 
 class TestGetCoordinatesFilePath:

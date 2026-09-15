@@ -22,6 +22,7 @@ from src.analysis.iva_quality import (
     boxcar_correlation,
     compute_iva_quality,
     epoch_average,
+    subtract_epoch_baseline,
     equalize_subject_influence,
     frequency_band_mask,
     full_tf_group_mean,
@@ -101,6 +102,68 @@ def _quality_inputs(onsets: np.ndarray, seed: int = 0):
 # ---------------------------------------------------------------------------
 # Epoching
 # ---------------------------------------------------------------------------
+
+
+class TestSubtractEpochBaseline:
+    @pytest.fixture
+    def mask(self):
+        m = np.zeros(40, dtype=bool)
+        m[:10] = True
+        return m
+
+    def test_every_frequency_lands_at_zero_baseline(self, mask):
+        rng = np.random.default_rng(0)
+        averaged = rng.normal(size=(2, 3, 5, 40)) + np.arange(5)[:, None] * 10.0
+        out = subtract_epoch_baseline(averaged, mask)
+        assert np.allclose(out[..., mask].mean(axis=-1), 0.0, atol=1e-12)
+
+    def test_each_frequency_gets_its_own_baseline(self, mask):
+        # Frequencies offset by wildly different amounts; all must be removed.
+        averaged = np.zeros((1, 1, 4, 40))
+        offsets = np.array([0.0, 100.0, -7.0, 3.5])
+        averaged += offsets[:, None]
+        averaged[..., 20:] += 2.0  # a common response on top
+        out = subtract_epoch_baseline(averaged, mask)
+        assert np.allclose(out[..., :10], 0.0)
+        assert np.allclose(out[..., 20:], 2.0)
+
+    def test_nothing_is_divided(self, mask):
+        # A pure scale change must pass straight through: no SD normalisation.
+        rng = np.random.default_rng(1)
+        averaged = rng.normal(size=(1, 2, 3, 40))
+        assert np.allclose(
+            subtract_epoch_baseline(averaged * 7.0, mask),
+            subtract_epoch_baseline(averaged, mask) * 7.0,
+        )
+
+    def test_equals_per_trial_subtraction_before_averaging(self, mask):
+        """The identity the helper rests on: epoch_average is a MEAN, and mean is linear.
+
+        Referencing each trial to its own baseline and then averaging gives exactly the
+        same map as averaging first and subtracting the average's baseline — so the
+        correction can be applied once, afterwards, instead of re-epoching.
+        """
+        rng = np.random.default_rng(2)
+        trials = rng.normal(size=(6, 3, 40))  # (trials, freqs, epoch samples)
+        per_trial_then_mean = (
+            trials - trials[..., mask].mean(axis=-1, keepdims=True)
+        ).mean(axis=0)
+        mean_then_subtract = subtract_epoch_baseline(trials.mean(axis=0), mask)
+        assert np.allclose(per_trial_then_mean, mean_then_subtract)
+
+    def test_input_is_not_mutated(self, mask):
+        averaged = np.ones((1, 1, 2, 40))
+        before = averaged.copy()
+        subtract_epoch_baseline(averaged, mask)
+        np.testing.assert_array_equal(averaged, before)
+
+    def test_rejects_a_mask_of_the_wrong_length(self):
+        with pytest.raises(ValueError, match="baseline_mask must be"):
+            subtract_epoch_baseline(np.zeros((1, 2, 40)), np.ones(10, dtype=bool))
+
+    def test_rejects_an_empty_mask(self):
+        with pytest.raises(ValueError, match="no pre-onset sample"):
+            subtract_epoch_baseline(np.zeros((1, 2, 40)), np.zeros(40, dtype=bool))
 
 
 class TestEpochAverage:

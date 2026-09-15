@@ -2,7 +2,11 @@ from pathlib import Path
 
 import numpy as np
 
-from src.definitions.fields import ExperimentNames, CoordinateSystems
+from src.definitions.fields import (
+    ConditionVariants,
+    CoordinateSystems,
+    ExperimentNames,
+)
 
 
 class AssrEpoch:
@@ -136,8 +140,13 @@ class ProjectPaths:
     EXCLUDED_ELECTRODES_DIR = (
         CONFIG_DIR / "excluded_electrodes"
     )  # Directory where excluded electrodes from processing are stored (we want to typically omit the boundary electrodes).
+    ASSR_ELECTRODES_DIR = (
+        CONFIG_DIR / "assr_electrodes"
+    )  # Directory holding the per-coordinate-system lists of electrodes to KEEP for the ASSR baseline check (the standard fronto-central selection the 40 Hz response is read from). Same one-column `electrode_name` CSV format as EXCLUDED_ELECTRODES_DIR, but an include-list rather than an exclude-list — see `src.io.loading.assr_electrode_mask`.
     EXCLUDED_ICS_FILENAME_MAPPING = "excluded_ics_mapping.csv"  # Filename where the mapping of all ICs selected for exclusion are stored alongside with their category.
     STIMULUS_ONSETS_SUFFIX = ".stimulus_onsets.npy"  # Filename suffix for the stimulus-onset sample positions saved next to a concatenated data array (same prefix as the array).
+    SEGMENT_BOUNDARIES_SUFFIX = ".segment_boundaries.npy"  # Filename suffix for the per-condition time-axis segment edges of a JOINED_TRACKS array (same prefix as the array). Lets the reverse per-condition split be reconstructed from disk alone.
+    IVA_RESULTS_DIR_NAME = "iva_results"  # Subdirectory name, under an experiment's processed-data directory, holding the stored IVA component products (one sub-subdirectory per condition). See `src.io.iva_store`.
     MARKER_SHIFT_MAPPING_SUFFIX = "_time_shift.csv"  # Filename suffix, appended to the experiment name, of the per-recording stimulus-marker shift mapping in `PARTICIPANT_MAPPING_DIR`.
     PLOTS_PATH = PROJECT_ROOT / "plots"  # Path to all project plots.
     RESULTS_DB_PATH = (
@@ -195,6 +204,38 @@ class ProjectPaths:
         )
 
     @staticmethod
+    def get_iva_results_dir(
+        experiment_name: ExperimentNames,
+        condition: ConditionVariants | None = None,
+        processed_data_dir: Path | None = None,
+    ) -> Path:
+        """
+        Get path to the stored IVA component products of an experiment.
+
+        The store is split by condition one level down because a condition is the
+        coarsest thing a decomposition is *of*: a run never mixes conditions except
+        through the virtual :attr:`~src.definitions.fields.ConditionVariants.JOINED`
+        and :attr:`~src.definitions.fields.ConditionVariants.JOINED_TRACKS` labels,
+        which are themselves conditions here and get their own subdirectory.
+
+        :param experiment_name: Experiment whose store is requested.
+        :param condition: Condition subdirectory to append. ``None`` returns the
+            store root, which is what to glob over when the condition is unknown.
+        :param processed_data_dir: Processed-data root to resolve against. ``None``
+            uses :attr:`PROCESSED_DATA_DIR`; pass a different root to redirect a
+            whole store (a scratch directory, another filesystem).
+        :return: Path to the store directory. Not created here — the writer
+            (:func:`~src.io.iva_store.save_iva_components`) creates it.
+        """
+        root = (
+            ProjectPaths.PROCESSED_DATA_DIR
+            if processed_data_dir is None
+            else Path(processed_data_dir)
+        )
+        store_root = root / experiment_name.value / ProjectPaths.IVA_RESULTS_DIR_NAME
+        return store_root if condition is None else store_root / condition.value
+
+    @staticmethod
     def get_experiment_interim_dir(experiment_name: ExperimentNames) -> Path:
         """
         Get path to the interim data directory for the given experiment.
@@ -224,3 +265,24 @@ class ProjectPaths:
             ProjectPaths.COORDINATES_DIR / coordinates_filename,
             ProjectPaths.EXCLUDED_ELECTRODES_DIR / excluded_electrodes_filename,
         )
+
+    @staticmethod
+    def get_assr_electrodes_file_path(
+        coordinate_system: CoordinateSystems,
+    ) -> Path:
+        """
+        Get path to the ASSR electrode include-list for a coordinate system.
+
+        The counterpart of the excluded-electrode list returned by
+        :meth:`get_coordinates_file_path`, in the same one-column
+        ``electrode_name`` CSV format — but read as a list of electrodes to
+        **keep** for the ASSR baseline check, not to drop.
+
+        Not every coordinate system has a list: only the ones an ASSR check has
+        been defined for. The file is not read here, so a missing one surfaces
+        when it is loaded (see :func:`src.io.loading.load_assr_electrodes`).
+
+        :param coordinate_system: Value of the `CoordinateSystems` enum.
+        :return: Path to the ASSR electrode include-list CSV.
+        """
+        return ProjectPaths.ASSR_ELECTRODES_DIR / f"{coordinate_system.value}.csv"

@@ -60,6 +60,14 @@ Static configuration files are stored in `config/`:
 | `parsing.py` | Extract metadata from EDF filenames |
 | `loading.py` | Load raw or processed EEG files |
 | `saving.py` | Save processed outputs |
+| `iva_store.py` | Store / load IVA component products (TF maps, channel topographies) with their participant mapping |
+
+The IVA store lives at `data/processed/{experiment}/iva_results/{Condition}/` and is
+written by the IVA CLI scripts under `--store_components`. Every stored array is indexed
+`(recording, component, ...)` and the file carries the participant label and condition
+of each row, so a subject axis stays readable long after the run — see the
+[data dictionary](data_dictionary.md#iva-component-store-dataprocessedexperimentiva_results)
+for the layout and keys.
 
 ## 5. Metadata Filtering (`src/filtering/`)
 
@@ -98,8 +106,12 @@ exclusion categories, and participant IDs.
 # Full preprocessing
 python scripts/run_preprocessing.py --raw_processing --process_excluded_ic --plot_results
 
-# Time alignment
-python scripts/run_time_alignment.py --condition Placebo --music_type CLASSIC
+# Time alignment. Fitted once over BOTH conditions, so they share a time base and
+# any condition / participant subset can be selected later without re-aligning.
+python scripts/run_time_alignment.py --music_type CLASSIC
+
+# Stimulus alignment for ASSR — same, but driven by the `fam+` onset annotations
+python scripts/run_stimulus_alignment.py
 
 # ISC analysis (broadband, per-band, mean-field)
 python scripts/run_isc.py --music_type CLASSIC PSYTRANCE

@@ -12,6 +12,7 @@ import mne
 
 from src.definitions.constants import ProjectPaths
 from src.definitions.fields import (
+    REAL_CONDITIONS,
     ChannelTypes,
     ConditionVariants,
     ExperimentNames,
@@ -26,7 +27,11 @@ from src.definitions.fields import (
 )
 from src.definitions.mappings import RAW_CHANNEL_NAMES
 from src.io.parsing import DatasetParser
-from src.io.loading import load_data_file, get_preprocessing_results_path
+from src.io.loading import (
+    load_data_file,
+    get_preprocessing_results_path,
+    load_electrode_name_list,
+)
 from src.io.saving import save_data_file
 from src.preprocessing.channel_prep import (
     load_coordinates_file,
@@ -91,11 +96,11 @@ class DatasetPreprocessor(LoggerMixin):
             the last onset during the stimulus-aware coarse crop.
         """
         self.montage = load_coordinates_file(coordinates_file_path)
-        # List of all electrodes that we want to exclude.
-        self.electrodes_to_exclude: list[str] = (
-            pd.read_csv(excluded_coordinates_path)["electrode_name"]
-            .str.strip()
-            .tolist()
+        # List of all electrodes that we want to exclude. Read through the shared
+        # electrode-list reader, which the ASSR include-lists also use, so the two
+        # list formats cannot drift apart.
+        self.electrodes_to_exclude: list[str] = load_electrode_name_list(
+            excluded_coordinates_path
         )
         self.stimulus_marker = stimulus_marker
         self.coarse_crop_trim_sec = coarse_crop_trim_sec
@@ -684,17 +689,27 @@ class DatasetHandler(LoggerMixin):
     def align_time_series(
         self,
         music_type: MusicTypeVariants,
-        condition_type: ConditionVariants,
         exclusion_categories: list[ExclusionCategories],
+        conditions: Sequence[ConditionVariants] = REAL_CONDITIONS,
         plot_alignment_results: bool = False,
         data_type_to_load: PreprocessedDataVariants = PreprocessedDataVariants.RAW_AFTER_ICA,
     ) -> tuple[list[np.ndarray], TimeAligner]:
         """
         Aligns the signals of the participants based on the TAG signal in time.
 
+        The aligner is fitted over **every** recording of *conditions* at once, so all
+        conditions come out on one time base. Selecting a condition or a custom
+        participant subset afterwards is then pure filtering — it never changes the
+        time axis, which keeps results comparable across analyses.
+
         :param music_type: Music type to include.
-        :param condition_type: Condition type to include (ConditionVariants.PLACEBO or ConditionVariants.PSILOCYBIN).
-        :param exclusion_categories: Which categories of participants to exclude.
+        :param exclusion_categories: Which categories of participants to exclude. Keep
+            this minimal: a recording dropped here can never be selected later, since
+            it will not have been aligned. For music, excluding
+            :attr:`~src.definitions.fields.ExclusionCategories.BAD_MUSIC` matters —
+            a wrong TAG channel would corrupt the cross-correlation for everyone.
+        :param conditions: Conditions whose recordings form the alignment group.
+            Defaults to both, which is what gives them a shared time base.
         :param plot_alignment_results: Whether to plot the alignment statistics.
         :param data_type_to_load: The type of the processed data to load for extracting the TAG signal.
         :return: Returns list of aligned TAG signals and the TimeAligner object
@@ -704,8 +719,12 @@ class DatasetHandler(LoggerMixin):
             self.dataset_metadata,
             self.excluded_participants_metadata,
             [music_type],
-            [condition_type],
+            list(conditions),
             exclusion_categories,
+        )
+        self.logger.info(
+            f"Fitting the TAG alignment over {len(filtered_df)} recording(s) "
+            f"(conditions={[c.value for c in conditions]})."
         )
         all_tag_signals, sfreq = self._load_all_tags(filtered_df, data_type_to_load)
         time_aligner = TimeAligner(all_tag_signals, sfreq)
@@ -733,9 +752,9 @@ class DatasetHandler(LoggerMixin):
             cropped = raw.crop(
                 tmin=crop_start / time_aligner.sfreq, tmax=crop_end / time_aligner.sfreq
             )
-            assert (
-                cropped.n_times == time_aligner.end - time_aligner.start + 1
-            ), f"Cropped signal of file {filename} has length {cropped.n_times}, expected {time_aligner.end - time_aligner.start + 1}!"
+            assert cropped.n_times == time_aligner.end - time_aligner.start + 1, (
+                f"Cropped signal of file {filename} has length {cropped.n_times}, expected {time_aligner.end - time_aligner.start + 1}!"
+            )
 
             self.save_data_file(
                 cropped, filename.split(".")[0], PreprocessedDataVariants.RAW_CROPPED
@@ -744,8 +763,8 @@ class DatasetHandler(LoggerMixin):
     def align_stimuli_by_annotations(
         self,
         music_type: MusicTypeVariants,
-        condition_type: ConditionVariants,
         exclusion_categories: list[ExclusionCategories],
+        conditions: Sequence[ConditionVariants] = REAL_CONDITIONS,
         stimulus_label: str = DEFAULT_STIMULUS_LABEL,
         keep_tail_sec: float = 0.1,
         pre_window_sec: float | None = None,
@@ -763,9 +782,18 @@ class DatasetHandler(LoggerMixin):
         every onset. The resulting recordings have equal length with stimulus onsets
         at identical sample positions.
 
+        The aligner is fitted over **every** recording of *conditions* at once, so all
+        conditions come out with the same length and the same stimuli. Selecting a
+        condition or a custom participant subset afterwards is then pure filtering.
+
         :param music_type: Music type to include.
-        :param condition_type: Condition type to include (ConditionVariants.PLACEBO or ConditionVariants.PSILOCYBIN).
-        :param exclusion_categories: Which categories of participants to exclude.
+        :param exclusion_categories: Which categories of participants to exclude. Keep
+            this minimal: a recording dropped here can never be selected later, since it
+            will not have been aligned. Note the trade-off — because ``common_count`` is
+            the group minimum, one recording with fewer stimuli truncates everyone, so a
+            recording with a genuinely short stimulus train is worth excluding.
+        :param conditions: Conditions whose recordings form the alignment group.
+            Defaults to both, which is what gives them a shared time base.
         :param stimulus_label: Annotation description marking a stimulus onset.
         :param keep_tail_sec: Continuous data preserved immediately before each onset.
         :param pre_window_sec: Optional cap on the window kept before the first onset.
@@ -785,11 +813,12 @@ class DatasetHandler(LoggerMixin):
         :return: Tuple of (filtered metadata DataFrame, aligned recordings in the
             same row order, fitted StimulusAligner).
         """
+        conditions = list(conditions)
         filtered_df = DatasetFilter.filter_dataset_by_all_categories(
             self.dataset_metadata,
             self.excluded_participants_metadata,
             [music_type],
-            [condition_type],
+            conditions,
             exclusion_categories,
         )
         filenames = [
@@ -816,5 +845,16 @@ class DatasetHandler(LoggerMixin):
             pre_window_sec=pre_window_sec,
             post_window_sec=post_window_sec,
             onset_offset_s=onset_offset_s,
+        )
+        # Report the geometry the group agreed on. When every recording really does
+        # carry the same stimuli at the same timing, common_count equals every entry of
+        # original_counts and no interval is shortened — so a group that is *not*
+        # homogeneous shows up here rather than silently losing trials.
+        self.logger.info(
+            f"Stimulus alignment over {len(raws)} recording(s) "
+            f"(conditions={[c.value for c in conditions]}): "
+            f"original onset counts {aligner.original_counts}, "
+            f"common count {aligner.common_count}, "
+            f"aligned length {aligner.total_length} samples."
         )
         return filtered_df, aligned, aligner

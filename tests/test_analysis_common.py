@@ -18,15 +18,20 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from scripts.analysis_common import (
     _wavelet_transform,
     add_common_arguments,
+    condition_index_mask,
+    paired_subject_index,
+    participant_condition_labels,
     participant_label,
     participant_labels,
     resolve_wavelet_dir,
     run_wavelet_workflow,
+    subject_conditions,
 )
 from src.analysis.data_representations import AnalysisData, DataRepresentation
 from src.definitions.constants import ProjectPaths
 from src.definitions.fields import (
     AnalysisVariants,
+    ConditionVariants,
     ExperimentNames,
     SingleDataMetadata,
 )
@@ -550,3 +555,111 @@ class TestParticipantLabels:
         df = self._metadata(["031", "019"], person_indices=[0, 5])
         with pytest.raises(ValueError, match="missing subject index"):
             participant_labels(df, 2)
+
+
+class TestSubjectConditionHelpers:
+    """Separating the conditions back out of a pooled (JOINED) subject axis."""
+
+    @staticmethod
+    def _metadata(participant_ids, conditions, person_indices=None):
+        df = pd.DataFrame(
+            {
+                SingleDataMetadata.PARTICIPANT_ID: participant_ids,
+                SingleDataMetadata.CONDITION: conditions,
+            }
+        )
+        if person_indices is not None:
+            df[SingleDataMetadata.CONCATENATED_PERSON_INDEX] = person_indices
+        return df
+
+    @staticmethod
+    def _paired_metadata():
+        """Two participants, Placebo block then Psilocybin block."""
+        return TestSubjectConditionHelpers._metadata(
+            ["019", "024", "019", "024"],
+            [
+                ConditionVariants.PLACEBO,
+                ConditionVariants.PLACEBO,
+                ConditionVariants.PSILOCYBIN,
+                ConditionVariants.PSILOCYBIN,
+            ],
+            person_indices=[0, 1, 2, 3],
+        )
+
+    def test_subject_conditions_returns_values_in_subject_order(self):
+        assert subject_conditions(self._paired_metadata(), 4) == [
+            "Placebo",
+            "Placebo",
+            "Psilocybin",
+            "Psilocybin",
+        ]
+
+    def test_subject_conditions_accepts_plain_strings(self):
+        df = self._metadata(["019", "019"], ["Placebo", "Psilocybin"], [0, 1])
+        assert subject_conditions(df, 2) == ["Placebo", "Psilocybin"]
+
+    def test_subject_conditions_follows_person_index_not_row_order(self):
+        df = self._metadata(
+            ["019", "024"],
+            [ConditionVariants.PSILOCYBIN, ConditionVariants.PLACEBO],
+            person_indices=[1, 0],
+        )
+        assert subject_conditions(df, 2) == ["Placebo", "Psilocybin"]
+
+    def test_condition_index_mask_selects_one_arm(self):
+        mask = condition_index_mask(
+            self._paired_metadata(), 4, ConditionVariants.PLACEBO
+        )
+        assert mask.dtype == bool
+        assert mask.tolist() == [True, True, False, False]
+
+    def test_condition_index_mask_arms_are_complementary(self):
+        df = self._paired_metadata()
+        placebo = condition_index_mask(df, 4, ConditionVariants.PLACEBO)
+        psilocybin = condition_index_mask(df, 4, ConditionVariants.PSILOCYBIN)
+        assert (placebo ^ psilocybin).all()
+
+    def test_participant_condition_labels_disambiguate_repeated_participants(self):
+        assert participant_condition_labels(self._paired_metadata(), 4) == [
+            "019 Placebo",
+            "024 Placebo",
+            "019 Psilocybin",
+            "024 Psilocybin",
+        ]
+
+    def test_paired_subject_index_maps_each_subject_to_its_partner(self):
+        assert paired_subject_index(self._paired_metadata(), 4).tolist() == [2, 3, 0, 1]
+
+    def test_paired_subject_index_is_an_involution(self):
+        partners = paired_subject_index(self._paired_metadata(), 4)
+        assert partners[partners].tolist() == list(range(4))
+
+    def test_paired_subject_index_marks_unpaired_subjects(self):
+        df = self._metadata(
+            ["019", "024", "019"],
+            [
+                ConditionVariants.PLACEBO,
+                ConditionVariants.PLACEBO,
+                ConditionVariants.PSILOCYBIN,
+            ],
+            person_indices=[0, 1, 2],
+        )
+        assert paired_subject_index(df, 3).tolist() == [2, -1, 0]
+
+    def test_paired_subject_index_rejects_more_than_two_recordings(self):
+        df = self._metadata(
+            ["019", "019", "019"],
+            [
+                ConditionVariants.PLACEBO,
+                ConditionVariants.PSILOCYBIN,
+                ConditionVariants.PLACEBO,
+            ],
+            person_indices=[0, 1, 2],
+        )
+        with pytest.raises(ValueError, match="appears 3 times"):
+            paired_subject_index(df, 3)
+
+    def test_raises_when_condition_column_missing(self):
+        df = pd.DataFrame({SingleDataMetadata.PARTICIPANT_ID: ["019", "024"]})
+        with pytest.raises(ValueError, match="no CONDITION column"):
+            subject_conditions(df, 2)

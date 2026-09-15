@@ -1,0 +1,355 @@
+"""
+Sign alignment and per-condition aggregation for a subject-axis-pooled IVA run.
+
+When Placebo and Psilocybin are pooled on the **subject** axis
+(:attr:`~src.definitions.fields.ConditionVariants.JOINED`, assembled by
+:func:`~src.analysis.condition_tracks.pool_condition_subjects`), IVA returns one
+aligned set of sources but a **per-recording** sign for each of them. Two things
+follow, and this module handles both.
+
+**The sign has to be resolved before anything is averaged or compared.** IVA recovers
+each component only up to a per-dataset sign, so recording *i*'s copy of component *k*
+may be the negation of recording *j*'s. Averaging unresolved maps drives the group mean
+toward zero — with *S* recordings it shrinks to roughly ``1/sqrt(S)`` of the aligned one
+— and on a *pooled* dataset it is worse than a lost mean: the flips fall arbitrarily
+across the two condition blocks, so an unresolved sign manufactures a condition
+difference out of nothing.
+
+:func:`~src.analysis.assr_trials.polarity_flip` resolves it, from the correlation
+between each component's **channel topography** and the binary anchor-electrode mask.
+Both the source maps and the channel patterns are flipped together
+(:func:`apply_component_signs`), so a component's map and its topography never disagree
+about which way is up.
+
+That anchor replaced an earlier one taken from PC1 of the time-frequency maps. PC1 made
+a component's sign *consistent* across recordings, in the sense PC1 defines, which is
+not the same as "positive means more power over the electrodes of interest" — and it is
+the latter that every downstream contrast and figure actually depends on. The
+topography anchor delivers it directly, and reads a fixed spatial reference rather than
+anything derived from the tested response, so it stays symmetric in the conditions.
+
+All functions here are **pure**: no file or plot output, and no mutation of inputs.
+(:func:`decompose_channel_iva` reports progress through the module logger, which is
+the only side effect anywhere here.)
+"""
+
+from __future__ import annotations
+
+import logging
+
+from collections.abc import Mapping, Sequence
+
+import numpy as np
+from independent_vector_analysis import iva_g
+from sklearn.decomposition import PCA
+
+from src.analysis.wavelet_ica import (
+    align_iva_component_signs,
+    iva_component_patterns,
+    zscore_by_time,
+)
+from src.definitions.frequency import BandSpec, band_token, resolve_band_range
+
+_logger = logging.getLogger(__name__)
+
+
+def apply_component_signs(values: np.ndarray, signs: np.ndarray) -> np.ndarray:
+    """Apply per-``(recording, component)`` signs to any array carrying them.
+
+    Deliberately shape-agnostic past the first two axes, because the same signs must be
+    applied to every quantity a component owns or its map and its topography end up
+    disagreeing: source maps ``(S, K, F, T)``, channel patterns ``(S, K, C)``, temporal
+    or spectral marginals ``(S, K, T)`` / ``(S, K, F)``.
+
+    :param values: ``(S, K, ...)`` array to orient. **Not** mutated.
+    :param signs: ``(S, K)`` signs, e.g. from
+        :func:`~src.analysis.assr_trials.polarity_flip`.
+    :return: A **new** array of the same shape, sign-oriented.
+    :raises ValueError: If *values* has fewer than two axes, or its leading two axes do
+        not match *signs*.
+    """
+    data = np.asarray(values, dtype=float)
+    signs = np.asarray(signs, dtype=float)
+    if signs.ndim != 2:
+        raise ValueError(f"signs must be (S, K); got shape {signs.shape}.")
+    if data.ndim < 2:
+        raise ValueError(f"values must be (S, K, ...); got shape {data.shape}.")
+    if data.shape[:2] != signs.shape:
+        raise ValueError(
+            f"values has leading axes {data.shape[:2]} but signs is {signs.shape}."
+        )
+    return data * signs.reshape(signs.shape + (1,) * (data.ndim - 2))
+
+
+def condition_component_means(
+    values: np.ndarray,
+    subject_conditions: Sequence[str],
+    conditions: Sequence[str] | None = None,
+) -> dict[str, np.ndarray]:
+    """Average a pooled per-recording array within each condition.
+
+    The group statistic every condition-comparison figure is built on. Sign-align
+    *values* first (:func:`~src.analysis.assr_trials.polarity_flip`, then
+    :func:`apply_component_signs`): an unresolved sign cancels each condition's mean by
+    a different amount, which reads as a condition difference.
+
+    :param values: ``(S, K, ...)`` pooled array — sources, patterns, marginals.
+    :param subject_conditions: Condition of each recording, in recording order.
+    :param conditions: Conditions to average, in the order wanted. ``None`` uses every
+        condition present, in first-appearance order.
+    :return: Condition name → ``(K, ...)`` mean over that condition's recordings.
+    :raises ValueError: If *subject_conditions* does not match the recording axis, or a
+        requested condition has no recordings.
+    """
+    data = np.asarray(values, dtype=float)
+    if data.ndim < 2:
+        raise ValueError(f"values must be (S, K, ...); got shape {data.shape}.")
+    labels = list(subject_conditions)
+    if len(labels) != data.shape[0]:
+        raise ValueError(
+            f"subject_conditions has {len(labels)} entries but values has "
+            f"{data.shape[0]} recording(s)."
+        )
+    if conditions is None:
+        conditions = list(dict.fromkeys(labels))
+
+    means: dict[str, np.ndarray] = {}
+    for condition in conditions:
+        mask = np.asarray([label == condition for label in labels], dtype=bool)
+        if not mask.any():
+            raise ValueError(
+                f"Condition {condition!r} has no recordings; present: "
+                f"{sorted(set(labels))}."
+            )
+        means[condition] = data[mask].mean(axis=0)
+    return means
+
+
+def condition_difference(
+    means: Mapping[str, np.ndarray],
+    conditions: Sequence[str],
+) -> np.ndarray:
+    """Difference between two conditions' means, in the given order.
+
+    :param means: Output of :func:`condition_component_means`.
+    :param conditions: Exactly two condition names; the result is
+        ``means[conditions[1]] - means[conditions[0]]``.
+    :return: The difference array, shaped like one condition's mean.
+    :raises ValueError: If two conditions are not given, one is missing, or their means
+        have different shapes.
+    """
+    if len(conditions) != 2:
+        raise ValueError(
+            f"A difference needs exactly two conditions; got {list(conditions)}."
+        )
+    first, second = conditions
+    for condition in (first, second):
+        if condition not in means:
+            raise ValueError(
+                f"No mean for condition {condition!r}; have {sorted(means)}."
+            )
+    if means[first].shape != means[second].shape:
+        raise ValueError(
+            f"Means disagree in shape: {first} is {means[first].shape}, "
+            f"{second} is {means[second].shape}."
+        )
+    return means[second] - means[first]
+
+
+def stack_conditions_on_subject_axis(
+    per_condition: Mapping[str, np.ndarray],
+    conditions: Sequence[str],
+    participants: Sequence[str],
+) -> tuple[np.ndarray, list[str], list[str]]:
+    """Lay a time-axis join's per-condition split out on the subject axis.
+
+    The bridge between the two ways of joining the conditions. A
+    :class:`~src.analysis.condition_tracks.PairedConditionTracks` run puts each
+    participant on the subject axis once and both conditions end to end along **time**,
+    so splitting its results with
+    :meth:`~src.analysis.condition_tracks.PairedConditionTracks.condition_track` gives
+    one ``(P, K, ...)`` array *per condition*. The comparison figures in
+    :mod:`src.visualization.iva_condition_plots` instead index a single ``(S, K, ...)``
+    array by per-recording bookkeeping, the layout a subject-axis
+    (:attr:`~src.definitions.fields.ConditionVariants.JOINED`) run produces natively.
+    This restacks the former into the latter, so **one set of figures serves both
+    variants**.
+
+    Only the *sources* should come through here. A time-axis run estimates one mixing
+    matrix per participant over the whole concatenated recording, so the channel
+    patterns are shared by the conditions by construction — there is no per-condition
+    pattern to stack, and pretending otherwise would draw two identical rows and a zero
+    difference.
+
+    The conditions keep their own time bases in a time-axis join and may differ in
+    length. Stacking needs one common axis, so the last axis is trimmed to the shortest
+    condition's length; a caller that needs the full length of each should read them
+    per condition instead.
+
+    :param per_condition: Condition name → ``(P, K, ..., T_c)`` array, e.g. the output
+        of ``condition_track`` for each condition. Every entry must agree on all axes
+        but the last.
+    :param conditions: Conditions in the block order wanted on the subject axis.
+    :param participants: Participant label per row of each per-condition array, in row
+        order — e.g. :attr:`PairedConditionTracks.participants`.
+    :return: ``(stacked, subject_participants, subject_conditions)`` — the
+        ``(len(conditions) * P, K, ..., T_min)`` array plus the per-row participant and
+        condition labels the figures index by.
+    :raises ValueError: If a condition is missing, the non-time axes disagree, or a
+        participant list does not match the row count.
+    """
+    conditions = list(conditions)
+    participants = list(participants)
+    if not conditions:
+        raise ValueError("At least one condition is needed.")
+    for condition in conditions:
+        if condition not in per_condition:
+            raise ValueError(f"No array supplied for condition {condition!r}.")
+
+    reference = np.asarray(per_condition[conditions[0]], dtype=float)
+    if reference.ndim < 2:
+        raise ValueError(
+            f"Arrays must be (P, K, ..., T); got shape {reference.shape} for "
+            f"{conditions[0]!r}."
+        )
+    for condition in conditions:
+        array = np.asarray(per_condition[condition], dtype=float)
+        if array.shape[:-1] != reference.shape[:-1]:
+            raise ValueError(
+                f"Condition {condition!r} has non-time axes {array.shape[:-1]}, "
+                f"expected {reference.shape[:-1]} to match {conditions[0]!r}."
+            )
+        if len(participants) != array.shape[0]:
+            raise ValueError(
+                f"Condition {condition!r} has {array.shape[0]} row(s) but "
+                f"{len(participants)} participant label(s)."
+            )
+
+    n_times = min(int(np.asarray(per_condition[c]).shape[-1]) for c in conditions)
+    blocks = [
+        np.asarray(per_condition[c], dtype=float)[..., :n_times] for c in conditions
+    ]
+    stacked = np.concatenate(blocks, axis=0)
+    subject_participants = [p for _ in conditions for p in participants]
+    subject_conditions = [c for c in conditions for _ in participants]
+    return stacked, subject_participants, subject_conditions
+
+
+def slice_to_band(
+    data_4d: np.ndarray, freqs: np.ndarray, band: BandSpec
+) -> tuple[np.ndarray, np.ndarray]:
+    """Restrict the pooled tensor's frequency axis to one band.
+
+    Applied **before** :func:`decompose_channel_iva`, which is the whole point: that
+    function flattens frequency x time into one sample axis, so every bin left in
+    *freqs* is a bin the per-recording PCA's variance ordering and ``iva_g``'s
+    dependence cost are computed from. Slicing afterwards would restrict the figures
+    and change nothing about what was decomposed.
+
+    :param data_4d: ``(S, C, F, T)`` pooled wavelet power.
+    :param freqs: ``(F,)`` frequency axis of *data_4d*.
+    :param band: A :data:`~src.definitions.frequency.FREQUENCY_BANDS` name, an explicit
+        ``(low, high)`` Hz window, or ``None`` to keep the whole grid.
+    :return: ``(sliced, band_freqs)``.
+    :raises ValueError: If *band* is not a valid restriction, or lies outside the
+        wavelet grid.
+    """
+    bounds = resolve_band_range(band)
+    if bounds is None:
+        return data_4d, freqs
+    band_lo, band_hi = bounds
+    mask = (freqs >= band_lo) & (freqs <= band_hi)
+    if not mask.any():
+        raise ValueError(
+            f"Band {band_token(band)!r} ({band_lo:g}-{band_hi:g} Hz) has no frequency "
+            f"inside the wavelet grid {freqs[0]:.1f}-{freqs[-1]:.1f} Hz."
+        )
+    return data_4d[:, :, mask, :], freqs[mask]
+
+
+def decompose_channel_iva(
+    data_4d: np.ndarray,
+    *,
+    label: str,
+    n_pca: int,
+    random_state: int,
+    iva_opt_approach: str,
+    iva_max_iter: int,
+    iva_w_diff_stop: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Run the channel-as-mixing IVA-G pipeline on a pooled tensor.
+
+    Z-score along time, reshape each recording to ``(C, F·T)``, reduce the channel
+    axis with a per-recording PCA, run ``iva_g``, resolve the ``Sigma_N`` sign
+    ambiguity, then recover the spectro-temporal sources and the forward channel
+    patterns. Identical to the single-condition variant; only the subject axis differs.
+
+    :param data_4d: ``(S, C, F, T)`` pooled wavelet power.
+    :param label: Dataset label, for logging.
+    :param n_pca: Per-recording channel-PCA dimension (= number of components).
+    :param random_state: Seed for the PCA and ``W_init``.
+    :param iva_opt_approach: ``iva_g`` optimisation method.
+    :param iva_max_iter: Maximum ``iva_g`` iterations.
+    :param iva_w_diff_stop: ``iva_g`` convergence threshold.
+    :return: ``(sources, patterns)`` shaped ``(S, K, F, T)`` and ``(S, K, C)``.
+    :raises ValueError: If *n_pca* exceeds the channel count.
+    """
+    n_subjects, n_channels, n_freqs, n_times = data_4d.shape
+    if n_pca > n_channels:
+        raise ValueError(
+            f"--n_pca ({n_pca}) must be ≤ n_channels ({n_channels}); PCA reduces "
+            "the channel axis in this variant."
+        )
+
+    # Z-score along time, then flatten frequency-slow / time-fast so the sample axis
+    # reshapes back to (F, T) exactly after IVA.
+    n_samples_ft = n_freqs * n_times
+    x_subjects = zscore_by_time(data_4d).reshape(n_subjects, n_channels, n_samples_ft)
+
+    pcas: list[PCA] = []
+    pca_scores = np.zeros((n_subjects, n_pca, n_samples_ft))
+    for k in range(n_subjects):
+        pca = PCA(n_components=n_pca, random_state=random_state)
+        # sklearn wants (n_samples, n_features): (F*T, C).
+        pca_scores[k] = pca.fit_transform(x_subjects[k].T).T
+        pcas.append(pca)
+        _logger.debug(
+            f"[{label}] recording {k + 1}/{n_subjects}: channel PCA explains "
+            f"{pca.explained_variance_ratio_.sum() * 100:.1f}%"
+        )
+
+    x_pca = np.ascontiguousarray(pca_scores.transpose(1, 2, 0))  # (N, T, K)
+    _logger.info(f"[{label}] IVA input {x_pca.shape}  (N_PCA, F*T, K=datasets)")
+
+    rng = np.random.default_rng(random_state)
+    w_init = rng.standard_normal((n_pca, n_pca, n_subjects))
+    demix, cost, sigma_n, _isi = iva_g(
+        x_pca,
+        opt_approach=iva_opt_approach,
+        whiten=True,
+        verbose=False,
+        W_init=w_init,
+        max_iter=iva_max_iter,
+        W_diff_stop=iva_w_diff_stop,
+    )
+    _logger.info(
+        f"[{label}] IVA-G: {len(cost)} iteration(s), final cost {cost[-1]:.6f}"
+    )
+    if len(cost) >= iva_max_iter:
+        _logger.warning(
+            f"[{label}] hit --iva_max_iter {iva_max_iter}; W may not have converged "
+            f"(--iva_w_diff_stop {iva_w_diff_stop})."
+        )
+
+    _sigma_corr, demix, _flips = align_iva_component_signs(sigma_n, demix)
+
+    scores = np.zeros((n_subjects, n_pca, n_samples_ft))
+    patterns = np.zeros((n_subjects, n_pca, n_channels))
+    for k in range(n_subjects):
+        scores[k] = demix[:, :, k] @ x_pca[:, :, k]
+        # Forward (mixing) patterns, NOT the unmixing rows: iva_g folds its whitening
+        # into W, so the filter and the pattern of one component can be uncorrelated.
+        patterns[k] = iva_component_patterns(demix[:, :, k], pcas[k].components_)
+
+    sources = scores.reshape(n_subjects, n_pca, n_freqs, n_times)
+    return sources, patterns

@@ -1,0 +1,123 @@
+#!/bin/bash
+#PBS -N PSILO_SNR_GRID_TRACKS_BAND
+#PBS -l walltime=1:00:00
+#PBS -l select=1:ncpus=4:mem=200gb:scratch_local=100gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-06 ASSR SNR grid, read off the 30-50 Hz BAND-RESTRICTED store.
+#
+# Identical to run_snr_grid_tracks.pbs except for --band 30-50hz. See that
+# file for what the grid sweeps, what the three references are, what the seven
+# signal variants read and what each figure shows; only what the band changes
+# is documented here.
+#
+# WHAT --band DOES HERE. It selects which STORE to read, nothing else: the
+# decomposition was already restricted to 30-50 Hz by
+# run_condition_tracks_gamma.pbs (run that first, or there is no such
+# store to load). The wavelet cache this script streams is the broadband one
+# either way — the frequency selections below (--halfwidths, around 40 Hz) index
+# into it exactly as for a broadband run.
+#
+# The question this job answers is the only one that matters for the band
+# experiment: does an IC recovered from a 30-50 Hz decomposition reach the SNR
+# of the fixed binary ASSR-electrode reference, where a broadband one did not?
+# Read the `snr` family rows of the CSV, and the snr_by_condition figures,
+# against the broadband run at the same --n_pca.
+#
+# OUTPUT. The band token keeps this run's products apart from the broadband
+# ones, so both can be compared side by side:
+#   results/assr/assr_snr_grid__iva_channel_joined_tracks__30-50hz__pca<N>.csv
+#   plots/06-iva-condition-comparison/JoinedTracks_ASSR/bands/assr_snr_grid/
+#       pca_<N>/<selection>/<window>/30-50hz_*.png
+#       pca_<N>/30-50hz_{mean,mean_masked}_filter_topomaps.png
+#
+# PREREQUISITE: run_condition_tracks_gamma.pbs at the same --n_pca.
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+
+DATA_DIR="/mnt/data/processed"
+
+# The store's band token, exactly as the decomposition wrote it into the
+# filename. Change both this and the decomposition job together, or the load
+# fails with "nothing stored for these settings".
+BAND="30-50hz"
+
+python /mnt/scripts/run_assr_snr_grid.py \
+    --experiment assr \
+    --variant iva_channel_joined_tracks \
+    --store_condition JoinedTracks \
+    --music_type ASSR \
+    --conditions Placebo Psilocybin \
+    --band "$BAND" \
+    --n_pca 5 \
+    --halfwidths 0 5 \
+    --stimulus_intervals 0:0.5 0.2:0.5 \
+    --signal_variants prestim stored_prestim \
+                      mean_prestim mean_stored_prestim \
+                      masked_prestim mean_masked_prestim \
+    --contrast_alternative greater \
+    --snr_alternative less \
+    --store_dir "$DATA_DIR" \
+    --wavelet_data_dir "$DATA_DIR" \
+    --results_dir /mnt/results/assr \
+    --save_dir /mnt/plots
+
+# --- Other component counts ------------------------------------------------
+# for N_PCA in 5 10; do
+#     echo "=== band $BAND, pca $N_PCA at $(date) ==="
+#     python /mnt/scripts/run_assr_snr_grid.py \
+#         --experiment assr --variant iva_channel_joined_tracks \
+#         --store_condition JoinedTracks --music_type ASSR \
+#         --conditions Placebo Psilocybin --band "$BAND" --n_pca "$N_PCA" \
+#         --halfwidths 0 5 --stimulus_intervals 0:0.5 0.2:0.5 \
+#         --store_dir "$DATA_DIR" --wavelet_data_dir "$DATA_DIR" \
+#         --results_dir /mnt/results/assr --save_dir /mnt/plots
+# done
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch

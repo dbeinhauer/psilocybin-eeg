@@ -216,6 +216,49 @@ def epoch_average(
     return acc / n_used, n_used
 
 
+def subtract_epoch_baseline(
+    averaged: np.ndarray, baseline_mask: np.ndarray
+) -> np.ndarray:
+    """Reference an epoch-averaged map to its own pre-onset window, **per frequency**.
+
+    Only the mean is removed; nothing is divided. On a TF map built from data that was
+    already z-scored per (channel, frequency) before the decomposition, the 1/f falloff
+    is gone before the map exists, so a per-frequency *divisor* buys little — and costs
+    a lot at the bottom of the map, where a 100 ms baseline spans under one cycle and
+    its SD is mostly wavelet phase rather than noise. Dividing by that would manufacture
+    texture in the delta/theta corner. Subtracting the mean is the part that is sound at
+    every frequency.
+
+    **Why this is equivalent to per-trial subtraction.**
+    :func:`epoch_average` is a plain mean over trials, and the mean is linear, so
+    ``mean_n(x_n - b_n) == mean_n(x_n) - mean_n(b_n)`` and ``mean_n(b_n)`` *is* the
+    baseline of the averaged map. Referencing each trial to its own baseline before
+    averaging therefore gives exactly this — so the correction is applied here, once, on
+    the averaged map, instead of re-epoching. (The equality needs the mean; it would not
+    hold for a median over trials.)
+
+    The reduction is over the last axis only, so every leading axis — recordings,
+    components and **frequency** — keeps its own baseline.
+
+    :param averaged: ``(..., frequencies, epoch samples)`` epoch-averaged map, time last.
+    :param baseline_mask: Boolean ``(epoch samples,)`` selecting the pre-onset window.
+    :return: A **new** array of the same shape, each frequency referenced to its own
+        pre-onset mean.
+    :raises ValueError: If *baseline_mask* does not match the epoch axis or selects
+        nothing.
+    """
+    data = np.asarray(averaged, dtype=float)
+    mask = np.asarray(baseline_mask, dtype=bool)
+    if mask.ndim != 1 or mask.size != data.shape[-1]:
+        raise ValueError(
+            f"baseline_mask must be ({data.shape[-1]},) to match the epoch axis; got "
+            f"{mask.shape}."
+        )
+    if not mask.any():
+        raise ValueError("baseline_mask selects no pre-onset sample.")
+    return data - data[..., mask].mean(axis=-1, keepdims=True)
+
+
 def onset_window(onsets: np.ndarray, n_times: int, sfreq: float) -> tuple[int, int]:
     """``(pre, post)`` epoch length in samples; ``post`` never overlaps the next onset.
 

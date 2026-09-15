@@ -20,7 +20,15 @@ import pytest  # noqa: E402
 
 from scripts import run_wavelet_iva_channel  # noqa: E402
 from scripts.run_wavelet_iva_channel import _build_arg_parser, _run_iva  # noqa: E402
-from src.definitions.fields import ExperimentNames  # noqa: E402
+from src.definitions.fields import (  # noqa: E402
+    ConditionVariants,
+    ExperimentNames,
+    FrequencyBandNames,
+    IvaComponentArrays,
+    IvaVariants,
+    MusicTypeVariants,
+)
+from src.io.iva_store import load_iva_components, list_iva_results  # noqa: E402
 
 SFREQ = 100.0
 N_SUBJECTS = 3
@@ -262,3 +270,107 @@ class TestRunIvaValidation:
     ) -> None:
         with pytest.raises(ValueError, match="must be ≤ --n_pca"):
             _run(info, iva_inputs, tmp_path, n_top=N_PCA, n_bottom=1)
+
+
+class TestComponentStore:
+    """``store_root`` keeps the recovered components, with their row bookkeeping."""
+
+    STORE_PARAMS = {
+        "experiment_name": ExperimentNames.ASSR,
+        "condition": ConditionVariants.PLACEBO,
+        "music_type": MusicTypeVariants.ASSR,
+    }
+
+    def _load(self, store_root, n_pca=N_PCA, band=None):
+        return load_iva_components(
+            experiment=ExperimentNames.ASSR,
+            condition=ConditionVariants.PLACEBO,
+            variant=IvaVariants.CHANNEL,
+            music_type=MusicTypeVariants.ASSR,
+            band=band,
+            n_pca=n_pca,
+            processed_data_dir=store_root,
+        )
+
+    def test_nothing_is_written_unless_asked(self, info, iva_inputs, tmp_path) -> None:
+        store = tmp_path / "processed"
+        _run(info, iva_inputs, tmp_path, quality=False)
+        assert not store.exists()
+        assert list_iva_results(ExperimentNames.ASSR, processed_data_dir=store) == []
+
+    def test_stores_the_maps_the_patterns_and_the_participants(
+        self, info, iva_inputs, tmp_path
+    ) -> None:
+        store = tmp_path / "processed"
+        _run(
+            info,
+            iva_inputs,
+            tmp_path,
+            quality=False,
+            store_root=store,
+            **self.STORE_PARAMS,
+        )
+        loaded = self._load(store)
+
+        assert loaded.tf_maps.shape == (N_SUBJECTS, N_PCA, N_FREQS, N_TIMES)
+        assert loaded.channel_patterns.shape == (N_SUBJECTS, N_PCA, N_CHANNELS)
+        assert loaded.has(IvaComponentArrays.TIMECOURSE)
+        assert loaded.has(IvaComponentArrays.SPECTRAL_PROFILE)
+        # The mapping, which is the point of storing at all.
+        assert loaded.participants == tuple(f"PSI{s:03d}" for s in range(N_SUBJECTS))
+        assert loaded.subject_conditions == ("Placebo",) * N_SUBJECTS
+        assert loaded.row("PSI001") == 1
+        assert list(loaded.channel_names) == list(info["ch_names"])
+        assert loaded.freqs.shape == (N_FREQS,)
+        assert loaded.times.shape == (N_TIMES,)
+        # The ranking that drove the figures is recoverable from the file.
+        assert loaded.extras["rank_score"].shape == (N_PCA,)
+        assert loaded.extras["top_indices"].shape == (N_PCA,)
+
+    def test_a_band_run_stores_only_its_band(self, info, iva_inputs, tmp_path) -> None:
+        store = tmp_path / "processed"
+        _run(
+            info,
+            iva_inputs,
+            tmp_path,
+            quality=False,
+            band=FrequencyBandNames.GAMMA.value,
+            store_root=store,
+            **self.STORE_PARAMS,
+        )
+        loaded = self._load(store, band=FrequencyBandNames.GAMMA.value)
+        assert loaded.band == FrequencyBandNames.GAMMA.value
+        # The band slice is applied upstream of _run_iva here, so the frequency axis
+        # is the one it was handed — what matters is that the entry is its own file.
+        assert loaded.path.name.startswith("iva_channel__ASSR__gamma__")
+
+    def test_storing_without_participant_labels_is_refused(
+        self, info, iva_inputs, tmp_path
+    ) -> None:
+        with pytest.raises(ValueError, match="without participant labels"):
+            _run(
+                info,
+                iva_inputs,
+                tmp_path,
+                quality=False,
+                subject_ids=None,
+                store_root=tmp_path / "processed",
+                **self.STORE_PARAMS,
+            )
+
+    def test_a_run_without_a_montage_still_stores_the_arrays(
+        self, iva_inputs, tmp_path
+    ) -> None:
+        """No ``info`` means no channel names — the components are still worth keeping."""
+        store = tmp_path / "processed"
+        _run(
+            None,
+            iva_inputs,
+            tmp_path,
+            quality=False,
+            store_root=store,
+            **self.STORE_PARAMS,
+        )
+        loaded = self._load(store)
+        assert loaded.channel_names is None
+        assert loaded.channel_patterns.shape[-1] == N_CHANNELS

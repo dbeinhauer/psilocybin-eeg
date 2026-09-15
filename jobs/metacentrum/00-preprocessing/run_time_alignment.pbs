@@ -40,20 +40,14 @@ cd "$SCRATCHDIR"
 cat << 'EOF' > run_inside.sh
 #!/bin/bash
 source /opt/myproject/.venv/bin/activate
+# The aligner is fitted once over every recording of BOTH conditions, so they come
+# out on one time base. Condition selection happens later, at analysis time, as pure
+# filtering -- there is no per-condition run any more. Music type still splits the
+# runs, because each music type is a different stimulus and aligns separately.
 python /mnt/scripts/run_time_alignment.py \
---condition Placebo \
 --music_type CLASSIC
 
 python /mnt/scripts/run_time_alignment.py \
---condition Placebo \
---music_type PSYTRANCE
-
-python /mnt/scripts/run_time_alignment.py \
---condition Psilocybin \
---music_type CLASSIC
-
-python /mnt/scripts/run_time_alignment.py \
---condition Psilocybin \
 --music_type PSYTRANCE
 EOF
 

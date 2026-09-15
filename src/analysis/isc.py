@@ -22,7 +22,6 @@ from scipy.stats import pearsonr, spearmanr
 #: working unchanged.
 from src.definitions.frequency import FREQUENCY_BANDS  # noqa: E402,F401
 
-
 # ---------------------------------------------------------------------------
 # Core ISC functions
 # ---------------------------------------------------------------------------
