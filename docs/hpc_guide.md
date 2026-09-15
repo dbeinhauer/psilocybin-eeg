@@ -1,7 +1,7 @@
 # HPC Guide
 
 This guide explains how to submit preprocessing and analysis jobs on the
-Metacentrum and Umbriel HPC clusters.
+Metacentrum HPC cluster.
 
 ## Directory Structure
 
@@ -10,25 +10,20 @@ All HPC job scripts are under `jobs/metacentrum/`:
 ```
 jobs/
 └── metacentrum/
-    ├── 00-preprocessing/
-    │   ├── preprocessing_job_template.pbs   # Basic preprocessing
-    │   ├── run_excluded_plot.pbs            # IC exclusion + plotting
-    │   ├── run_full_preprocessing.pbs       # Full pipeline (ICA + IC + plots)
-    │   └── run_time_alignment.pbs           # Time alignment
-    ├── 01-raw-mean-variance-analysis/
-    │   └── run_mean_variance.pbs            # Mean-variance synchrony analysis
-    ├── 02-isc-broadband-analysis/
-    │   └── run_isc.pbs                      # ISC analysis
-    ├── 03-wavelet-analysis/
-    │   ├── run_wavelet_phase.pbs            # Wavelet phase analysis
-    │   ├── run_wavelet_power.pbs            # Wavelet power analysis
-    │   └── store_wavelets.pbs              # Wavelet data storage
-    ├── preprocessing_job_template.pbs   # Legacy flat scripts (use NN-* versions above)
-    ├── run_excluded_plot.pbs
-    ├── run_full_preprocessing.pbs
-    ├── run_wavelet_analysis.pbs
-    └── store_wavelet_data.pbs
+    ├── 00-preprocessing/              (9)   preprocessing, time & stimulus alignment,
+    │                                        ASSR raw/wavelet PCA, IC exclusion plots
+    ├── 01-raw-mean-variance-analysis/ (1)
+    ├── 02-isc-broadband-analysis/     (1)
+    ├── 03-wavelet-analysis/           (4)   wavelet power/phase, wavelet storage
+    ├── 04-wavelet-ica-analysis/       (11)  five axis variants, broadband + alpha
+    ├── 05-wavelet-iva-analysis/       (9)   channel / frequency-channel / time, + quality
+    ├── 06-iva-condition-comparison/   (8)   joined and joined-tracks, SNR grid
+    └── 07-ica-condition-comparison/   (2)   joint ICA
 ```
+
+Every template lives in the stage directory matching its script; there are no flat
+legacy scripts at the `jobs/metacentrum/` top level. Run `ls jobs/metacentrum/<stage>/`
+for the current contents of a stage rather than relying on this summary.
 
 ## Metacentrum
 

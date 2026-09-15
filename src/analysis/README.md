@@ -1,19 +1,28 @@
 # EEG Analysis Package
 
 This package contains all analysis modules for the psilocybin-EEG dataset. It computes
-**Inter-Subject Correlation (ISC)**, **intersubject mean-variance synchrony**, and related
-metrics from preprocessed, time-aligned EEG recordings, and supports multiple data
-representations (raw channels, ICA activations, wavelet amplitudes, mean responses).
+**Inter-Subject Correlation (ISC)**, **intersubject mean-variance synchrony**, and a family
+of blind-source-separation analyses (ICA, IVA, joint ICA) over wavelet tensors, from
+preprocessed, time-aligned EEG recordings. It supports multiple data representations (raw
+channels, ICA activations, wavelet amplitudes, mean responses).
 
 ## Module Overview
 
 | Module | Purpose |
 |--------|---------|
-| `data_representations.py` | `AnalysisData` container + adapters to convert raw EEG into wavelet, ICA, or mean-response representations |
-| `isc.py` | Pure ISC computation functions (leave-one-out, pairwise, sliding-window) and the `FREQUENCY_BANDS` constant |
-| `mean_variance.py` | Intersubject mean-variance synchrony analysis (notebook-based implementation) |
-| `results_store.py` | CSV export for analysis results consumed by the Interactive Explorer (`viz_catalog/`) |
-| `summary.py` | `EEGSummarizedAnalyzer` — high-level orchestrator for loading data, running ISC analyses, and persisting results |
+| `data_representations.py` | `AnalysisData` container + adapters converting raw EEG into other representations |
+| `isc.py` | Pure ISC computation (leave-one-out, pairwise, sliding-window); re-exports `FREQUENCY_BANDS` for back-compat |
+| `mean_variance.py` | Intersubject mean-variance synchrony |
+| `summary.py` | `EEGSummarizedAnalyzer` — high-level orchestrator for loading data and running analyses |
+| `wavelet_ica.py` | Time-axis z-scoring of wavelet tensors, and IVA component polarity resolution |
+| `wavelet_jica.py` | Joint ICA across conditions: block energies, component orientation, cohort operators |
+| `iva_quality.py` | IVA component quality — topomap/time agreement with a reference, subject-influence equalization |
+| `iva_condition_comparison.py` | Between-condition comparison of stored IVA components |
+| `condition_tracks.py` | Pooling and concatenating condition tracks along the subject or time axis |
+| `assr_trials.py` | ASSR trial statistics, SNR, and polarity handling |
+| `pca_polarity.py` | PC1 sign alignment across recordings |
+
+Frequency band ranges live in `src/definitions/frequency.py`, not here.
 
 ---
 

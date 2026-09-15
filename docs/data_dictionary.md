@@ -10,6 +10,10 @@ in the psilocybin-EEG project.
 | Member | Value | Description |
 |--------|-------|-------------|
 | `PSILO_MUSIC` | `"psilo_music"` | Experiment with placebo and psilocybin, with music listening |
+| `ASSR` | `"assr"` | Auditory steady-state response recordings; stimulus timing from `fam+` annotations rather than a TAG channel |
+
+The values are also directory names under `data/raw/`, `data/interim/` and
+`data/processed/`, so they are a data vocabulary as well as a code enum.
 
 ### CoordinateSystems
 

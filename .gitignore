@@ -2,7 +2,6 @@ data/*/
 config/participant_mappings/
 plots/
 results/
-results_db/
 notebooks/03-wavelet-analysis/wavelet_cache/
 src/psilocybin_eeg.egg-info/
 *wavelet_cache*
