@@ -79,19 +79,11 @@ from src.visualization.mean_variance_plots import (
     plot_windowed_analysis,
 )
 from src.visualization.wavelet_plots import (
-    compute_itpc,
-    compute_phase_band_loo_iscs,
-    plot_band_itpc_timecourse,
     plot_band_power_timecourse,
     plot_cross_frequency_coupling,
     plot_intersubject_variance,
-    plot_itpc_spectrum,
-    plot_itpc_vs_isc,
-    plot_phase_distribution,
-    plot_power_phase_joint,
     plot_spectral_profile,
     plot_tf_isc,
-    plot_tf_itpc_map,
     plot_tf_map,
     plot_wavelet_loo_isc_bar,
     plot_wavelet_loo_isc_distributions,
@@ -1443,51 +1435,6 @@ def _wavelet_4d_to_3d(
     )
 
 
-def _try_load_phase_band_iscs(
-    ad: AnalysisData,
-    label: str,
-    *,
-    wavelet_dir: Path | None,
-    freqs: np.ndarray,
-    bands: dict[str, tuple[float, float]],
-) -> dict[str, np.ndarray]:
-    """Compute per-band phase LOO-ISC(cos φ) from the broadband phase cache.
-
-    Used by the wavelet-power workflow to render the optional power vs.
-    phase joint plot. Slices the cached *broadband* phase wavelet tensor per
-    band (matching the broadband-only caching scheme) rather than reading
-    separate per-band caches. Returns ``{}`` (and logs) when no broadband
-    phase cache is present.
-    """
-    if wavelet_dir is None:
-        return {}
-    bb_phase_dir = wavelet_dir / SpectrumTypeVariants.BROADBAND.value
-    safe_label = re.sub(r"[^A-Za-z0-9_-]", "_", label).strip("_")
-    if not safe_label:
-        safe_label = f"dataset_{hashlib.sha256(label.encode()).hexdigest()[:8]}"
-    freq_sig = f"{freqs[0]:.3f}_{freqs[-1]:.3f}_{len(freqs)}"
-    cache_file = bb_phase_dir / f"{safe_label}__wavelet_phase__{freq_sig}__freqdim1.npz"
-    if not cache_file.exists():
-        _logger.info(
-            f"[{label}] No broadband phase wavelet cache "
-            f"(expected {cache_file.name}); skipping power_phase_joint plot."
-        )
-        return {}
-    try:
-        phase_4d = _broadband_wavelet_4d(
-            ad,
-            label,
-            representation="phase",
-            freqs=freqs,
-            wavelet_dir=bb_phase_dir,
-            reuse_wavelets=True,
-        )
-    except Exception as exc:  # pragma: no cover - defensive
-        _logger.warning(f"[{label}] Failed to load broadband phase cache: {exc}")
-        return {}
-    return compute_phase_band_loo_iscs(phase_4d.data, freqs, bands=bands)
-
-
 def _run_wavelet_workflow_for_label(
     ad: AnalysisData,
     label: str,
@@ -1544,6 +1491,14 @@ def _run_wavelet_workflow_for_label(
     )
     bb_4d_data = wd_4d.data  # (n_subj, n_ch, n_freqs, n_times)
     _logger.info(f"[{label}] broadband 4D shape: {bb_4d_data.shape}")
+
+    if representation == "phase":
+        # Phase is extracted and cached, never analysed. Everything below treats its
+        # input as a linear quantity -- means, variances, Pearson and Spearman ISC --
+        # and phase angles are circular, so none of it is meaningful on them. The
+        # extraction is kept because a later analysis may want the cache.
+        _logger.info(f"[{label}] phase extracted and cached; no analysis is run on it.")
+        return
 
     if include_broadband:
         # Reduce to 3D for mean-variance and ISC plots.
@@ -1779,98 +1734,6 @@ def _run_wavelet_workflow_for_label(
                 ),
             )
 
-            # Power vs Phase joint plot — only when phase cache is present.
-            phase_band_iscs = _try_load_phase_band_iscs(
-                ad,
-                label,
-                wavelet_dir=cross_representation_wavelet_dir,
-                freqs=freqs,
-                bands=selected_bands,
-            )
-            if phase_band_iscs:
-                try:
-                    plot_power_phase_joint(
-                        band_mean_iscs_from_bb,
-                        phase_band_iscs,
-                        label=label,
-                        save_path=(
-                            bb_dir
-                            / "power_phase_joint"
-                            / f"power_phase_isc_{label}.png"
-                        ),
-                    )
-                except ValueError as exc:
-                    _logger.warning(f"[{label}] Skipping power_phase_joint plot: {exc}")
-
-        else:  # representation == "phase"
-            plot_phase_distribution(
-                bb_4d_data,
-                label=label,
-                save_path=(
-                    bb_dir / "phase_distribution" / f"phase_distribution_{label}.png"
-                ),
-            )
-            itpc_full = compute_itpc(bb_4d_data)
-            plot_itpc_spectrum(
-                itpc_full,
-                freqs,
-                label=label,
-                bands=selected_bands,
-                save_path=bb_dir / "itpc_spectrum" / f"itpc_spectrum_{label}.png",
-            )
-            plot_tf_itpc_map(
-                itpc_full,
-                freqs,
-                wd_4d.sfreq,
-                label=label,
-                save_path=bb_dir / "tf_itpc_map" / f"tf_itpc_map_{label}.png",
-            )
-            plot_band_itpc_timecourse(
-                itpc_full,
-                freqs,
-                wd_4d.sfreq,
-                label=label,
-                bands=selected_bands,
-                save_path=bb_dir / "band_itpc_tc" / f"band_itpc_tc_{label}.png",
-            )
-
-            # Phase LOO-ISC per band: cos(circmean(phase)) → compute_loo_isc.
-            band_mean_iscs_from_bb = compute_phase_band_loo_iscs(
-                bb_4d_data, freqs, bands=selected_bands
-            )
-            plot_wavelet_loo_isc_bar(
-                band_mean_iscs_from_bb,
-                label=label,
-                color="darkgreen",
-                save_path=(bb_dir / "phase_loo_isc" / f"phase_loo_isc_{label}.png"),
-            )
-            plot_wavelet_loo_isc_distributions(
-                band_mean_iscs_from_bb,
-                label=label,
-                color="darkgreen",
-                save_path=(
-                    bb_dir
-                    / "phase_loo_isc"
-                    / f"phase_loo_isc_distributions_{label}.png"
-                ),
-            )
-            plot_wavelet_topomap_isc(
-                band_mean_iscs_from_bb,
-                info,
-                label=label,
-                title_prefix="Topographic phase LOO-ISC(cos φ) per band",
-                save_path=(
-                    bb_dir / "topomap_phase_isc" / f"topomap_phase_isc_{label}.png"
-                ),
-            )
-            plot_itpc_vs_isc(
-                itpc_full,
-                band_mean_iscs_from_bb,
-                freqs,
-                label=label,
-                bands=selected_bands,
-                save_path=bb_dir / "itpc_vs_isc" / f"itpc_vs_isc_{label}.png",
-            )
 
         # Keep wd_4d / bb_4d_data — the per-band stage slices them below.
         del wd_3d, data_sub_bb

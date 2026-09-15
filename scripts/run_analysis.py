@@ -35,7 +35,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from scripts.analysis_common import (
     add_common_arguments,
     load_analyzers,
+    add_subset_arguments,
     analyzers_to_datasets,
+    apply_subset,
     precompute_pre_alignment_wavelet_cache,
     resolve_wavelet_dir,
     run_wavelet_workflow,
@@ -72,6 +74,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Base directory for output plots. Defaults to project plots/ root.",
     )
+    add_subset_arguments(parser)
+
     return parser
 
 
@@ -131,6 +135,8 @@ def run(args: argparse.Namespace) -> None:
         experiment_name=experiment_name,
     )
     raw_datasets = analyzers_to_datasets(analyzers) if run_wavelet else None
+    if raw_datasets is not None:
+        raw_datasets = apply_subset(raw_datasets, args)
 
     # Canonical plot root shared by both power and phase workflows. Each
     # analysis writes under the same ``03-wavelet-analysis`` tree so the

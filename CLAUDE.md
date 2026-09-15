@@ -67,7 +67,7 @@ practice, by three CLI scripts too).
 - **`preprocessing/`** — `channel_prep` → `filtering` → `ica` → `time_alignment` for
   `psilo_music`; `stimulus_alignment` and `marker_shift` carry the ASSR path.
   `pipeline.py` orchestrates. Uses MNE `Raw`/`Epochs`.
-- **`analysis/`** — 11 modules: `isc.py`, `mean_variance.py`, `wavelet_ica.py` (time-axis
+- **`analysis/`** — 12 modules: `isc.py`, `mean_variance.py`, `wavelet_ica.py` (time-axis
   z-scoring + IVA polarity), `wavelet_jica.py`, `iva_quality.py`,
   `iva_condition_comparison.py`, `condition_tracks.py`, `assr_trials.py`,
   `assr_variants.py`, `pca_polarity.py`, `data_representations.py` (`AnalysisData`), `summary.py`
@@ -85,6 +85,9 @@ practice, by three CLI scripts too).
 There is no shared visualization helper module yet; `iva_quality_plots.py` is the de-facto
 one (`save_fig`, `safe_vlim`, `participant_sort_key`, `grid_shape` are imported from it by
 three siblings). All `__init__.py` are empty — import by full module path.
+
+Every script exposes `_build_arg_parser()`, `run(args)` and `main(argv)`. `run` takes an
+already-parsed namespace so a notebook drives the same code path as the PBS job.
 
 ### Key enums (`src/definitions/fields.py`)
 
@@ -125,21 +128,26 @@ PBS job use, and the resulting figures. Three rules follow:
 - **Deep method prose lives in `docs/analyses/<stage>/`**, not in the notebook. The
   notebook explains a step briefly and links there.
 
-`notebooks/06-iva-condition-comparison/iva_component_analysis_joined.ipynb` is the worked
-example. The rest are still being slimmed.
+Stages 01-07 are converted; each notebook is a driver of about eight cells. Stage 00 is
+not yet. The notebooks are generated from templates, so siblings cannot drift apart.
+
+A notebook runs small through `--n_subjects`, `--n_channels` and `--n_times`, which every
+script accepts, and through the shared strip caches under `notebooks/cache/` — a subset of
+the wavelet data in the same on-disk layout as the full cache, built by
+`scripts/run_build_notebook_cache.py`. Never point a notebook at the source-of-truth
+cache; that is what the job is for.
 
 Notebook outputs are stripped before commit (CI runs `nbstripout`).
 
 ### Plot output layout
 
 ```
-plots/{NN}-{analysis-name}/{Condition}_{MusicType}/{broadband|bands}/{analysis_type}/*.png
+plots/{stage}/{label}/{spectrum}/{analysis_type}/pca_{n}/*.png
 ```
 
-Band files are prefixed with the band name. Never write directly into `broadband/` or
-`bands/` — always an `{analysis_type}/` subdirectory. Note the tree on disk has drifted
-from this (stage 05 is split across three directories); it is not being reorganized,
-since plot outputs are treated as data.
+Built by `ProjectPaths.analysis_plots_dir`, which every script routes through — never
+assemble one by hand. Trailing levels are omitted by a stage that has no such dimension,
+but the order never changes. Band files are prefixed with the band name.
 
 ## Code Conventions
 

@@ -64,7 +64,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.analysis_common import (  # noqa: E402
     BAND_ISC_THRESHOLDS,
+    add_subset_arguments,
     analyzers_to_datasets,
+    apply_subset,
     load_analyzers,
 )
 from src.analysis.isc import (  # noqa: E402
@@ -198,6 +200,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable DEBUG logging.",
     )
+    add_subset_arguments(parser)
+
     return parser
 
 
@@ -562,6 +566,7 @@ def run(args: argparse.Namespace) -> None:
         experiment_name=experiment_name,
     )
     datasets = analyzers_to_datasets(analyzers)
+    datasets = apply_subset(datasets, args)
     print_data_overview(datasets)
 
     for mt in music_types:

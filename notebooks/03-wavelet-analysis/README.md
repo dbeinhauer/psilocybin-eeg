@@ -78,7 +78,6 @@ arguments per condition.
 | Notebook | Scope | Key analyses |
 |---|---|---|
 | `wavelet_power_exploration.ipynb` | Broadband + per-band | Spectral profile, time–frequency maps, band power time courses, intersubject variance, wavelet-domain LOO-ISC, topographic mapping, time–frequency ISC, sliding-window ISC, cross-frequency coupling, power–phase joint analysis |
-| `wavelet_phase_exploration.ipynb` | Broadband + per-band | Phase distribution check, ITPC spectrum, time–frequency ITPC map, per-band ITPC time course, phase-based LOO-ISC, ITPC vs ISC comparison, topographic phase-ISC mapping |
 
 ## HPC job scripts
 
@@ -188,7 +187,6 @@ indicate nested oscillatory dynamics driven by the stimulus.
 from bands where only one modality is synchronised, providing a more complete
 picture of inter-subject coherence.
 
-### Phase analyses (`wavelet_phase_exploration.ipynb`)
 
 Phase is a circular quantity in (−π, π], so standard linear statistics
 (mean, variance, Pearson *r*) are replaced by circular analogues.

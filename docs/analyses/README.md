@@ -7,9 +7,9 @@ why — the reasoning that is too long to sit in a notebook cell or a docstring.
 | Stage | Documentation |
 |---|---|
 | `00-preprocessing` | see [`docs/preprocessing_steps.md`](../preprocessing_steps.md) |
-| `01-raw-mean-variance-analysis` | — |
-| `02-isc-broadband-analysis` | — |
-| `03-wavelet-analysis` | — |
+| `01-raw-mean-variance-analysis` | [README](01-raw-mean-variance-analysis/README.md) |
+| `02-isc-broadband-analysis` | [README](02-isc-broadband-analysis/README.md) |
+| `03-wavelet-analysis` | [README](03-wavelet-analysis/README.md) |
 | `04-wavelet-ica-analysis` | [README](04-wavelet-ica-analysis/README.md) |
 | `05-wavelet-iva-analysis` | [README](05-wavelet-iva-analysis/README.md) |
 | `06-iva-condition-comparison` | [README](06-iva-condition-comparison/README.md) |
