@@ -111,8 +111,6 @@ REAL_CONDITIONS = (ConditionVariants.PLACEBO, ConditionVariants.PSILOCYBIN)
 # Conditions that select both real conditions and restrict to complete participant
 # pairs. They differ only in the axis the two conditions are pooled along.
 JOINED_CONDITIONS = (ConditionVariants.JOINED_SEPARATE, ConditionVariants.JOINED_TRACKS)
-
-
 class MusicTypeVariants(Enum):
     """
     All variants of music used in the experiment, values are ids from filenames in lowercase.
@@ -352,3 +350,35 @@ INTERIM_DATA_VARIANTS = [
     PreprocessedDataVariants.ICA_COMPONENTS,
     PreprocessedDataVariants.IC_PROBABILITIES,
 ]
+
+
+#: Values that appear inside products written before the subject-axis join was renamed
+#: from "joined" to "joined separate". Stored ``.npz`` files carry the variant and
+#: condition as strings, and they are hundreds of megabytes each, so they are read
+#: through this map rather than rewritten.
+LEGACY_ENUM_VALUES: dict[type, dict[str, str]] = {
+    ConditionVariants: {"Joined": ConditionVariants.JOINED_SEPARATE.value},
+    IvaVariants: {
+        "iva_channel_joined": IvaVariants.CHANNEL_JOINED_SEPARATE.value,
+    },
+    JicaVariants: {
+        "ica_channel_joined": JicaVariants.CHANNEL_JOINED_SEPARATE.value,
+    },
+}
+
+
+def resolve_stored_value(enum_cls, value: str):
+    """Parse a value read back from a stored product, accepting pre-rename spellings.
+
+    :param enum_cls: The enum the value belongs to.
+    :param value: The string as it appears in the product.
+    :return: The enum member.
+    :raises ValueError: If the value is neither current nor a known legacy spelling.
+    """
+    try:
+        return enum_cls(value)
+    except ValueError:
+        legacy = LEGACY_ENUM_VALUES.get(enum_cls, {})
+        if value in legacy:
+            return enum_cls(legacy[value])
+        raise
