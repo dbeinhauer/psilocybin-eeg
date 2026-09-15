@@ -60,7 +60,6 @@ import pandas as pd
 
 from src.definitions.constants import ProjectPaths
 from src.definitions.fields import (
-    resolve_stored_value,
     ConditionVariants,
     CoordinateSystems,
     ExperimentNames,
@@ -927,14 +926,9 @@ def load_iva_components(
             )
         band_value = str(stored["band"]) if "band" in keys else ""
         results = IvaComponentResults(
-            # Read through resolve_stored_value: products written before the
-            # subject-axis join was renamed carry the old spelling, and they are ~1 GB
-            # each, so they are aliased rather than rewritten.
-            variant=resolve_stored_value(IvaVariants, str(stored["variant"])),
+            variant=IvaVariants(str(stored["variant"])),
             experiment=ExperimentNames(str(stored["experiment"])),
-            condition=resolve_stored_value(
-                ConditionVariants, str(stored["condition"])
-            ),
+            condition=ConditionVariants(str(stored["condition"])),
             music_type=MusicTypeVariants(str(stored["music_type"])),
             band=band_value or None,
             n_pca=int(stored["n_pca"]),
