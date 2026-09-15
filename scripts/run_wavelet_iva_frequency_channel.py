@@ -1303,15 +1303,14 @@ def _run_iva(
 # ---------------------------------------------------------------------------
 
 
-if __name__ == "__main__":
-    parser = _build_arg_parser()
-    args = parser.parse_args()
+def run(args: argparse.Namespace) -> None:
+    """Run the analysis for an already-parsed argument namespace.
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    Split out of the ``__main__`` block so a notebook can drive the same code path the
+    CLI and the PBS job take, without going through ``sys.argv``.
 
+    :param args: Parsed arguments, as :func:`_build_arg_parser` produces.
+    """
     experiment_name = ExperimentNames(args.experiment)
     condition = ConditionVariants(args.condition)
     if args.music_type is not None:
@@ -1441,3 +1440,21 @@ if __name__ == "__main__":
         )
 
     _logger.info("IVA-subjects analysis complete.")
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Parse arguments, configure logging and run.
+
+    :param argv: Command-line arguments; ``None`` reads ``sys.argv``.
+    """
+    args = _build_arg_parser().parse_args(argv)
+    logging.basicConfig(
+        level=logging.DEBUG if getattr(args, "verbose", False) else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    run(args)
+
+
+if __name__ == "__main__":
+    main()
+

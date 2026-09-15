@@ -360,6 +360,22 @@ def read_wavelet_cache_header(path: Path) -> WaveletCacheHeader:
         )
 
     n_freqs = int(freqs.size)
+    # Some caches record names for channels the tensor does not hold: the psilo_music
+    # ones carry a trailing ECG and TAG, which preprocessing drops before the transform.
+    # The layout is channel-major, so trailing extras can be trimmed without disturbing
+    # the alignment of the channels that are present -- but only when the excess is a
+    # whole number of channels. Anything else is a genuine mismatch and still raises.
+    extra = len(feature_names) - shape[1]
+    if extra > 0 and extra % n_freqs == 0:
+        dropped = [
+            name.split(WAVELET_FEATURE_SEPARATOR, 1)[0]
+            for name in feature_names[shape[1] :: n_freqs]
+        ]
+        _logger.warning(
+            f"{path.name}: {extra // n_freqs} channel name(s) {dropped} have no data "
+            "and are ignored; the tensor holds the channels before them."
+        )
+        feature_names = feature_names[: shape[1]]
     channel_names = [
         name.split(WAVELET_FEATURE_SEPARATOR, 1)[0] for name in feature_names[::n_freqs]
     ]

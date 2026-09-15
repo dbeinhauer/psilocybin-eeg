@@ -60,7 +60,8 @@ _STAGE_DIR = "03-wavelet-analysis"
 # ──────────────────────────────────────────────────────────────────────
 
 
-if __name__ == "__main__":
+def _build_arg_parser() -> argparse.ArgumentParser:
+    """The CLI surface, so a notebook can build the same namespace the job uses."""
     parser = argparse.ArgumentParser(
         description=("Run EEG wavelet analysis on preprocessed data."),
     )
@@ -71,12 +72,22 @@ if __name__ == "__main__":
         default=None,
         help="Base directory for output plots. Defaults to project plots/ root.",
     )
+    return parser
 
-    args = parser.parse_args()
 
+def run(args: argparse.Namespace) -> None:
+    """Run the wavelet analysis for an already-parsed argument namespace.
+
+    Split out of the ``__main__`` block so a notebook can drive the same code path the
+    CLI and the PBS job take, without going through ``sys.argv``.
+
+    :param args: Parsed arguments, as :func:`_build_arg_parser` produces.
+    """
     # Early validation: reshape requires keep
     if args.wavelet_reshape_frequency_dim and not args.wavelet_keep_frequency_dim:
-        parser.error(
+        # Raised rather than parser.error(): run() is also called from a notebook, where
+        # exiting the process on a bad argument is the wrong response.
+        raise ValueError(
             "--wavelet_reshape_frequency_dim requires --wavelet_keep_frequency_dim"
         )
 
@@ -214,3 +225,16 @@ if __name__ == "__main__":
         )
 
     _logger.info("All requested analyses complete.")
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Parse arguments and run.
+
+    :param argv: Command-line arguments; ``None`` reads ``sys.argv``.
+    """
+    run(_build_arg_parser().parse_args(argv))
+
+
+if __name__ == "__main__":
+    main()
+
