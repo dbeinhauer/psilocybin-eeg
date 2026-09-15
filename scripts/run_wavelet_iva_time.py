@@ -1421,7 +1421,9 @@ def run(args: argparse.Namespace) -> None:
                 f"(freqs {iva_freqs[0]:.1f}-{iva_freqs[-1]:.1f} Hz)"
             )
 
-        save_dir = save_root / _STAGE_DIR / dataset_key
+        save_dir = ProjectPaths.analysis_plots_dir(
+            _STAGE_DIR, dataset_key, root=save_root
+        )
         _run_iva(
             data_4d,
             wd.sfreq,

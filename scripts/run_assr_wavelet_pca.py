@@ -1042,7 +1042,9 @@ def run_pca(args: argparse.Namespace) -> None:
     wavelet_path = wavelet_matches[0]
 
     save_root = Path(args.save_dir) if args.save_dir else ProjectPaths.PLOTS_PATH
-    plots_dir = save_root / "00-preprocessing" / "assr_wavelet_pca" / label
+    plots_dir = ProjectPaths.analysis_plots_dir(
+        "00-preprocessing", label, analysis_type="assr_wavelet_pca", root=save_root
+    )
     plots_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"=== {label} ===", flush=True)

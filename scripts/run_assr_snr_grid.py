@@ -745,13 +745,13 @@ def run(args: argparse.Namespace) -> None:
         if args.band is None
         else SpectrumTypeVariants.BANDS.value
     )
-    plots_dir = (
-        (Path(args.save_dir) if args.save_dir else ProjectPaths.PLOTS_PATH)
-        / _STAGE_DIR
-        / f"{store_condition.value}_{music_type.value}"
-        / spectrum
-        / _ANALYSIS_DIR
-        / f"pca_{args.n_pca}"
+    plots_dir = ProjectPaths.analysis_plots_dir(
+        _STAGE_DIR,
+        f"{store_condition.value}_{music_type.value}",
+        spectrum=spectrum,
+        analysis_type=_ANALYSIS_DIR,
+        n_pca=args.n_pca,
+        root=args.save_dir,
     )
     # Band as the first token of every filename, per the canonical plot layout.
     plot_prefix = "" if args.band is None else f"{args.band}_"

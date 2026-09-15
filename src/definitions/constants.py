@@ -233,6 +233,43 @@ class ProjectPaths:
         return store_root if condition is None else store_root / condition.value
 
     @staticmethod
+    def analysis_plots_dir(
+        stage: str,
+        label: str,
+        *,
+        spectrum: str | None = None,
+        analysis_type: str | None = None,
+        n_pca: int | None = None,
+        root: Path | None = None,
+    ) -> Path:
+        """The canonical output directory for one analysis run's figures.
+
+        Every stage writes here, so a reader can find a figure without knowing which
+        script produced it::
+
+            plots/{stage}/{label}/{spectrum}/{analysis_type}/pca_{n}/
+
+        The trailing levels are optional and are simply omitted by a stage that has no
+        such dimension -- a run with no PCA step has no ``pca_`` level -- but the order
+        never changes, and nothing is written directly into an existing level.
+
+        :param stage: Numbered stage directory, e.g. ``"06-iva-condition-comparison"``.
+        :param label: Dataset label, e.g. ``"JoinedSeparate_ASSR"`` or ``"Placebo_CLASSIC"``.
+        :param spectrum: ``"broadband"`` or ``"bands"``; omitted when not applicable.
+        :param analysis_type: What was run, e.g. ``"assr_snr_grid"``.
+        :param n_pca: Component count, when the run has one.
+        :param root: Plot root; ``None`` uses the project's ``plots/``.
+        :return: The directory, which is not created.
+        """
+        path = (ProjectPaths.PLOTS_PATH if root is None else Path(root)) / stage / label
+        for level in (spectrum, analysis_type):
+            if level:
+                path = path / level
+        if n_pca is not None:
+            path = path / f"pca_{n_pca}"
+        return path
+
+    @staticmethod
     def get_experiment_interim_dir(experiment_name: ExperimentNames) -> Path:
         """
         Get path to the interim data directory for the given experiment.

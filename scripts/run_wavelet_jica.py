@@ -1885,7 +1885,9 @@ def run_jica(
     # label carries the wavelet representation suffix and would end up in a path.
     product = f"{join.value}_{music_type.value}"
     spectrum = SpectrumTypeVariants.BROADBAND.value
-    product_dir = save_root / _STAGE_DIR / product / spectrum
+    product_dir = ProjectPaths.analysis_plots_dir(
+        _STAGE_DIR, product, spectrum=spectrum, root=save_root
+    )
     if not args.skip_decomposition_plots:
         _write_decomposition_plots(
             result,

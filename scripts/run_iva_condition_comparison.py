@@ -716,7 +716,10 @@ def run_condition_comparison(
         if band_name is None
         else SpectrumTypeVariants.BANDS.value
     )
-    out_dir = save_root / _STAGE_DIR / label / spectrum / _ANALYSIS_DIR / f"pca_{n_pca}"
+    out_dir = ProjectPaths.analysis_plots_dir(
+        _STAGE_DIR, label, spectrum=spectrum, analysis_type=_ANALYSIS_DIR,
+        n_pca=n_pca, root=save_root,
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
     participants_dir = out_dir / "participants"
     prefix = "" if band_name is None else f"{band_name}_"

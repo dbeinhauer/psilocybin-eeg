@@ -574,7 +574,9 @@ def run(args: argparse.Namespace) -> None:
         ad = datasets[dataset_key]
         _logger.info(f"Dataset [{label}]: shape={ad.data.shape}  sfreq={ad.sfreq} Hz")
 
-        save_dir = save_root / _STAGE_DIR / dataset_key
+        save_dir = ProjectPaths.analysis_plots_dir(
+            _STAGE_DIR, dataset_key, root=save_root
+        )
 
         _run_broadband_analysis(
             ad,

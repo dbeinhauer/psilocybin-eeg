@@ -136,7 +136,9 @@ def run(args: argparse.Namespace) -> None:
     # analysis writes under the same ``03-wavelet-analysis`` tree so the
     # Results Browser picks them up using the same notebook-based ID.
     save_root = args.save_dir if args.save_dir is not None else ProjectPaths.PLOTS_PATH
-    wavelet_plots_root = save_root / _STAGE_DIR
+    wavelet_plots_root = ProjectPaths.analysis_plots_dir(
+        _STAGE_DIR, "", root=save_root
+    )
     # Shared wavelet cache directory — power and phase outputs coexist since
     # the representation is encoded in the cached filename. This lets the
     # power workflow reuse a pre-computed phase cache for the power-vs-phase

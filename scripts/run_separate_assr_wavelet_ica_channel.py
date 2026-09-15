@@ -676,7 +676,13 @@ def run_separate_ica(args: argparse.Namespace) -> None:
     wavelet_path = wavelet_matches[0]
 
     save_root = Path(args.save_dir) if args.save_dir else ProjectPaths.PLOTS_PATH
-    analysis_dir = save_root / _STAGE_DIR / label / "broadband" / _ANALYSIS_DIR
+    analysis_dir = ProjectPaths.analysis_plots_dir(
+        _STAGE_DIR,
+        label,
+        spectrum="broadband",
+        analysis_type=_ANALYSIS_DIR,
+        root=save_root,
+    )
 
     print(f"=== {label} ===", flush=True)
     print(f"wavelet : {wavelet_path}", flush=True)
