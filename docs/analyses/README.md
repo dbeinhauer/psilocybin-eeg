@@ -1,0 +1,26 @@
+# Analyses
+
+One directory per analysis stage, mirroring `notebooks/`, `plots/` and
+`jobs/metacentrum/`. Each holds the deep description of what that stage computes and
+why — the reasoning that is too long to sit in a notebook cell or a docstring.
+
+| Stage | Documentation |
+|---|---|
+| `00-preprocessing` | see [`docs/preprocessing_steps.md`](../preprocessing_steps.md) |
+| `01-raw-mean-variance-analysis` | — |
+| `02-isc-broadband-analysis` | — |
+| `03-wavelet-analysis` | — |
+| `04-wavelet-ica-analysis` | — |
+| `05-wavelet-iva-analysis` | — |
+| `06-iva-condition-comparison` | [README](06-iva-condition-comparison/README.md) |
+| `07-ica-condition-comparison` | — |
+
+## What goes where
+
+- **`docs/analyses/<stage>/`** — the method: what is computed, which variants exist, why
+  each choice was made, what the caveats are.
+- **The notebook** — parameter selection and a low-cost test of the workflow before it is
+  run at full scale. It links here rather than restating the method.
+- **The script** — the implementation, and the ground truth. If an analysis step is not in
+  the script, it does not belong in the notebook either.
+- **Docstrings in `src/`** — the contract of one function: arguments, return, errors.

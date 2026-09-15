@@ -222,6 +222,7 @@ template, copy an existing one's resource shape rather than inventing a new one.
 | Document | Contents |
 |---|---|
 | [`CLAUDE.md`](CLAUDE.md) | Architecture and conventions, for both agents and humans |
+| [`docs/analyses/`](docs/analyses/README.md) | Per-stage method documentation — what each analysis computes and why |
 | [`docs/preprocessing_steps.md`](docs/preprocessing_steps.md) | Detailed preprocessing stages |
 | [`docs/data_dictionary.md`](docs/data_dictionary.md) | Enums, stored products, file naming |
 | [`docs/hpc_guide.md`](docs/hpc_guide.md) | Cluster submission and resources |

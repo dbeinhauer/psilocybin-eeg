@@ -70,13 +70,13 @@ practice, by three CLI scripts too).
 - **`analysis/`** — 11 modules: `isc.py`, `mean_variance.py`, `wavelet_ica.py` (time-axis
   z-scoring + IVA polarity), `wavelet_jica.py`, `iva_quality.py`,
   `iva_condition_comparison.py`, `condition_tracks.py`, `assr_trials.py`,
-  `pca_polarity.py`, `data_representations.py` (`AnalysisData`), `summary.py`
+  `assr_variants.py`, `pca_polarity.py`, `data_representations.py` (`AnalysisData`), `summary.py`
   (`EEGSummarizedAnalyzer`). Input shape convention:
   `(n_subjects, n_channels, n_timepoints)`; wavelet tensors are
   `(n_subjects, n_channels, n_freqs, n_times)`.
-- **`visualization/`** — 8 modules: `preprocessing_plots`, `isc_plots`,
+- **`visualization/`** — 9 modules: `preprocessing_plots`, `isc_plots`,
   `mean_variance_plots`, `wavelet_plots`, `iva_quality_plots`, `iva_condition_plots`,
-  `jica_plots`, `assr_filter_plots`. Seaborn for statistical plots, Matplotlib for
+  `jica_plots`, `assr_filter_plots`, `assr_snr_plots`. Seaborn for statistical plots, Matplotlib for
   topomaps. Most plot functions take an optional `save_path`, but this is not universal —
   `preprocessing_plots.py` uses `plot_path` / `save_fig` instead.
 - **`filtering/`** — `DatasetFilter`, metadata-level DataFrame filtering.
@@ -115,9 +115,18 @@ check the data before pruning one.
 `sys.path.insert` block.
 
 **A notebook is for parameter selection**, not for holding workflow logic: config, the
-parameter grid being explored, a small-scale call into the same `src/` entry point the
-script and PBS job use, and the resulting figure. Shared logic belongs in `src/`. Several
-notebooks still violate this badly and are being slimmed.
+parameter grid being explored, a small-scale call into the same entry point the script and
+PBS job use, and the resulting figures. Three rules follow:
+
+- **The script is the ground truth.** If an analysis step is not in the script, it does not
+  belong in the notebook either.
+- **Plotting is never reimplemented.** A notebook draws with the same `src/visualization/`
+  functions the script uses, or the figures it tests are not the figures the job produces.
+- **Deep method prose lives in `docs/analyses/<stage>/`**, not in the notebook. The
+  notebook explains a step briefly and links there.
+
+`notebooks/06-iva-condition-comparison/iva_component_analysis_joined.ipynb` is the worked
+example. The rest are still being slimmed.
 
 Notebook outputs are stripped before commit (CI runs `nbstripout`).
 
