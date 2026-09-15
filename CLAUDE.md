@@ -122,6 +122,60 @@ git worktree remove .worktrees/issue-N
 git branch -d claude/issue-N
 ```
 
+### Automated parallel workflow (Docker orchestrator)
+
+Optionally, multiple issues can be processed fully unattended using the Docker orchestrator. Each issue runs in an isolated container with its own worktree.
+
+**One-time setup:**
+```bash
+# Authenticate Claude Code (stores token in named Docker volume)
+docker run --rm -it \
+  -v psilocybin-claude-config:/home/researcher/.claude \
+  psilocybin-eeg-sandbox:latest \
+  claude  # log in, then Ctrl+C
+
+# Required: GitHub token for issue discovery and PR creation
+export GH_TOKEN=ghp_...
+
+# Optional: if not set, uses the interactive login from the Docker volume above
+# export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+**Run:**
+```bash
+# All open issues (auto-discovered):
+./scripts/claude-orchestrator.sh
+
+# Specific issues with model and cost controls:
+./scripts/claude-orchestrator.sh --issues 12 17 23 --model sonnet --max-turns 30 --timeout 900
+
+# Dry run (see what would run):
+./scripts/claude-orchestrator.sh --dry-run
+
+# Cap parallelism:
+./scripts/claude-orchestrator.sh --max-parallel 2
+```
+
+**Flags:**
+- `--model MODEL` — Claude model to use (e.g. `sonnet`, `opus`, `claude-sonnet-4-6`)
+- `--max-turns N` — Max Claude conversation turns per issue (default: 50)
+- `--timeout SECS` — Kill container after this many seconds (default: 1800)
+- `--max-parallel N` — Max concurrent containers (default: 3)
+- `--rebuild` — Force Docker image rebuild
+
+**Monitor / stop:**
+```bash
+./scripts/claude-status.sh          # summary + log tails
+tail -f logs/issue-12.log           # follow a specific issue
+./scripts/claude-stop.sh            # stop all containers
+```
+
+**Container isolation:**
+- Worktree mounted read-write at `/workspace`
+- `/data`, `/plots`, `/results`, `/results_db` = bind-mounted read-only from repo root
+- Network restricted to DNS + HTTPS only (iptables firewall)
+- `--dangerously-skip-permissions` — no permission prompts inside container
+
 ## Adding a New Analysis
 
 1. Create `notebooks/NN-<name>/` with exploration notebook(s)
