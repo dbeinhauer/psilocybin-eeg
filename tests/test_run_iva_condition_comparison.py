@@ -32,6 +32,7 @@ from src.analysis.iva_condition_comparison import (  # noqa: E402
     decompose_channel_iva,
     slice_to_band,
 )
+from src.definitions.frequency import band_token, resolve_band_range  # noqa: E402
 from src.analysis.data_representations import (  # noqa: E402
     AnalysisData,
     DataRepresentation,
@@ -189,7 +190,20 @@ class TestCliDefaults:
         assert args.iva_opt_approach == "newton"
         assert args.random_state == 42
         assert args.band is None
+        assert args.band_range is None
         assert args.components is None
+
+    def test_an_explicit_band_range_parses_as_two_floats(self):
+        args = _build_arg_parser().parse_args(["--band_range", "30", "50"])
+        assert args.band_range == [30.0, 50.0]
+        assert args.band is None
+
+    def test_a_named_band_and_an_explicit_range_cannot_both_be_given(self):
+        """They would disagree about what was decomposed, so argparse must refuse."""
+        with pytest.raises(SystemExit):
+            _build_arg_parser().parse_args(
+                ["--band", "gamma", "--band_range", "30", "50"]
+            )
 
     def test_subsets_default_to_the_full_extent(self):
         args = _build_arg_parser().parse_args([])
@@ -227,6 +241,72 @@ class TestSliceToBand:
     def test_a_band_outside_the_grid_raises(self):
         with pytest.raises(ValueError, match="no frequency inside the wavelet grid"):
             slice_to_band(np.zeros((2, 3, 3, 5)), np.array([1.0, 2.0, 3.0]), "gamma")
+
+    def test_an_explicit_range_restricts_the_frequency_axis(self):
+        data = np.zeros((2, 3, N_FREQS, 5))
+        sliced, freqs = slice_to_band(data, FREQS, (30.0, 50.0))
+        assert sliced.shape[2] == len(freqs) < N_FREQS
+        assert freqs.min() >= 30.0 and freqs.max() <= 50.0
+
+    def test_a_range_and_the_band_that_covers_it_select_the_same_bins(self):
+        """On a grid that stops at 50 Hz, gamma (30-70) IS (30, 50).
+
+        The equivalence is the reason --band_range can be trusted: it is the same
+        selection the named path makes, said explicitly.
+        """
+        data = np.zeros((2, 3, N_FREQS, 5))
+        by_name, freqs_name = slice_to_band(data, FREQS, "gamma")
+        by_range, freqs_range = slice_to_band(data, FREQS, (30.0, 50.0))
+        assert by_name.shape == by_range.shape
+        np.testing.assert_array_equal(freqs_name, freqs_range)
+
+    def test_a_range_outside_the_grid_raises_before_slicing(self):
+        with pytest.raises(ValueError, match="no frequency inside the wavelet grid"):
+            slice_to_band(
+                np.zeros((2, 3, 3, 5)), np.array([1.0, 2.0, 3.0]), (30.0, 50.0)
+            )
+
+    def test_a_reversed_range_raises(self):
+        """Silently swapping the bounds would decompose a band nobody asked for."""
+        with pytest.raises(ValueError, match="is above high"):
+            slice_to_band(np.zeros((2, 3, N_FREQS, 5)), FREQS, (50.0, 30.0))
+
+
+class TestBandSpec:
+    """The single source of truth for what is decomposed and what the store is called.
+
+    A wrong range decomposes the wrong frequencies; a wrong token lets one run
+    overwrite another's store. Both are silent, so both are tested here.
+    """
+
+    def test_none_is_broadband(self):
+        assert resolve_band_range(None) is None
+        assert band_token(None) is None
+
+    def test_a_named_band_keeps_its_name(self):
+        """Existing stores and figures must keep the paths they already have."""
+        assert resolve_band_range("alpha") == (8.0, 13.0)
+        assert band_token("alpha") == "alpha"
+
+    def test_an_explicit_range_is_named_after_its_bounds(self):
+        assert resolve_band_range((30.0, 50.0)) == (30.0, 50.0)
+        assert band_token((30.0, 50.0)) == "30-50hz"
+        assert band_token((35, 45)) == "35-45hz"
+
+    def test_a_range_and_the_band_covering_it_get_different_names(self):
+        """They may select the same bins, but they are different runs on disk."""
+        assert band_token("gamma") != band_token((30.0, 50.0))
+
+    def test_an_unknown_band_name_raises(self):
+        with pytest.raises(ValueError, match="Unknown band"):
+            resolve_band_range("assr")
+
+    @pytest.mark.parametrize(
+        "spec", [(1.0, 2.0, 3.0), (50.0, 30.0), (-1.0, 5.0), (float("nan"), 5.0)]
+    )
+    def test_a_malformed_range_raises(self, spec):
+        with pytest.raises(ValueError):
+            resolve_band_range(spec)
 
 
 class TestDecompose:
@@ -511,6 +591,34 @@ class TestComponentStore:
             n_pca=n_pca,
             processed_data_dir=store,
         )
+
+    def test_an_explicit_band_range_reaches_the_decomposition(
+        self, tmp_path, stub_loaders
+    ):
+        """The stored frequency axis must be the sliced one, not the full grid.
+
+        This is the end-to-end guard on --band_range: if the flag failed to reach
+        ``slice_to_band`` the run would decompose all 1-50 Hz while the filename still
+        claimed a band, and nothing downstream would notice.
+        """
+        store = tmp_path / "processed"
+        main(
+            _argv(
+                tmp_path,
+                "--skip_onset_average",
+                "--store_components",
+                "--store_dir",
+                str(store),
+                "--band_range",
+                "30",
+                "50",
+            )
+        )
+        results = self._load(store, band="30-50hz")
+        assert results.freqs.size < N_FREQS
+        assert results.freqs.min() >= 30.0 and results.freqs.max() <= 50.0
+        # The maps carry that same axis, so a reader cannot mis-index them.
+        assert results.tf_maps.shape[2] == results.freqs.size
 
     def test_nothing_is_stored_by_default(self, tmp_path, stub_loaders):
         store = tmp_path / "processed"

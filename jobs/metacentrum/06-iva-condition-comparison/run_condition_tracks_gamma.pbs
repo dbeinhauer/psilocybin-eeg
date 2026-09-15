@@ -1,0 +1,141 @@
+#!/bin/bash
+#PBS -N PSILO_IVA_TRACKS_06_BAND
+#PBS -l walltime=1:00:00
+#PBS -l select=1:ncpus=4:mem=200gb:scratch_local=80gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-06 IVA — condition comparison on the JoinedTracks condition,
+# restricted to the 30-50 Hz ASSR neighbourhood.
+#
+# Identical to run_condition_tracks.pbs in every respect but one:
+# --band_range 30 50 slices the pooled tensor's frequency axis BEFORE the
+# per-recording channel PCA and iva_g. See that file for the pipeline, the sign
+# handling, the plot list and the memory notes; only what the band changes is
+# documented here.
+#
+# WHY. decompose_channel_iva flattens frequency x time into one sample axis, so
+# on the 1 Hz-spaced 1-50 Hz grid the 40 Hz row is 1 bin of 50: ~98% of both the
+# PCA's variance ordering and the IVA dependence cost is computed from
+# frequencies the ASSR does not live in, and the components are free to spend
+# every --n_pca direction on whatever is most reproducible across recordings
+# (drifts, alpha) without the objective penalising it. Restricting to 30-50 Hz
+# makes every sample a gamma-band sample.
+#
+# It does NOT make IVA supervised: iva_g still maximises cross-recording
+# dependence, not stimulus locking. It removes the frequencies the objective was
+# wasting itself on — no more.
+#
+# --band_range rather than --band gamma: the two select the same 21 bins on this
+# grid (gamma is 30-70 Hz and the grid stops at 50), but the explicit window says
+# so without the reader having to know it, and it is the flag to edit for a
+# narrower try such as --band_range 35 45.
+#
+# OUTPUT, and why nothing is overwritten. The band token '30-50hz' goes into the
+# store filename and the plot path, so this run sits BESIDE the broadband one
+# rather than replacing it — which is what makes the comparison possible:
+#   data/processed/assr/iva_results/JoinedTracks/
+#       iva_channel_joined_tracks__ASSR__30-50hz__pca<N>.npz
+#   plots/06-iva-condition-comparison/JoinedTracks_ASSR/bands/iva_channel_joined_tracks/pca_<N>/
+#       30-50hz_*.png
+#
+# RESOURCES are the parent's. A band run shrinks the IVA sample axis to ~40% but
+# NOT the load-time peak: the broadband cache is read in full and sliced after,
+# so mem must stay as it is unless --n_times is also set.
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+
+WAVELET_DIR="/mnt/data/processed"
+# Root the component store resolves against; the
+# '<experiment>/iva_results/<Condition>' suffix is appended by the script. Passed
+# explicitly rather than left to the default so the destination does not depend on
+# where PROJECT_ROOT lands inside the container bind mount.
+STORE_DIR="/mnt/data/processed"
+
+# The band restriction, as (LOW HIGH) in Hz. Edit this one line to try another
+# window — e.g. "35 45" for the ASSR's immediate neighbourhood. It is applied
+# before the PCA, so it changes what is decomposed, not just what is plotted.
+BAND_RANGE=(30 50)
+
+# Everything except --n_pca, so the sweep below can vary it without having to
+# strip an element out of the array.
+COMMON_ARGS=(
+    --experiment assr
+    --conditions Placebo Psilocybin
+    --zscore_mode per_condition
+    --band_range "${BAND_RANGE[@]}"
+    --random_state 42
+    --iva_opt_approach newton
+    --iva_max_iter 1024
+    --wavelet_data_dir "$WAVELET_DIR"
+    --reuse_wavelets
+    --store_components
+    --store_dir "$STORE_DIR"
+    --n_jobs -1
+)
+
+echo "=== 30-50 Hz, full extent at $(date) ==="
+python /mnt/scripts/run_iva_condition_tracks.py \
+    --n_pca 5 \
+    "${COMMON_ARGS[@]}"
+
+# --- n_pca sweep -----------------------------------------------------------
+# One store per value, all coexisting: the filename carries both the band token
+# and pca<N>. Kept as a loop rather than a single value because the band run is
+# exactly the case where the right --n_pca may differ from the broadband one —
+# a 21-bin tensor is a simpler thing to summarise in K channel directions.
+#
+# for N_PCA in 5 10; do
+#     echo "=== 30-50 Hz, n_pca $N_PCA at $(date) ==="
+#     python /mnt/scripts/run_iva_condition_tracks.py \
+#         --n_pca "$N_PCA" \
+#         "${COMMON_ARGS[@]}"
+# done
+
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch

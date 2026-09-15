@@ -21,6 +21,7 @@ from src.definitions.fields import (  # noqa: E402
     IvaVariants,
     MusicTypeVariants,
 )
+from src.definitions.frequency import band_token  # noqa: E402
 from src.io.iva_store import (  # noqa: E402
     FORMAT_VERSION,
     ONSETS_EXTRA_PREFIX,
@@ -103,6 +104,20 @@ class TestPaths:
             )
             == "iva_channel__ASSR__alpha__pca10.npz"
         )
+
+    def test_an_explicit_frequency_window_gets_its_own_name(self):
+        """A --band_range run must not land on the broadband or named-band entry.
+
+        The token comes from :func:`~src.definitions.frequency.band_token`; the
+        sanitiser here keeps its hyphen, so the window survives verbatim and the
+        three runs are three files.
+        """
+        names = {
+            iva_results_filename(IvaVariants.CHANNEL, MusicTypeVariants.ASSR, band, 10)
+            for band in (None, "gamma", band_token((30.0, 50.0)))
+        }
+        assert len(names) == 3
+        assert "iva_channel__ASSR__30-50hz__pca10.npz" in names
 
     def test_a_pca_sweep_cannot_overwrite_itself(self, tmp_path):
         first = _save(tmp_path)

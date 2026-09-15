@@ -39,11 +39,20 @@ What it does, in order:
 
 Outputs:
 
-* ``data/processed/<experiment>/assr_trials/assr_trials__<variant>__<music>__<sel>__pca<N>.npz``
+* ``data/processed/<experiment>/assr_trials/assr_trials__<variant>__<music>[__<band>]__<sel>__pca<N>.npz``
   - the trials with both normalisations and every axis needed to interpret them.
-* ``results/<experiment>/assr_trial_stats__<sel>__pca<N>.csv`` - the test tables.
-* ``plots/06-iva-condition-comparison/<Condition>_<Music>/broadband/assr_trial_stats/``
+* ``results/<experiment>/assr_trial_stats__<sel>__<spectrum>__pca<N>.csv`` - the test
+  tables.
+* ``plots/06-iva-condition-comparison/<Condition>_<Music>/<spectrum>/assr_trial_stats/``
   - the time-course grid and the p-value summary.
+
+``<spectrum>`` is ``broadband`` by default and ``bands`` when ``--band`` names a
+band-restricted store (with the band as the first token of every filename), so a run
+over a band-restricted decomposition never lands on top of the broadband one.
+**``--band`` selects which store to read and nothing else**: the wavelet cache streamed
+here is the broadband one either way, and the frequency selections below index into it,
+so the fixed ASSR-electrode reference reads the same 40 Hz in a band run as in a
+broadband one.
 
 Examples::
 
@@ -384,6 +393,38 @@ def _wavelet_cache_path(
     return matches[-1]
 
 
+def _cache_frequency_grid(cache_paths: dict, conditions: list[str]) -> np.ndarray:
+    """The wavelet cache's own frequency axis, checked identical across conditions.
+
+    Separate from the store's axis on purpose: a band-restricted store holds only its
+    band's bins, while the cache is always the broadband one, so an index resolved on
+    one grid is meaningless on the other. Reading the header is cheap — it decompresses
+    nothing.
+
+    :param cache_paths: Condition → cache path.
+    :param conditions: Conditions to read, in order.
+    :return: The shared ``(F,)`` frequency grid in Hz.
+    :raises ValueError: If the conditions' caches were built on different grids, which
+        would make one bin index mean two frequencies.
+    """
+    grids = {
+        condition: np.asarray(
+            read_wavelet_cache_header(cache_paths[condition]).freqs, dtype=float
+        )
+        for condition in conditions
+    }
+    reference = grids[conditions[0]]
+    for condition, grid in grids.items():
+        if grid.shape != reference.shape or not np.allclose(grid, reference):
+            raise ValueError(
+                f"The {conditions[0]} and {condition} wavelet caches were built on "
+                f"different frequency grids ({reference.size} vs {grid.size} bins); a "
+                "bin index cannot mean the same frequency in both. Rebuild them with "
+                "the same wavelet settings."
+            )
+    return reference
+
+
 # ---------------------------------------------------------------------------
 # Projection
 # ---------------------------------------------------------------------------
@@ -722,26 +763,9 @@ def run(args: argparse.Namespace) -> None:
         f"({'sum' if args.mask_sum else 'mean'})"
     )
 
-    # ---- 2. frequency selections ----------------------------------------
-    selections = {
-        at.selection_label(args.center_freq, half): at.frequency_selection(
-            results.freqs, args.center_freq, half
-        )
-        for half in args.halfwidths
-    }
-    union = np.unique(np.concatenate(list(selections.values())))
-    for name, bins in selections.items():
-        _logger.info(
-            f"selection {name}: bins {bins.tolist()} = {results.freqs[bins]} Hz"
-        )
-
-    test_selection = args.test_selection or next(iter(selections))
-    if test_selection not in selections:
-        raise ValueError(
-            f"--test_selection {test_selection!r} is not among {list(selections)}."
-        )
-
-    # ---- 3. project each condition from the source cache ----------------
+    # ---- 2. the caches ---------------------------------------------------
+    # Resolved before the frequency selections, because the selections are resolved on
+    # the CACHE's frequency grid and it is the cache header that carries it.
     concat_dir = _concatenated_dir(experiment, args.wavelet_data_dir)
     store_participants = list(results.participants)
     onsets, cache_labels, cache_paths = {}, {}, {}
@@ -751,6 +775,38 @@ def run(args: argparse.Namespace) -> None:
         cache_labels[condition] = _cache_participants(concat_dir, label)
         cache_paths[condition] = _wavelet_cache_path(
             args.wavelet_data_dir, experiment, label
+        )
+
+    # ---- 3. frequency selections, resolved on the CACHE grid -------------
+    # A bin index only means something against the grid it was resolved on, and the
+    # store and the cache do NOT share one. `--band` reads a band-restricted store whose
+    # grid holds only that band's bins, while every row of this script is projected from
+    # the BROADBAND cache: on a 30-50 Hz store bin 10 is 40 Hz, but bin 10 of the cache
+    # is 11 Hz. Resolving on the store's grid therefore read every row -- the components
+    # AND the fixed binary ASSR-electrode reference, which must not move between a band
+    # run and a broadband one -- out of the wrong part of the spectrum, while leaving
+    # broadband runs correct because there the two grids coincide.
+    #
+    # The store's grid plays no part: unlike run_assr_snr_grid.py, nothing here is read
+    # off the stored sources, so the cache's grid is the only one any index is used
+    # against. The store is consulted for the spatial filters alone.
+    cache_freqs = _cache_frequency_grid(cache_paths, conditions)
+    selections = {
+        at.selection_label(args.center_freq, half): at.frequency_selection(
+            cache_freqs, args.center_freq, half
+        )
+        for half in args.halfwidths
+    }
+    union = np.unique(np.concatenate(list(selections.values())))
+    for name, bins in selections.items():
+        _logger.info(
+            f"selection {name}: cache bins {bins.tolist()} = {cache_freqs[bins]} Hz"
+        )
+
+    test_selection = args.test_selection or next(iter(selections))
+    if test_selection not in selections:
+        raise ValueError(
+            f"--test_selection {test_selection!r} is not among {list(selections)}."
         )
 
     participants = [
@@ -823,7 +879,7 @@ def run(args: argparse.Namespace) -> None:
             labels=tuple(labels),
             times=times,
             sfreq=sfreq,
-            freqs=results.freqs[bins],
+            freqs=cache_freqs[bins],
             selection=name,
             binary_channels=tuple(binary_channels),
             metadata={
@@ -848,7 +904,13 @@ def run(args: argparse.Namespace) -> None:
         for name, trial_set in trial_sets.items():
             path = at.save_assr_trials(
                 trials_root
-                / at.trials_filename(variant.value, music_type.value, name, args.n_pca),
+                / at.trials_filename(
+                    variant.value,
+                    music_type.value,
+                    name,
+                    args.n_pca,
+                    band=args.band,
+                ),
                 trial_set,
             )
             _logger.info(f"saved {path} ({path.stat().st_size / 1e6:.2f} MB)")
@@ -937,7 +999,19 @@ def run(args: argparse.Namespace) -> None:
         else ProjectPaths.PROJECT_ROOT / "results" / experiment.value
     )
     results_root.mkdir(parents=True, exist_ok=True)
-    csv_path = results_root / f"assr_trial_stats__{test_selection}__pca{args.n_pca}.csv"
+    # A band-restricted decomposition is a different product, so its table and its
+    # figures must not land on top of the broadband ones. `--band` names the store, and
+    # the canonical layout puts anything but broadband under `bands/` with the band as
+    # the first filename token.
+    spectrum = (
+        SpectrumTypeVariants.BROADBAND.value
+        if args.band is None
+        else SpectrumTypeVariants.BANDS.value
+    )
+    plot_prefix = "" if args.band is None else f"{args.band}_"
+    csv_path = results_root / (
+        f"assr_trial_stats__{test_selection}__{spectrum}__pca{args.n_pca}.csv"
+    )
     pd.concat([contrast, discrimination]).to_csv(csv_path, index=False)
     _logger.info(f"saved {csv_path}")
 
@@ -949,7 +1023,7 @@ def run(args: argparse.Namespace) -> None:
         (Path(args.save_dir) if args.save_dir else ProjectPaths.PLOTS_PATH)
         / _STAGE_DIR
         / f"{store_condition.value}_{music_type.value}"
-        / SpectrumTypeVariants.BROADBAND.value
+        / spectrum
         / _ANALYSIS_DIR
         / f"pca_{args.n_pca}"
     )
@@ -970,7 +1044,7 @@ def run(args: argparse.Namespace) -> None:
         f"40 Hz response per spatial filter — mean +/- SEM across participants, "
         f"{n_participants} participants x {n_trials} trials "
         f"({test_selection}, polarity-anchored to the ASSR electrodes)",
-        plots_dir / f"trial_course_by_source_{test_selection}.png",
+        plots_dir / f"{plot_prefix}trial_course_by_source_{test_selection}.png",
     )
 
     rng = np.random.default_rng(42)
@@ -1042,7 +1116,7 @@ def run(args: argparse.Namespace) -> None:
         fontsize=12.5,
     )
     fig.tight_layout()
-    summary_path = plots_dir / f"pvalue_summary_{test_selection}.png"
+    summary_path = plots_dir / f"{plot_prefix}pvalue_summary_{test_selection}.png"
     fig.savefig(summary_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     _logger.info(f"saved {summary_path}")

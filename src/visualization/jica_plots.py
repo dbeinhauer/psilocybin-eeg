@@ -323,6 +323,7 @@ def plot_response_courses(
     stimulus_duration: float = AssrEpoch.STIMULUS_DURATION_S,
     test_interval: Optional[tuple[float, float]] = None,
     reference_label: str = BINARY_FILTER_LABEL,
+    mask_labels: Optional[Sequence[str]] = None,
     alpha: float = 0.05,
     note: str = "",
     save_path: Optional[Path] = None,
@@ -358,6 +359,10 @@ def plot_response_courses(
     :param test_interval: Optional custom ``(start, stop)`` window the tests read,
         shaded in gold alongside the paradigm interval.
     :param reference_label: Which source label is the fixed reference.
+    :param mask_labels: Every fixed reference row present in *labels*, when the run
+        carries more than one (:data:`~src.analysis.assr_trials.MASK_LABELS`); each is
+        titled in bold as a reference rather than as a component. Defaults to just
+        *reference_label*.
     :param alpha: Significance level deciding how a *p* annotation is drawn.
     :param note: Extra clause appended to the suptitle.
     :param save_path: Optional output path.
@@ -366,6 +371,7 @@ def plot_response_courses(
     """
     labels = list(labels)
     conditions = list(conditions)
+    fixed_rows = set(mask_labels) if mask_labels else {reference_label}
     if not labels:
         return None
     for condition in conditions:
@@ -416,7 +422,7 @@ def plot_response_courses(
                 epoch_times, centre, color=colour, lw=1.9, zorder=3, label=condition
             )
 
-        is_reference = source == reference_label
+        is_reference = source in fixed_rows
         ax.set_title(
             f"{source}{'  (reference)' if is_reference else ''}",
             fontsize=12,
@@ -479,6 +485,7 @@ def plot_pvalue_summary(
     label: str,
     units: str,
     reference_label: str = BINARY_FILTER_LABEL,
+    mask_labels: Optional[Sequence[str]] = None,
     alpha: float = 0.05,
     n_bootstrap: int = 10_000,
     bootstrap_seed: int = 42,
@@ -509,7 +516,11 @@ def plot_pvalue_summary(
         :func:`~src.analysis.wavelet_jica.reference_interaction_tests`.
     :param label: Dataset label shown in the title.
     :param units: Units of the difference axis.
-    :param reference_label: Which source label is the fixed reference.
+    :param reference_label: Which source label this figure judges against.
+    :param mask_labels: Every fixed reference row present in *labels*, when the run
+        carries more than one (:data:`~src.analysis.assr_trials.MASK_LABELS`). They are
+        drawn in the left panel and kept out of the right one. Defaults to just
+        *reference_label*.
     :param alpha: Significance level.
     :param n_bootstrap: Bootstrap resamples for the intervals.
     :param bootstrap_seed: Seed, so the intervals are reproducible.
@@ -533,7 +544,11 @@ def plot_pvalue_summary(
     second = np.asarray(value_by_condition[conditions[1]], dtype=float)
     contrast_by_source = {row["source"]: row for row in contrast_rows}
     versus_by_source = {row["source"]: row for row in versus_rows}
-    ic_labels = [s for s in labels if s != reference_label]
+    # Every reference row is excluded from the right panel, not just the one this
+    # figure is about: a run with several references would otherwise judge two of them
+    # against the third as though they were components.
+    fixed_rows = set(mask_labels) if mask_labels else {reference_label}
+    ic_labels = [s for s in labels if s not in fixed_rows]
 
     fig, axes = plt.subplots(
         1, 2, figsize=(14.5, 5.0), gridspec_kw={"width_ratios": [1.0, 1.12]}
@@ -552,7 +567,7 @@ def plot_pvalue_summary(
         bootstrap_seed=bootstrap_seed,
         bootstrap=bootstrap_median_ci,
         diamond=reference_label,
-        bold_ticks={reference_label},
+        bold_ticks=fixed_rows,
     )
     axes[0].set_xlabel(f"{conditions[0]} - {conditions[1]}  ({units})")
     axes[0].set_title(
@@ -606,6 +621,7 @@ def plot_snr_vs_reference(
     label: str,
     units_by_variant: Mapping[str, str],
     reference_label: str = BINARY_FILTER_LABEL,
+    mask_labels: Optional[Sequence[str]] = None,
     condition_colors: Optional[Mapping[str, str]] = None,
     alternative: str = "less",
     alpha: float = 0.05,
@@ -629,7 +645,10 @@ def plot_snr_vs_reference(
     :param conditions: Conditions to overlay; the first is drawn higher.
     :param label: Dataset label shown in the title.
     :param units_by_variant: Variant → units of its difference axis.
-    :param reference_label: Which source label is the fixed reference.
+    :param reference_label: Which source label this figure judges against.
+    :param mask_labels: Every fixed reference row present in *labels*, when the run
+        carries more than one (:data:`~src.analysis.assr_trials.MASK_LABELS`); all of
+        them are kept out of the drawn rows. Defaults to just *reference_label*.
     :param condition_colors: Optional condition → colour mapping.
     :param alternative: Named in the panel titles, e.g. ``"less"``.
     :param alpha: Significance level deciding filled vs hollow.
@@ -643,7 +662,10 @@ def plot_snr_vs_reference(
     labels = list(labels)
     conditions = list(conditions)
     variants = list(value_by_variant)
-    ic_labels = [s for s in labels if s != reference_label]
+    # Every fixed row is excluded, not just the one being judged against — see
+    # :func:`plot_pvalue_summary`.
+    fixed_rows = set(mask_labels) if mask_labels else {reference_label}
+    ic_labels = [s for s in labels if s not in fixed_rows]
     if not variants or not ic_labels:
         return None
     for variant in variants:

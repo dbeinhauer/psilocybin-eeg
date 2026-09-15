@@ -11,25 +11,41 @@ joins of the two conditions. They differ in how the recordings are tied together
 * **jICA** lays every recording's channels side by side into a single feature axis
   and fits **one** FastICA to the lot, so a component has one **shared** source
   and a mixing column that splits into per-recording blocks.
-R
+
 **Scope.** This module stops where the decomposition stops. Everything downstream —
 the frequency selection, the projection, the stimulus-locked trials, the per-trial
-normalisation, the polarity anchoring and the paired tests — is
-decomposition-agnostic and already lives in :mod:`src.analysis.assr_trials`; jICA
-reaches it through :func:`recording_filters`, which hands over the same
-``(participants, components, channels)`` operator a stored IVA run does. Nothing
-here is reimplemented from there.
+normalisation and the paired tests — is decomposition-agnostic and already lives in
+:mod:`src.analysis.assr_trials`; jICA reaches it through
+:meth:`JointIcaResult.recording_filters` and :func:`cohort_mean_filter`, both of
+which hand over the same ``(components, channels)`` operator a stored IVA run does.
+Nothing here is reimplemented from there.
+
+The **polarity anchoring** is the one exception, and deliberately so: it is the
+one downstream step whose right granularity differs between the two
+decompositions, so jICA has its own :func:`component_polarity` rather than reusing
+:func:`~src.analysis.assr_trials.polarity_flip` directly. See below.
 
 Two consequences of the construction are worth stating before any number computed
 here is read.
 
-**There is no per-recording sign ambiguity.** A component's sign flips its map and
-its *whole* mixing column together, so a recording whose block comes out negative
-is genuinely inverted relative to the rest — a result, not an ambiguity. jICA
-therefore needs none of the two alignment passes the IVA path spends on
-``Sigma_N`` and on PC1 of the TF maps, and carries none of the risk that arbitrary
-flips manufacture a condition difference. :func:`orient_components` pins the one
-remaining global sign per component.
+**There is no per-recording sign ambiguity.** FastICA's ``E[G(w.x)]`` with an even
+contrast function is invariant under flipping an *entire* unmixing row and nothing
+else, so a component's sign flips its map and its whole mixing column together and
+a recording whose block comes out negative is genuinely inverted relative to the
+rest — a result, not an ambiguity. jICA therefore needs none of the alignment
+passes the IVA path must spend (IVA-G's ``sum_k log det Sigma_k`` *is* invariant
+under per-dataset flips, since ``det(D Sigma D) = det(Sigma) det(D)**2``, which is
+exactly why those signs are unidentifiable there), and carries none of the risk
+that arbitrary flips manufacture a condition difference.
+
+Two functions pin the one sign that *is* free, and they are the only ones that may:
+:func:`orient_components` settles it hypothesis-free at fit time, and
+:func:`component_polarity` re-pins the same single sign against a fixed electrode
+selection when a directional test needs "higher = more power there" to be true.
+Neither works per recording. Applying
+:func:`~src.analysis.assr_trials.polarity_flip` per ``(recording, component)`` here
+— the IVA convention — would overwrite a determined quantity, and under a
+recording-axis join could flip one condition of a pair and not the other.
 
 **A per-block filter is a contribution, not a component.** For component *k*::
 
@@ -49,7 +65,7 @@ from __future__ import annotations
 
 import logging
 import warnings
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Optional
 
@@ -62,64 +78,138 @@ from src.definitions.fields import ConditionVariants
 
 _logger = logging.getLogger(__name__)
 
-#: Signal-normalisation variants the stage-07 workflows run side by side. They differ
-#: in two independent ways — which signal the filter is applied to, and whether each
-#: trial is referenced to its own pre-stimulus window — and the three of them fill the
-#: reachable cells of that 2x2:
+#: Read-out variants the stage-07 workflows run side by side, keyed by a **(spatial
+#: filter, signal)** pair — the same organising idea the stage-06 IVA notebooks use.
+#: Every default variant applies a per-trial pre-stimulus baseline, so all four land in
+#: the same units (that trial's own pre-stimulus SD) and are directly comparable:
 #:
 #: .. code-block:: text
 #:
-#:                        | no per-trial baseline | per-trial pre-stimulus baseline
-#:     -------------------+-----------------------+--------------------------------
-#:     raw wavelet power  |          --           | "prestim"
-#:     z-scored (the fit) | "zscored"             | "zscored_prestim"
+#:                          | raw wavelet power | z-scored (what the fit saw)
+#:     ---------------------+-------------------+----------------------------
+#:     that block's filter  | "prestim"         | "zscored_prestim"
+#:     cohort-mean filter   | "mean_prestim"    | "mean_zscored_prestim"
 #:
-#: * ``"prestim"`` — the **raw** wavelet power is projected and every trial is
-#:   referenced to its own pre-stimulus interval
-#:   (:func:`~src.analysis.assr_trials.baseline_normalise`), so the value is a
-#:   signal-to-noise ratio in units of that trial's pre-stimulus SD. Its one flaw is
-#:   that applying the filter to un-z-scored power drops the per-channel ``1/sd``
-#:   weighting the fit folded in, so the result approximates the component rather
-#:   than reproducing it.
-#: * ``"zscored"`` — the power is z-scored along time before projection, i.e. the
-#:   filter is applied to exactly the signal the decomposition saw. **This is the
-#:   component itself, not an approximation**: the per-block terms
-#:   ``u_{b,k} . x_b^z`` sum over blocks to the global TF map. Already
-#:   dimensionless, so no per-trial baseline is applied.
-#: * ``"zscored_prestim"`` — the exact component from ``"zscored"``, then referenced
-#:   to each trial's own pre-stimulus window, which puts it in the same
-#:   pre-stimulus-SD units as the fixed reference so the two can be read on one
-#:   axis. The counterpart of the IVA stage's ``stored_prestim``.
+#: Down the **signal** axis:
 #:
-#: **The reference row is held fixed across variants.** In ``"zscored_prestim"`` the
-#: fixed-electrode row is ``"prestim"``'s verbatim — raw power through the mask,
-#: per-trial baselined — because it is the quantity a component is judged against, so
-#: holding it still is what makes the ``prestim`` / ``zscored_prestim`` comparison mean
-#: one thing: the component is derived a different way, and nothing else changed.
+#: * raw power — applying the filter to un-z-scored power drops the per-channel
+#:   ``1/sd`` weighting the fit folded in, so the result *approximates* the component.
+#: * z-scored — the filter is applied to exactly the signal the decomposition saw, so
+#:   the per-block terms ``u_{b,k} . x_b^z`` **are** the component; they sum over
+#:   blocks to the global TF map. Referenced to each trial's own pre-stimulus window
+#:   afterwards so it shares an axis with the fixed reference. The counterpart of the
+#:   IVA stage's ``stored_prestim``.
 #:
-#: Unlike the IVA stage there is no trial-count asymmetry between the variants: every
-#: route reads the same cached extent, so all of them carry the same trials and the
-#: same participants.
-SIGNAL_VARIANTS = ("prestim", "zscored", "zscored_prestim")
+#: Down the **filter** axis:
+#:
+#: * ``"own"`` — that block's own row of the unmixing matrix
+#:   (:meth:`JointIcaResult.recording_filters`), i.e. that recording's contribution to
+#:   the shared source. One operator per recording, ``C`` free parameters each.
+#: * ``"mean"`` — one cohort-mean operator shared by everybody
+#:   (:func:`cohort_mean_pattern` then :func:`cohort_mean_filter`). The point of
+#:   carrying it: a per-recording filter spends ``C`` parameters rediscovering a
+#:   stereotyped topography, and the variance of that estimate can exceed the bias it
+#:   removes. The cohort filter is the same comparison the fixed electrode mask
+#:   already makes — a single group-level spatial weighting — but learned rather than
+#:   drawn.
+#:
+#: ``"zscored"`` (z-scored signal, **no** baseline) stays a legal choice for
+#: back-compatibility, but it is not part of the default grid: without a per-trial
+#: baseline it is not in the reference's units, which is exactly what the grid is for.
+#:
+#: **The reference row is held fixed across variants** — see
+#: :data:`VARIANT_REFERENCE_FROM`. Unlike the IVA stage there is no trial-count
+#: asymmetry between variants: every route reads the same cached extent, so all of
+#: them carry the same trials and the same participants.
+#: * ``"masked"`` / ``"mean_masked"`` — either of the two above with every weight
+#:   **outside the ASSR electrodes zeroed** (:func:`~src.analysis.assr_trials.
+#:   restrict_filters_to_mask`). These sit between the two things the grid already has:
+#:   the binary reference reads the anchor electrodes with *equal* weight, an
+#:   unrestricted component reads the *whole head* with learned weights, and these read
+#:   only those electrodes with learned weights — which is what separates a better
+#:   weighting *inside* the anchor area from access to signal *outside* it, a
+#:   distinction no other row can make. Both read the **z-scored** signal, because the
+#:   weights were estimated on it: a weighted average of raw power carries each
+#:   electrode's own power level on top, the very artefact
+#:   :func:`~src.analysis.assr_trials.roi_channelwise_snr` removes from the binary row.
+#:   The IVA stage's ``masked_prestim`` / ``mean_masked_prestim``.
+SIGNAL_VARIANTS = (
+    "prestim",
+    "zscored_prestim",
+    "mean_prestim",
+    "mean_zscored_prestim",
+    "masked_prestim",
+    "mean_masked_prestim",
+    "zscored",
+)
 
-#: Which variants z-score along time before projecting, and which apply a per-trial
-#: pre-stimulus baseline afterwards. Read by the stage-07 workflows so the notebook
-#: and the CLI cannot disagree about what a variant name means.
+#: The grid the stage-07 workflows run unless told otherwise: the six
+#: (filter x signal) cells, all per-trial baselined, matching the IVA stage's grid
+#: cell for cell. ``"zscored"`` is deliberately excluded — see :data:`SIGNAL_VARIANTS`.
+DEFAULT_SIGNAL_VARIANTS = (
+    "prestim",
+    "zscored_prestim",
+    "mean_prestim",
+    "mean_zscored_prestim",
+    "masked_prestim",
+    "mean_masked_prestim",
+)
+
+#: What each variant name means, as a ``filter`` / ``zscore`` / ``baseline`` triple.
+#: Read by both the notebook and ``scripts/run_wavelet_jica.py`` so they cannot
+#: disagree about it.
 VARIANT_RECIPE = {
-    "prestim": {"zscore": False, "baseline": True},
-    "zscored": {"zscore": True, "baseline": False},
-    "zscored_prestim": {"zscore": True, "baseline": True},
+    "prestim": {"filter": "own", "zscore": False, "baseline": True},
+    "zscored_prestim": {"filter": "own", "zscore": True, "baseline": True},
+    "mean_prestim": {"filter": "mean", "zscore": False, "baseline": True},
+    "mean_zscored_prestim": {"filter": "mean", "zscore": True, "baseline": True},
+    "masked_prestim": {"filter": "masked", "zscore": True, "baseline": True},
+    "mean_masked_prestim": {"filter": "mean_masked", "zscore": True, "baseline": True},
+    "zscored": {"filter": "own", "zscore": True, "baseline": False},
 }
 
-#: Variants whose fixed-reference row is taken from another variant rather than
-#: recomputed, mapped to the variant it comes from. See :data:`SIGNAL_VARIANTS`.
-VARIANT_REFERENCE_FROM = {"zscored_prestim": "prestim"}
+#: Which variants read ONE operator shared by the whole cohort rather than each
+#: recording's own. A shared operator carries a single sign, resolved once when it was
+#: built, so a per-recording flip must never be applied to these rows. (jICA resolves
+#: one sign per component for every row, so this is bookkeeping the figures read rather
+#: than a second convention — see :func:`component_polarity`.)
+SHARED_FILTER_VARIANTS = ("mean_prestim", "mean_zscored_prestim", "mean_masked_prestim")
+
+#: Variants whose fixed-reference rows are taken from another variant rather than
+#: recomputed, mapped to the variant they come from.
+#:
+#: **Every per-trial-baselined variant borrows from** ``"prestim"``, which is the
+#: invariant the whole grid rests on: the reference is what a component is *judged
+#: against*, so holding it still is what makes a difference between two cells a
+#: difference of spatial filters and nothing else. The same rule the IVA stage applies
+#: (``run_assr_snr_grid.py`` carries ``prestim``'s reference columns verbatim into every
+#: other variant).
+#:
+#: For a variant that reads raw power the borrow is a no-op — it would recompute the
+#: identical numbers — and it is listed anyway so the invariant is stated once rather
+#: than inferred per variant. For a z-scored one it is load-bearing: the mask on
+#: z-scored data is a different quantity.
+#:
+#: ``"zscored"`` is absent on purpose: with no per-trial baseline there is nothing to
+#: put it in the borrowed rows' units, so it keeps the mask read on exactly the signal
+#: its components were read on.
+VARIANT_REFERENCE_FROM = {
+    "zscored_prestim": "prestim",
+    "mean_prestim": "prestim",
+    "mean_zscored_prestim": "prestim",
+    "masked_prestim": "prestim",
+    "mean_masked_prestim": "prestim",
+}
 
 #: Units each variant's response is in, for figure axes.
 VARIANT_UNITS = {
     "prestim": "pre-stimulus SD",
-    "zscored": "z-scored over time",
     "zscored_prestim": "pre-stimulus SD, exact component",
+    "mean_prestim": "pre-stimulus SD, cohort filter",
+    "mean_zscored_prestim": "pre-stimulus SD, cohort filter, exact component",
+    "masked_prestim": "pre-stimulus SD, ASSR electrodes only",
+    "mean_masked_prestim": "pre-stimulus SD, cohort filter, ASSR electrodes only",
+    "zscored": "z-scored over time",
 }
 
 #: Residual tolerance on ``components_ @ mixing_ - I``. Expect 1e-7 to 1e-5, not
@@ -416,9 +506,13 @@ class JointIcaResult:
     def recording_patterns(self, layout: JoinLayout, condition: str) -> np.ndarray:
         """``(P, K, C)`` forward patterns, one per participant, for one condition.
 
-        The counterpart of :meth:`recording_filters` on the forward side, and the
-        input :func:`~src.analysis.assr_trials.polarity_flip` needs: a polarity anchor
-        must read the **pattern**, never the filter.
+        The counterpart of :meth:`recording_filters` on the forward side: the
+        topographies, and what belongs on a topomap. A polarity anchor must read the
+        **pattern**, never the filter — but in jICA it must also read it at
+        :func:`component_polarity`'s granularity, one sign for the whole component.
+        Handing these per-recording patterns to
+        :func:`~src.analysis.assr_trials.polarity_flip` reproduces the IVA convention,
+        which is wrong here: see the module docstring.
 
         :param layout: The join this result was fitted on.
         :param condition: Condition whose recordings are wanted.
@@ -647,6 +741,401 @@ def orient_components(result: JointIcaResult) -> JointIcaResult:
         signs=signs[order],
         order=order,
     )
+
+
+# ---------------------------------------------------------------------------
+# The cohort-mean spatial filter, and the one sign per component
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CohortPattern:
+    """One forward topography per component, averaged over every channel block.
+
+    :param pattern: ``(K, C)`` cohort-mean forward model.
+    :param cosine: ``(B, K)`` cosine between each block's own pattern and the mean.
+        **This is the number that says whether the mean is a consensus or a
+        cancellation.** Values near 1 mean the cohort agrees about where component *k*
+        sits; values scattered around 0, or negative for a substantial share of blocks,
+        mean it does not — and then the mean topography is a weak operator whatever its
+        norm says.
+    :param normalized: Whether each block's pattern was scaled to unit L2 norm before
+        averaging.
+    :param aligned: Whether block signs were flipped toward the anchor before
+        averaging. ``False`` is the jICA default; see :func:`cohort_mean_pattern`.
+    """
+
+    pattern: np.ndarray
+    cosine: np.ndarray
+    normalized: bool
+    aligned: bool
+
+    @property
+    def n_components(self) -> int:
+        """Number of components ``K``."""
+        return self.pattern.shape[0]
+
+    def disagreeing_blocks(self) -> np.ndarray:
+        """``(K,)`` count of blocks whose pattern points away from the cohort mean."""
+        return (self.cosine < 0.0).sum(axis=0)
+
+
+def cohort_mean_pattern(
+    patterns: np.ndarray,
+    *,
+    normalize: bool = True,
+    align_to: Optional[np.ndarray] = None,
+) -> CohortPattern:
+    """Average the per-block forward patterns into one topography per component.
+
+    The operator behind the ``mean_*`` variants (:data:`SIGNAL_VARIANTS`), and the
+    thing :func:`component_polarity` anchors the component sign to.
+
+    Averaged over **every** block, both conditions pooled. Never per condition: a
+    condition-specific filter would break the exchangeability the paired contrast rests
+    on, because a difference could then come from the operator having changed rather
+    than from the signal. (Under
+    :attr:`~src.definitions.fields.ConditionVariants.JOINED_TRACKS` the patterns are
+    shared anyway, so this only bites under ``JOINED``.)
+
+    Each pattern is scaled to **unit L2 norm** first. That matters more here than it
+    does for IVA: jICA's per-block loadings are unconstrained and can be wildly uneven,
+    so without it a single high-loading block would set the cohort topography by itself.
+
+    **Signs are left as the fit produced them by default**, and that is the one
+    deliberate departure from the stage-06 IVA construction. IVA flips each
+    ``(recording, component)`` pattern toward the anchor before averaging, and must:
+    IVA-G's objective is invariant under per-dataset sign flips, so those signs are
+    arbitrary. FastICA's is invariant only under flipping an *entire* unmixing row, so
+    a jICA block's sign is a **result** — a block that comes out negative genuinely
+    points away from the rest. Aligning first would manufacture a coherent cohort
+    topography where the cohort has none. :attr:`CohortPattern.cosine` is what reports
+    whether that happened, and *align_to* is kept so the two can be compared.
+
+    :param patterns: ``(B, K, C)`` per-block forward patterns, e.g.
+        :attr:`JointIcaResult.patterns`. **Not** mutated.
+    :param normalize: Scale each block's pattern to unit L2 norm before averaging.
+    :param align_to: Boolean ``(C,)`` anchor mask. When given, each block's pattern is
+        first flipped so its correlation with the mask is non-negative — the stage-06
+        convention. ``None`` (the default) leaves the fit's own signs alone.
+    :return: The cohort pattern and its per-block cosine diagnostic.
+    :raises ValueError: If *patterns* is not 3-D, is empty on any axis, or *align_to*
+        does not match its channel axis.
+    """
+    array = np.asarray(patterns, dtype=float)
+    if array.ndim != 3:
+        raise ValueError(f"patterns must be (B, K, C); got shape {array.shape}.")
+    if min(array.shape) == 0:
+        raise ValueError(
+            f"patterns must be non-empty on every axis; got shape {array.shape}."
+        )
+
+    scaled = array
+    if normalize:
+        norms = np.linalg.norm(scaled, axis=2, keepdims=True)
+        # A block with an all-zero pattern contributes nothing either way; leave it at
+        # zero rather than dividing by it.
+        scaled = np.divide(scaled, norms, out=np.zeros_like(scaled), where=norms > 0.0)
+
+    aligned = align_to is not None
+    if aligned:
+        mask = np.asarray(align_to, dtype=bool)
+        if mask.ndim != 1 or mask.size != array.shape[-1]:
+            raise ValueError(
+                f"align_to must be ({array.shape[-1]},) to match the patterns' channel "
+                f"axis; got {mask.shape}."
+            )
+        from src.analysis import assr_trials as _at  # local: avoids an import cycle
+
+        flip, _strength = _at.polarity_flip(scaled, mask)
+        scaled = scaled * flip[:, :, np.newaxis]
+
+    mean = scaled.mean(axis=0)  # (K, C)
+
+    # Cosine of every block against the mean, per component. Computed on the same
+    # (possibly flipped, possibly normalised) patterns the mean was built from, so it
+    # describes that mean rather than some other quantity.
+    mean_norm = np.linalg.norm(mean, axis=1)  # (K,)
+    block_norm = np.linalg.norm(scaled, axis=2)  # (B, K)
+    denominator = block_norm * mean_norm[np.newaxis, :]
+    numerator = np.einsum("bkc,kc->bk", scaled, mean)
+    cosine = np.divide(
+        numerator, denominator, out=np.zeros_like(numerator), where=denominator > 0.0
+    )
+
+    return CohortPattern(
+        pattern=mean,
+        cosine=np.clip(cosine, -1.0, 1.0),
+        normalized=normalize,
+        aligned=aligned,
+    )
+
+
+def cohort_mean_filter(
+    mean_pattern: np.ndarray,
+    *,
+    tolerance: float = 1e-6,
+) -> np.ndarray:
+    """Invert a cohort forward model into the backward operator that extracts it.
+
+    The forward pattern says how a source projects onto the channels; the **filter** is
+    what recovers it from them, and the two are not interchangeable (Haufe et al., 2014,
+    NeuroImage 87:96-110). This is the same ``pinv`` composition the stage-06 IVA
+    notebooks use for their cohort filter, so the two stages' ``mean_*`` rows are the
+    same kind of operator.
+
+    The round trip is checked rather than trusted: averaging patterns can leave a
+    rank-deficient forward model — most easily when two components' cohort topographies
+    collapse onto each other — and the pseudo-inverse of that is not the operator it
+    claims to be.
+
+    :param mean_pattern: ``(K, C)`` cohort forward model, from
+        :func:`cohort_mean_pattern`.
+    :param tolerance: Largest tolerated ``max |U A - I|``.
+    :return: ``(K, C)`` backward operator.
+    :raises ValueError: If *mean_pattern* is not 2-D, or the round trip exceeds
+        *tolerance*.
+    """
+    forward = np.asarray(mean_pattern, dtype=float)
+    if forward.ndim != 2:
+        raise ValueError(f"mean_pattern must be (K, C); got shape {forward.shape}.")
+    n_components = forward.shape[0]
+
+    backward = np.linalg.pinv(forward.T)  # (K, C)
+    residual = float(np.abs(backward @ forward.T - np.eye(n_components)).max())
+    if residual > tolerance:
+        raise ValueError(
+            f"The cohort filter does not invert the cohort pattern (max residual "
+            f"{residual:.2e} > {tolerance:.0e}). The averaged forward model is "
+            "rank-deficient — most likely two components' cohort topographies have "
+            "collapsed onto each other — so the pseudo-inverse is not the operator it "
+            "claims to be. Lower n_ica, or read the per-block cosine diagnostic."
+        )
+    return backward
+
+
+def component_polarity(
+    mean_pattern: np.ndarray,
+    electrode_mask: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """**One** sign per component, anchored to a fixed electrode selection.
+
+    The whole of the sign freedom jICA leaves. :func:`orient_components` has already
+    pinned it once, hypothesis-free (largest ``|TF|`` excursion positive), which says
+    nothing about the electrodes a directional test cares about. This re-pins the same
+    single sign so that "higher means more power over the anchor area" is true of the
+    **component**, which is what a one-sided prior needs in order to be stated at all.
+
+    **Why one sign and not one per recording.** FastICA's ``E[G(w.x)]`` with even ``G``
+    is invariant under flipping an entire unmixing row and nothing else, so after
+    :func:`orient_components` there is no per-recording sign left to resolve — a block
+    that comes out negative is genuinely inverted relative to the rest, a result rather
+    than an ambiguity. Flipping per recording, as the IVA stage must
+    (:func:`~src.analysis.assr_trials.polarity_flip`, where IVA-G's invariance makes
+    those signs arbitrary), would overwrite that result. Worse, under a
+    recording-axis join it is resolved per ``(participant, condition)``, so one
+    condition of a pair can flip and the other not — which turns the paired difference
+    into a paired *sum*.
+
+    Being one vector over components, this sign is identical for every participant and
+    both conditions, so it cannot manufacture a condition difference under any join.
+    And it reads only a spatial property, never the tested response.
+
+    :param mean_pattern: ``(K, C)`` cohort forward model, from
+        :func:`cohort_mean_pattern`. The anchor is deliberately the same object the
+        ``mean_*`` variants filter with, so the sign convention and that filter cannot
+        disagree about which way a component points.
+    :param electrode_mask: Boolean ``(C,)`` anchor selection.
+    :return: ``(flip, strength)`` — ``flip`` is ``(K,)`` of +-1, ``strength`` is
+        ``(K,)`` of ``|corr(pattern, mask)|``, to be read against
+        :data:`~src.analysis.assr_trials.POLARITY_CORR_FLOOR`.
+    :raises ValueError: If *mean_pattern* is not 2-D, or whatever
+        :func:`~src.analysis.assr_trials.polarity_flip` rejects.
+    """
+    from src.analysis import assr_trials as _at  # local: avoids an import cycle
+
+    forward = np.asarray(mean_pattern, dtype=float)
+    if forward.ndim != 2:
+        raise ValueError(f"mean_pattern must be (K, C); got shape {forward.shape}.")
+    # polarity_flip works per (recording, component); one "recording" here is the
+    # cohort, so the same criterion and the same floor apply unchanged.
+    flip, strength = _at.polarity_flip(forward[np.newaxis], electrode_mask)
+    return flip[0], strength[0]
+
+
+# ---------------------------------------------------------------------------
+# The retained-subspace reference rows
+# ---------------------------------------------------------------------------
+
+
+def subspace_mask_rows(
+    result: JointIcaResult,
+    mask_weights: np.ndarray,
+) -> np.ndarray:
+    """Each block's electrode mask, carried through the joint channel reduction.
+
+    The operator behind the ``ASSR-mask (PCA)`` and ``ASSR-mask (PCA, z)`` reference
+    rows (:data:`~src.analysis.assr_trials.MASK_LABELS`): the same fronto-central
+    average the binary row takes, but reading **only what the reduction left
+    available** — so a component is compared against a reference that lives in the
+    same subspace it does, rather than against one with access to directions the fit
+    threw away.
+
+    With orthonormal-row PCA loadings ``P``, the part of the data the fit could use is
+    ``P^T P x`` — a rank-``K`` orthogonal projector — and it is recoverable from the
+    operators already in hand, because ``A W = I``
+    (:meth:`JointIcaResult.identity_error` is the check)::
+
+        mixing @ unmixing = (P^T A) (W P) = P^T P
+
+    So the row for block *b* is ``m_b^T P^T P``, and it factors through the components
+    without ever forming the ``(B*C, B*C)`` matrix::
+
+        coeffs = patterns @ mask          # (B, K)   = m_b^T P^T A
+        rows   = coeffs @ unmixing        # (B, B*C) = m_b^T P^T P
+
+    **A row spans every block, not just its own, and that is the point.** jICA reduces
+    the *stacked* channel axis, so the subspace couples the recordings: what the fit
+    was handed for recording *b* at one sample genuinely depends on the other
+    recordings at that sample. This is the one place the stage-07 reference differs in
+    kind from the stage-06 one, whose PCA is fitted per recording
+    (:func:`~src.analysis.assr_trials.pca_mask_rows`) and so has no cross-block term.
+    Read that as a property of the decomposition rather than of the reference: a
+    per-block restriction would be cheaper and look more like the IVA row, but it is
+    not the operator this fit applied.
+
+    :param result: The fitted decomposition.
+    :param mask_weights: ``(C,)`` weights over one block's channels, e.g.
+        :func:`~src.analysis.assr_trials.binary_filter_weights` of the ASSR mask.
+    :return: ``(B, B*C)`` rows, one per channel block, in feature-axis order.
+    :raises ValueError: If *mask_weights* does not match the channel axis.
+    """
+    patterns = np.asarray(result.patterns, dtype=float)  # (B, K, C)
+    weights = np.asarray(mask_weights, dtype=float)
+    if weights.ndim != 1 or weights.size != patterns.shape[2]:
+        raise ValueError(
+            f"mask_weights must be ({patterns.shape[2]},) to match the channel axis; "
+            f"got {weights.shape}."
+        )
+    unmixing = np.asarray(result.filters, dtype=float).reshape(
+        result.n_components, -1
+    )  # (K, B*C)
+    return (patterns @ weights) @ unmixing
+
+
+def subspace_reference_rows(
+    raw_by_condition: Mapping[str, np.ndarray],
+    layout: JoinLayout,
+    mask_rows: np.ndarray,
+    bins: Sequence[int],
+    *,
+    zscore: bool,
+) -> dict[str, np.ndarray]:
+    """Apply :func:`subspace_mask_rows` to the data, per condition and participant.
+
+    The rows span the whole stacked feature axis, so the data has to be stacked the
+    way the fit stacked it before they can be applied — which is what this does, on
+    the frequency selection rather than the whole grid. Averaging over the selection
+    commutes with the rows (they act on channels alone), so the band mean is taken
+    first and the stacked array is ``(B*C, T)`` rather than ``(B*C, F_sel, T)``.
+
+    *zscore* selects which of the two PCA references is being built: ``False`` reads
+    RAW power (``ASSR-mask (PCA)``), ``True`` reads the z-scored signal the fit was
+    handed (``ASSR-mask (PCA, z)``). The standardisation is per ``(block, channel,
+    frequency)`` over that condition's own time axis, exactly as :func:`assemble_join`
+    does it, so restricting to the selection's bins first changes nothing.
+
+    **Expect the raw row to be the weaker of the two here**, which is a property of the
+    joint reduction rather than a fault. The retained directions were chosen on
+    *z-scored* data over ``B*C`` features, so raw power — whose variance is dominated by
+    each channel's own scale — is close to orthogonal to them, and ``K`` of a few
+    thousand directions leaves little of the mask standing either way
+    (:attr:`JointIcaResult.retained` is the honest summary). The stage-06 row of the
+    same name is reduced per recording, ``C -> K``, so far more of the mask survives
+    there; the two are the same construction on decompositions that kept different
+    amounts, not two different constructions. The per-trial baseline downstream puts
+    both in pre-stimulus-SD units regardless, which is what makes them comparable to
+    the equal-weight row at all.
+
+    :param raw_by_condition: Condition → ``(P, C, F, T)`` **un-z-scored** power, the
+        same arrays the layout was assembled from.
+    :param layout: The join the decomposition was fitted on.
+    :param mask_rows: ``(B, B*C)`` rows from :func:`subspace_mask_rows`.
+    :param bins: Frequency bins of this selection, indexing the ``F`` axis.
+    :param zscore: Read the z-scored signal instead of raw power.
+    :return: Condition → ``(P, T)`` reference row per participant, rows in
+        :attr:`JoinLayout.participants` order.
+    :raises ValueError: If *mask_rows* does not match the layout, or a condition's
+        array is missing.
+    """
+    rows = np.asarray(mask_rows, dtype=float)
+    n_features = layout.n_blocks * layout.n_channels
+    if rows.shape != (layout.n_blocks, n_features):
+        raise ValueError(
+            f"mask_rows must be ({layout.n_blocks}, {n_features}) to match the "
+            f"layout's stacked feature axis; got {rows.shape}."
+        )
+    for condition in layout.conditions:
+        if condition not in raw_by_condition:
+            raise ValueError(f"No array supplied for condition {condition!r}.")
+
+    selection = np.asarray(bins, dtype=int)
+    # Under JOINED every block already names its own condition, so one stacked array
+    # serves both; under JOINED_TRACKS a block is a participant and the array is that
+    # condition's own track. Keyed accordingly so the shared case is built once.
+    stacked_by_key: dict[Optional[str], np.ndarray] = {}
+    out: dict[str, np.ndarray] = {}
+    for condition in layout.conditions:
+        key = None if layout.join is ConditionVariants.JOINED else condition
+        if key not in stacked_by_key:
+            stacked_by_key[key] = _stacked_band(
+                raw_by_condition, layout, condition, selection, zscore=zscore
+            )
+        projected = rows @ stacked_by_key[key]  # (B, T)
+        out[condition] = projected[
+            [layout.block_of(p, condition) for p in layout.participants]
+        ]
+    return out
+
+
+def _stacked_band(
+    raw_by_condition: Mapping[str, np.ndarray],
+    layout: JoinLayout,
+    condition: str,
+    bins: np.ndarray,
+    *,
+    zscore: bool,
+) -> np.ndarray:
+    """``(B*C, T)`` band-averaged data, stacked block-slow / channel-fast.
+
+    The same feature order :func:`assemble_join` builds, which is what makes the rows
+    of :func:`subspace_mask_rows` applicable to it.
+
+    :param raw_by_condition: Condition → ``(P, C, F, T)`` un-z-scored power.
+    :param layout: The join being read.
+    :param condition: Condition whose time axis is being built. Blocks that name their
+        own condition (a recording-axis join) read theirs; blocks that do not (a time
+        join) read this one.
+    :param bins: Frequency bins to average over.
+    :param zscore: Standardise each ``(channel, frequency)`` series over time first.
+    :return: The stacked array.
+    """
+    n_channels = layout.n_channels
+    n_times = np.asarray(raw_by_condition[condition]).shape[-1]
+    stacked = np.empty((layout.n_blocks * n_channels, n_times), dtype=float)
+    row_of = {participant: r for r, participant in enumerate(layout.participants)}
+    for block, (participant, block_condition) in enumerate(layout.blocks):
+        source = np.asarray(
+            raw_by_condition[condition if block_condition is None else block_condition]
+        )
+        band = np.asarray(source[row_of[participant]][:, bins, :], dtype=float)
+        if zscore:
+            mean = band.mean(axis=-1, keepdims=True)
+            deviation = band.std(axis=-1, keepdims=True)
+            band = (band - mean) / np.where(deviation == 0.0, 1.0, deviation)
+        start = block * n_channels
+        stacked[start : start + n_channels] = band.mean(axis=1)
+    return stacked
 
 
 # ---------------------------------------------------------------------------

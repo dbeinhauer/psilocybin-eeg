@@ -29,15 +29,23 @@ from scripts.run_wavelet_jica import (  # noqa: E402
     _build_arg_parser,
     main,
 )
+from src.analysis.assr_trials import (  # noqa: E402
+    FULL_MASK_LABEL,
+    MASK_LABELS,
+    MASK_SLUGS,
+)
 from src.analysis.data_representations import (  # noqa: E402
     AnalysisData,
     DataRepresentation,
 )
+from src.analysis.wavelet_jica import VARIANT_RECIPE  # noqa: E402
 from src.definitions.constants import ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
     ConditionVariants,
+    ExperimentNames,
     JicaVariants,
     SingleDataMetadata,
+    SpectrumTypeVariants,
 )
 
 SFREQ = 250.0
@@ -248,21 +256,115 @@ class TestCliDefaults:
         # to recover less than a fixed selection aimed at the response.
         assert args.snr_alternative == "less"
 
-    def test_all_three_signal_variants_run_by_default(self):
-        assert _build_arg_parser().parse_args([]).signal_variants == [
+    def test_the_filter_by_signal_grid_runs_by_default(self):
+        """Six cells, every one per-trial baselined so all six share units.
+
+        The IVA stage's grid cell for cell, which is what makes a row of either CSV
+        readable against the other. ``zscored`` is deliberately absent: without a
+        baseline it is not in the reference's units, which is the whole point of
+        running a grid.
+        """
+        variants = _build_arg_parser().parse_args([]).signal_variants
+        assert variants == [
             "prestim",
-            "zscored",
             "zscored_prestim",
+            "mean_prestim",
+            "mean_zscored_prestim",
+            "masked_prestim",
+            "mean_masked_prestim",
         ]
+        assert "zscored" not in variants
+        assert all(VARIANT_RECIPE[v]["baseline"] for v in variants)
+        # Three spatial filters x (raw | z-scored), minus the two cells a restricted
+        # filter does not have: the weights presume the scaling they were fitted on, so
+        # the masked pair reads the z-scored signal only.
+        assert sorted(VARIANT_RECIPE[v]["filter"] for v in variants) == [
+            "masked",
+            "mean",
+            "mean",
+            "mean_masked",
+            "own",
+            "own",
+        ]
+        assert sum(VARIANT_RECIPE[v]["zscore"] for v in variants) == 4
+
+    def test_the_cohort_filter_is_not_pre_aligned_by_default(self):
+        """A jICA block's sign is a result, so aligning before averaging invents one."""
+        args = _build_arg_parser().parse_args([])
+        assert args.mean_filter_align is False
+        assert args.mean_filter_raw_patterns is False
 
     def test_a_variant_that_borrows_its_reference_needs_the_source_variant(self):
         """Holding the reference fixed is what isolates how the component was derived."""
         with pytest.raises(ValueError, match="fixed-reference row"):
             main(["--signal_variants", "zscored_prestim", "--skip_analysis"])
 
+    def test_a_raw_signal_variant_may_still_run_on_its_own(
+        self, stub_loaders, tmp_path
+    ):
+        """It borrows too, but the borrow is a no-op, so requiring `prestim` would be
+        an obstacle rather than a safeguard: the fixed rows do not depend on the
+        learned filter, so recomputing them gives the identical numbers.
+        """
+        results_dir = tmp_path / "results"
+        main(
+            _argv(
+                tmp_path / "plots",
+                results_dir,
+                "--signal_variants",
+                "mean_prestim",
+            )
+        )
+        frame = pd.read_csv(
+            results_dir / f"jica_tests__joined_tracks__ASSR__ica{N_ICA}.csv"
+        )
+        assert set(frame["variant"]) == {"mean_prestim"}
+
     def test_a_single_condition_is_refused(self):
         with pytest.raises(ValueError, match="exactly two distinct conditions"):
             main(["--conditions", "Placebo", "Placebo", "--skip_analysis"])
+
+
+@pytest.mark.parametrize("join", ["joined_tracks", "joined"])
+class TestWaveletCache:
+    """The stage-03 caches are read, never silently recomputed."""
+
+    def test_the_source_cache_path_carries_the_band_subdirectory(
+        self, join, stub_loaders, monkeypatch, tmp_path
+    ):
+        """A path one level up is a cache miss, and a miss recomputes tens of GB.
+
+        The loaders take the cache directory with the band subdirectory already on it,
+        so resolving only ``<experiment>/wavelets`` matches nothing and sends the run
+        through the Morlet transform again — on the spliced signal, which is not what
+        the cache holds.
+        """
+        seen: list[Path] = []
+        stubbed = notebook_helpers.compute_wavelet_datasets
+
+        def spy(*args, **kwargs):
+            seen.append(Path(kwargs["wavelet_dir"]))
+            return stubbed(*args, **kwargs)
+
+        monkeypatch.setattr(notebook_helpers, "compute_wavelet_datasets", spy)
+        main(
+            _argv(
+                tmp_path / "plots",
+                tmp_path / "results",
+                "--join",
+                join,
+                "--skip_decomposition_plots",
+                "--skip_analysis",
+            )
+        )
+
+        assert seen, "the loaders were never asked for a wavelet dataset"
+        for path in seen:
+            assert path.parts[-3:] == (
+                ExperimentNames.ASSR.value,
+                "wavelets",
+                SpectrumTypeVariants.BROADBAND.value,
+            )
 
 
 @pytest.mark.parametrize("join", ["joined_tracks", "joined"])
@@ -278,11 +380,27 @@ class TestEndToEnd:
         assert (decomposition / "loading_bars_within_component.png").is_file()
 
         analysis = _analysis_dir(save_dir, join)
-        assert (analysis / "trial_course_by_source_40hz_prestim.png").is_file()
-        assert (analysis / "trial_course_by_source_40hz_zscored.png").is_file()
-        assert (analysis / "trial_course_by_source_40hz_zscored_prestim.png").is_file()
-        assert (analysis / "pvalue_summary_40hz_prestim.png").is_file()
-        assert (analysis / "snr_vs_reference_40hz.png").is_file()
+        # One course figure per cell of the (filter x signal) grid.
+        for variant in (
+            "prestim",
+            "zscored_prestim",
+            "mean_prestim",
+            "mean_zscored_prestim",
+            "masked_prestim",
+            "mean_masked_prestim",
+        ):
+            assert (
+                analysis / f"trial_course_by_source_40hz_{variant}.png"
+            ).is_file(), variant
+        # ...and one p-value / SNR figure per REFERENCE row, because "better than the
+        # reference?" is a different question for each of the three.
+        for slug in MASK_SLUGS.values():
+            assert (analysis / f"pvalue_summary_40hz_prestim_{slug}.png").is_file(), (
+                slug
+            )
+            assert (analysis / f"snr_vs_reference_40hz_{slug}.png").is_file(), slug
+        # Off by default, so it must not have been drawn.
+        assert not (analysis / "trial_course_by_source_40hz_zscored.png").exists()
 
     def test_the_shared_side_gets_the_shared_figure_name(
         self, join, stub_loaders, tmp_path
@@ -316,7 +434,21 @@ class TestEndToEnd:
         # Both --halfwidths are carried through, so a result can be checked against
         # the other frequency window without a second run.
         assert set(frame["selection"]) == {"40hz", "35-45hz"}
-        assert set(frame["variant"]) == {"prestim", "zscored", "zscored_prestim"}
+        assert set(frame["variant"]) == {
+            "prestim",
+            "zscored_prestim",
+            "mean_prestim",
+            "mean_zscored_prestim",
+            "masked_prestim",
+            "mean_masked_prestim",
+        }
+        # Both reference-taking families name which of the three they were judged
+        # against, so a row is never ambiguous about what it was compared to.
+        for family in ("vs_reference", "snr"):
+            assert set(frame[frame["family"] == family]["reference"]) == set(
+                MASK_LABELS
+            ), family
+        assert frame[frame["family"] == "contrast"]["reference"].isna().all()
         for column in (
             "median",
             "effect",
@@ -330,15 +462,15 @@ class TestEndToEnd:
         assert ((frame["p"] > 0) & (frame["p"] <= 1)).all()
         assert (frame["n_participants"] == 4).all()
 
-    def test_the_borrowed_reference_row_is_identical_and_the_components_are_not(
+    def test_one_reference_row_serves_the_whole_grid(
         self, join, stub_loaders, tmp_path
     ):
-        """The invariant that makes 'zscored_prestim' interpretable.
+        """The invariant that makes the grid readable.
 
-        Its fixed-electrode row is 'prestim''s verbatim, so the two variants are judged
-        against exactly the same numbers and any difference between them is the cost of
-        'prestim' approximating the component rather than reproducing it. If the
-        reference drifted too, the comparison would confound the two.
+        Every cell is judged against exactly the same fixed-electrode numbers, so a
+        difference between two cells isolates the axis they differ on — the filter, or
+        the signal — and never the reference. If the reference drifted too, the
+        comparison would confound them.
         """
         results_dir = tmp_path / "results"
         main(_argv(tmp_path / "plots", results_dir, "--join", join))
@@ -348,12 +480,38 @@ class TestEndToEnd:
         ]
         by_variant = contrast.set_index(["variant", "source"])["median"]
 
-        reference = "ASSR-mask"
-        assert by_variant[("zscored_prestim", reference)] == pytest.approx(
-            by_variant[("prestim", reference)]
-        )
-        # The learned rows are read a different way, so they must NOT match.
+        for reference in MASK_LABELS:
+            baseline = by_variant[("prestim", reference)]
+            for variant in (
+                "zscored_prestim",
+                "mean_prestim",
+                "mean_zscored_prestim",
+                "masked_prestim",
+                "mean_masked_prestim",
+            ):
+                assert by_variant[(variant, reference)] == pytest.approx(baseline), (
+                    variant,
+                    reference,
+                )
+
+    def test_each_axis_of_the_grid_actually_moves_the_components(
+        self, join, stub_loaders, tmp_path
+    ):
+        """Otherwise a cell is a relabelling rather than a different read-out."""
+        results_dir = tmp_path / "results"
+        main(_argv(tmp_path / "plots", results_dir, "--join", join))
+        frame = pd.read_csv(results_dir / f"jica_tests__{join}__ASSR__ica{N_ICA}.csv")
+        contrast = frame[
+            (frame["family"] == "contrast") & (frame["selection"] == "40hz")
+        ]
+        by_variant = contrast.set_index(["variant", "source"])["median"]
+
+        # Signal axis: raw power drops the per-channel 1/sd weighting the fit folded in.
         assert by_variant[("zscored_prestim", "IC 1")] != pytest.approx(
+            by_variant[("prestim", "IC 1")]
+        )
+        # Filter axis: one cohort operator for everybody is not each block's own row.
+        assert by_variant[("mean_prestim", "IC 1")] != pytest.approx(
             by_variant[("prestim", "IC 1")]
         )
 
@@ -364,12 +522,208 @@ class TestEndToEnd:
         main(_argv(tmp_path / "plots", results_dir, "--join", join))
         frame = pd.read_csv(results_dir / f"jica_tests__{join}__ASSR__ica{N_ICA}.csv")
         contrast = frame[frame["family"] == "contrast"]
-        # The fixed reference is contrasted like any other source; the interaction
-        # family compares only the learned rows against it.
-        assert "ASSR-mask" in set(contrast["source"])
-        assert "ASSR-mask" not in set(
+        # Every fixed reference is contrasted like any other source; the interaction
+        # family compares only the learned rows against them — a reference judged
+        # against another reference is not what either family asks.
+        assert set(MASK_LABELS) <= set(contrast["source"])
+        assert not set(MASK_LABELS) & set(
             frame[frame["family"] == "vs_reference"]["source"]
         )
+
+
+@pytest.mark.parametrize("join", ["joined_tracks", "joined"])
+class TestComponentPolarity:
+    """jICA orients each component ONCE, never per recording.
+
+    FastICA's objective is invariant under flipping an entire unmixing row and nothing
+    else, so after ``orient_components`` a block that comes out negative is genuinely
+    inverted relative to the rest — a result, not an ambiguity. IVA-G's is invariant
+    under per-dataset flips, which is why the IVA stage must anchor per recording and
+    this one must not.
+    """
+
+    @pytest.fixture
+    def flip_spy(self, monkeypatch):
+        """Record every flip vector the read-out applies to the reduced values."""
+        applied = []
+        original = run_wavelet_jica.component_polarity
+
+        def spy(mean_pattern, electrode_mask):
+            flip, strength = original(mean_pattern, electrode_mask)
+            applied.append({"flip": flip, "strength": strength})
+            return flip, strength
+
+        monkeypatch.setattr(run_wavelet_jica, "component_polarity", spy)
+        return applied
+
+    def test_the_sign_is_resolved_once_for_the_whole_cohort(
+        self, join, flip_spy, stub_loaders, tmp_path
+    ):
+        """One vector over components — not one per participant, not one per condition.
+
+        A ``(participants, components)`` flip is the failure this test exists to catch.
+        Under ``--join joined`` it would be resolved per (participant, condition), so a
+        participant could flip under Placebo and not under Psilocybin — which turns the
+        paired difference ``placebo - psilocybin`` into ``placebo + psilocybin``.
+        """
+        main(
+            _argv(
+                tmp_path / "plots",
+                tmp_path / "results",
+                "--join",
+                join,
+                "--skip_decomposition_plots",
+            )
+        )
+        assert len(flip_spy) == 1, "the sign must be resolved once, not per condition"
+        flip = flip_spy[0]["flip"]
+        assert flip.shape == (N_ICA,)
+        assert set(np.unique(flip)) <= {-1.0, 1.0}
+
+    def test_the_anchor_negates_exactly_the_components_it_flips(
+        self, join, flip_spy, stub_loaders, tmp_path
+    ):
+        """Turning it off must recover the fit's own signs, component by component.
+
+        Asserted against the flip vector the run actually resolved rather than against
+        an assumption about which way the fixture's components happen to point, so the
+        test says what it means whether or not any component needs flipping.
+        """
+        results = tmp_path / "results"
+        for name, extra in (("on", []), ("off", ["--no_polarity_anchor"])):
+            main(
+                _argv(
+                    tmp_path / name,
+                    results / name,
+                    "--join",
+                    join,
+                    "--skip_decomposition_plots",
+                    *extra,
+                )
+            )
+
+        def _contrast(root):
+            frame = pd.read_csv(root / f"jica_tests__{join}__ASSR__ica{N_ICA}.csv")
+            rows = frame[
+                (frame["family"] == "contrast") & (frame["selection"] == "40hz")
+            ]
+            return rows.set_index(["variant", "source"])["median"]
+
+        on, off = _contrast(results / "on"), _contrast(results / "off")
+        # Both runs resolve the same flip; only the second declines to apply it.
+        flip = flip_spy[0]["flip"]
+        for k in range(N_ICA):
+            source = f"IC {k + 1}"
+            assert on[("prestim", source)] == pytest.approx(
+                flip[k] * off[("prestim", source)]
+            ), source
+        # The reference is never flipped under either setting: it is a non-negative
+        # electrode average, so "higher = more power there" already holds for it.
+        assert on[("prestim", FULL_MASK_LABEL)] == pytest.approx(
+            off[("prestim", FULL_MASK_LABEL)]
+        )
+
+
+class TestReferenceRow:
+    """How the fixed ASSR-electrode row every component is judged against is built.
+
+    Not a detail of presentation: :func:`~src.analysis.assr_trials.reference_snr_tests`
+    subtracts this row from every component row directly, so if it is not in the same
+    units the whole comparison is off by a constant. These pin the two decisions that
+    put it there — equal weight per electrode, and ONE scale shared by the conditions —
+    which is the same construction the stage-06 ``run_assr_snr_grid.py`` uses.
+    """
+
+    @pytest.fixture
+    def roi_spy(self, monkeypatch):
+        """Record every ``roi_channelwise_snr`` call, delegating to the real one."""
+        calls = []
+        original = run_wavelet_jica.at.roi_channelwise_snr
+
+        def spy(trials, baseline_mask, **kwargs):
+            snr, diagnostics = original(trials, baseline_mask, **kwargs)
+            calls.append({"trials": trials, "diagnostics": diagnostics})
+            return snr, diagnostics
+
+        monkeypatch.setattr(run_wavelet_jica.at, "roi_channelwise_snr", spy)
+        return calls
+
+    def test_the_roi_is_normalised_before_it_is_averaged(
+        self, roi_spy, stub_loaders, tmp_path
+    ):
+        """Equal weight per electrode, which averaging raw power first destroys.
+
+        The helper is handed the ROI electrodes UNCOMBINED — that is what lets it
+        reference each one to its own pre-stimulus window before the ROI mean is taken.
+        A ``(participants, trials, samples)`` argument would mean the mean had already
+        happened, i.e. every electrode weighted by its own power level.
+        """
+        main(
+            _argv(
+                tmp_path / "plots",
+                tmp_path / "results",
+                "--skip_decomposition_plots",
+            )
+        )
+        assert roi_spy, "the reference row was not built the equal-weight way"
+        n_roi = len(ASSR_NAMES)
+        for call in roi_spy:
+            trials = call["trials"]
+            assert trials.ndim == 4, "the ROI channels were averaged before normalising"
+            assert trials.shape[0] == 4  # --n_pairs
+            assert trials.shape[1] == n_roi
+
+    def test_the_row_is_built_once_per_selection_and_condition(
+        self, roi_spy, stub_loaders, tmp_path
+    ):
+        """Not once per variant: every baseline variant shares the one row.
+
+        Rebuilding it per variant would be both wasteful and a chance for the reference
+        to drift between variants that are supposed to be judged against the same
+        numbers.
+        """
+        main(
+            _argv(
+                tmp_path / "plots",
+                tmp_path / "results",
+                "--skip_decomposition_plots",
+            )
+        )
+        # 2 selections (--halfwidths) x 2 conditions, with three signal variants running.
+        assert len(roi_spy) == 4
+
+    def test_both_conditions_land_on_one_shared_scale(
+        self, roi_spy, stub_loaders, tmp_path, caplog
+    ):
+        """A per-condition divisor would rescale one arm of the paired contrast.
+
+        Each call derives its own ROI baseline SD from its own participants, and those
+        differ between the conditions. Applying each to its own arm injects a
+        per-condition rescaling straight into the difference the contrast tests, so the
+        run picks one constant — the median — and rescales both onto it.
+        """
+        with caplog.at_level("INFO", logger=run_wavelet_jica._logger.name):
+            main(
+                _argv(
+                    tmp_path / "plots",
+                    tmp_path / "results",
+                    "--skip_decomposition_plots",
+                )
+            )
+        per_condition = [call["diagnostics"]["roi_baseline_sd"] for call in roi_spy]
+        # Otherwise the test would pass even if each arm kept its own divisor.
+        assert len(set(per_condition)) > 1
+
+        shared = [
+            line for line in caplog.text.splitlines() if "equal-weight ROI over" in line
+        ]
+        assert len(shared) == 2  # one per selection
+        for line, (first, second) in zip(
+            shared, [per_condition[:2], per_condition[2:]]
+        ):
+            expected = float(np.median([first, second]))
+            assert f"shared baseline SD {expected:.3f}" in line
+            assert "NOT applied" in line  # the per-participant spread is reported only
 
 
 class TestStageSelection:

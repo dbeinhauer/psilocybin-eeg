@@ -13,6 +13,7 @@ The module deliberately stops at the decomposition: everything downstream lives 
 between them, because a shape mismatch at that seam would be silent.
 """
 
+import dataclasses
 import warnings
 from unittest import mock
 
@@ -23,6 +24,7 @@ from sklearn.decomposition import FastICA
 
 from src.analysis import assr_trials as at
 from src.analysis.wavelet_jica import (
+    DEFAULT_SIGNAL_VARIANTS,
     IDENTITY_TOLERANCE,
     SIGNAL_VARIANTS,
     VARIANT_RECIPE,
@@ -30,9 +32,14 @@ from src.analysis.wavelet_jica import (
     VARIANT_UNITS,
     assemble_join,
     bootstrap_median_ci,
+    cohort_mean_filter,
+    cohort_mean_pattern,
+    component_polarity,
     fit_joint_ica,
     orient_components,
     participant_spread,
+    subspace_mask_rows,
+    subspace_reference_rows,
 )
 from src.definitions.fields import ConditionVariants
 
@@ -365,6 +372,142 @@ class TestRecordingOperators:
             result.recording_filters(other, CONDITIONS[0])
 
 
+class TestSubspaceReference:
+    """The ``ASSR-mask (PCA)`` rows: the electrode mask read through the reduction.
+
+    The point of the row is that a component is judged against a reference living in
+    the same subspace it does, so what has to hold is that the operator really is the
+    reduction's projector — not merely something mask-shaped.
+    """
+
+    MASK = np.array([True, True, False, False, True, False])  # 3 of C = 6 channels
+
+    def _fitted(self, join=ConditionVariants.JOINED, n_ica=3):
+        layout = assemble_join(_raw(), PARTICIPANTS, CONDITIONS, join)
+        return layout, fit_joint_ica(layout, n_ica=n_ica, max_iter=200)
+
+    def _weights(self):
+        return at.binary_filter_weights(self.MASK)
+
+    @pytest.mark.parametrize("join", BOTH_JOINS)
+    def test_the_rows_are_the_mask_carried_through_the_projector(self, join):
+        """``m_b P^T P``, which the factorisation computes without forming ``P^T P``."""
+        layout, result = self._fitted(join)
+        weights = self._weights()
+        rows = subspace_mask_rows(result, weights)
+        assert rows.shape == (layout.n_blocks, layout.n_blocks * layout.n_channels)
+
+        k = result.n_components
+        mixing = result.patterns.transpose(1, 0, 2).reshape(k, -1).T
+        unmixing = result.filters.reshape(k, -1)
+        projector = mixing @ unmixing
+        embedded = np.zeros((layout.n_blocks, layout.n_blocks * layout.n_channels))
+        for block in range(layout.n_blocks):
+            start = block * layout.n_channels
+            embedded[block, start : start + layout.n_channels] = weights
+        np.testing.assert_allclose(rows, embedded @ projector, atol=1e-8)
+
+    def test_a_projector_that_keeps_everything_returns_the_plain_mask_average(self):
+        """The property that says it IS a projector, not merely a mask-shaped operator.
+
+        With a reduction that discards nothing, ``P^T P`` is the identity, so the row
+        has to collapse to the electrode average on that block's own channels — the
+        binary reference itself. Anything else means the operator is not the one the
+        fit applied.
+        """
+        raw = _raw()
+        layout = assemble_join(
+            raw, PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_TRACKS
+        )
+        _layout, result = self._fitted(ConditionVariants.JOINED_TRACKS)
+        n_features = layout.n_blocks * layout.n_channels
+        # A full-rank orthonormal reduction, as filters/patterns rather than a refit:
+        # unmixing = P, mixing = P^T, so mixing @ unmixing is exactly the identity.
+        basis, _r = scipy.linalg.qr(
+            np.random.default_rng(0).normal(size=(n_features, n_features))
+        )
+        loadings = basis.T  # orthonormal ROWS
+        full_rank = dataclasses.replace(
+            result,
+            filters=loadings.reshape(n_features, layout.n_blocks, layout.n_channels),
+            patterns=loadings.reshape(
+                n_features, layout.n_blocks, layout.n_channels
+            ).transpose(1, 0, 2),
+            # n_components is read off the maps, so they have to grow with the rest.
+            tf_maps=np.zeros((n_features, F, layout.n_times)),
+        )
+        weights = self._weights()
+        rows = subspace_mask_rows(full_rank, weights)
+        reference = subspace_reference_rows(
+            raw, layout, rows, bins=[1, 2], zscore=False
+        )
+        for condition in CONDITIONS:
+            band = raw[condition][:, :, [1, 2], :].mean(axis=2)  # (P, C, T)
+            np.testing.assert_allclose(
+                reference[condition],
+                np.einsum("c,pct->pt", weights, band),
+                atol=1e-8,
+            )
+
+    @pytest.mark.parametrize("join", BOTH_JOINS)
+    def test_the_zscored_row_reads_the_signal_the_fit_was_handed(self, join):
+        """Per ``(block, channel, frequency)`` over that condition's own time axis."""
+        raw = _raw()
+        layout = assemble_join(raw, PARTICIPANTS, CONDITIONS, join)
+        result = fit_joint_ica(layout, n_ica=3, max_iter=200)
+        rows = subspace_mask_rows(result, self._weights())
+        bins = [1, 2]
+        reference = subspace_reference_rows(raw, layout, rows, bins, zscore=True)
+
+        for condition in CONDITIONS:
+            stacked = []
+            for participant, block_condition in layout.blocks:
+                source = raw[condition if block_condition is None else block_condition]
+                band = source[PARTICIPANTS.index(participant)][:, bins, :]
+                mean = band.mean(axis=-1, keepdims=True)
+                deviation = band.std(axis=-1, keepdims=True)
+                stacked.append(((band - mean) / deviation).mean(axis=1))
+            projected = rows @ np.concatenate(stacked, axis=0)
+            expected = projected[
+                [layout.block_of(p, condition) for p in layout.participants]
+            ]
+            np.testing.assert_allclose(reference[condition], expected, atol=1e-8)
+
+    def test_each_join_reads_the_recordings_its_own_way(self):
+        """A recording join gives each condition its own block; a time join does not."""
+        raw = _raw()
+        weights = self._weights()
+        joined = assemble_join(raw, PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED)
+        result = fit_joint_ica(joined, n_ica=3, max_iter=200)
+        rows = subspace_mask_rows(result, weights)
+        reference = subspace_reference_rows(raw, joined, rows, [1], zscore=False)
+        # Different blocks read the same stacked samples, so the two conditions differ
+        # by the OPERATOR as well as by the data.
+        assert not np.allclose(reference[CONDITIONS[0]], reference[CONDITIONS[1]])
+
+        tracks = assemble_join(
+            raw, PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_TRACKS
+        )
+        track_result = fit_joint_ica(tracks, n_ica=3, max_iter=200)
+        track_rows = subspace_mask_rows(track_result, weights)
+        track_reference = subspace_reference_rows(
+            raw, tracks, track_rows, [1], zscore=False
+        )
+        # One block per participant: the same operator, applied to each track.
+        assert track_reference[CONDITIONS[0]].shape == (P, T)
+        assert not np.allclose(
+            track_reference[CONDITIONS[0]], track_reference[CONDITIONS[1]]
+        )
+
+    def test_a_row_that_does_not_match_the_layout_is_refused(self):
+        layout, result = self._fitted()
+        rows = subspace_mask_rows(result, self._weights())
+        with pytest.raises(ValueError, match="to match the layout"):
+            subspace_reference_rows(_raw(), layout, rows[:-1], [1], zscore=False)
+        with pytest.raises(ValueError, match="to match the channel axis"):
+            subspace_mask_rows(result, np.ones(C + 1))
+
+
 class TestSharedUtilities:
     def test_bootstrap_interval_brackets_the_median(self):
         rng = np.random.default_rng(0)
@@ -394,11 +537,35 @@ class TestSharedUtilities:
     def test_every_signal_variant_has_units_and_a_recipe(self):
         assert set(SIGNAL_VARIANTS) <= set(VARIANT_UNITS)
         assert set(SIGNAL_VARIANTS) == set(VARIANT_RECIPE)
+        assert set(DEFAULT_SIGNAL_VARIANTS) <= set(SIGNAL_VARIANTS)
 
-    def test_the_recipes_fill_the_reachable_cells_of_the_2x2(self):
-        """Raw-without-a-baseline is the unreachable cell: it has no usable units."""
-        cells = {(r["zscore"], r["baseline"]) for r in VARIANT_RECIPE.values()}
-        assert cells == {(False, True), (True, False), (True, True)}
+    def test_the_default_grid_covers_every_filter_by_signal_cell_that_exists(self):
+        """Three spatial filters x (raw | z-scored), minus the two cells that do not.
+
+        A restricted filter's weights presume the scaling they were fitted on, so the
+        masked pair reads the z-scored signal only — applying them to raw power would
+        weight each electrode by its own power level on top, which is the artefact the
+        equal-weight reference row exists to remove.
+        """
+        cells = {
+            (VARIANT_RECIPE[v]["filter"], VARIANT_RECIPE[v]["zscore"])
+            for v in DEFAULT_SIGNAL_VARIANTS
+        }
+        assert cells == {
+            ("own", False),
+            ("own", True),
+            ("mean", False),
+            ("mean", True),
+            ("masked", True),
+            ("mean_masked", True),
+        }
+
+    def test_every_default_cell_is_per_trial_baselined(self):
+        """That is what puts all four in the reference's units, so they compare."""
+        assert all(VARIANT_RECIPE[v]["baseline"] for v in DEFAULT_SIGNAL_VARIANTS)
+        # And the one variant that is not baselined is the one kept out of the default.
+        assert not VARIANT_RECIPE["zscored"]["baseline"]
+        assert "zscored" not in DEFAULT_SIGNAL_VARIANTS
 
     def test_zscored_is_the_exact_component_and_prestim_is_not(self):
         """The z-scored route applies the filter to the signal the fit actually saw."""
@@ -406,8 +573,130 @@ class TestSharedUtilities:
         assert VARIANT_RECIPE["zscored_prestim"]["zscore"] is True
         assert VARIANT_RECIPE["prestim"]["zscore"] is False
 
-    def test_only_the_borrowing_variant_takes_a_reference_from_elsewhere(self):
-        assert VARIANT_REFERENCE_FROM == {"zscored_prestim": "prestim"}
+    def test_every_baselined_variant_borrows_prestim_s_reference(self):
+        """The invariant the grid rests on: only the component moves between cells.
+
+        For a raw-signal variant the borrow is a no-op — the fixed rows do not depend
+        on the learned filter, so ``mean_prestim`` would recompute the identical
+        numbers — and it is declared anyway so the rule is stated once instead of
+        inferred per variant. ``zscored`` is excluded because it has no per-trial
+        baseline to put the borrowed rows in.
+        """
+        assert VARIANT_REFERENCE_FROM == {
+            "zscored_prestim": "prestim",
+            "mean_prestim": "prestim",
+            "mean_zscored_prestim": "prestim",
+            "masked_prestim": "prestim",
+            "mean_masked_prestim": "prestim",
+        }
+        assert set(VARIANT_REFERENCE_FROM) == {
+            v
+            for v in SIGNAL_VARIANTS
+            if VARIANT_RECIPE[v]["baseline"] and v != "prestim"
+        }
         for variant, source in VARIANT_REFERENCE_FROM.items():
             assert variant in SIGNAL_VARIANTS
             assert source in SIGNAL_VARIANTS
+            assert VARIANT_RECIPE[variant]["baseline"]
+            assert not VARIANT_RECIPE[source]["zscore"]
+
+
+class TestCohortFilter:
+    """The operator the ``mean_*`` variants use, and the sign it anchors."""
+
+    @staticmethod
+    def _patterns(seed: int = 0, n_blocks: int = 5, n_components: int = 3):
+        return np.random.default_rng(seed).normal(size=(n_blocks, n_components, C))
+
+    def test_it_is_the_unit_normalised_block_mean(self):
+        patterns = self._patterns()
+        scaled = patterns / np.linalg.norm(patterns, axis=2, keepdims=True)
+        cohort = cohort_mean_pattern(patterns)
+        np.testing.assert_allclose(cohort.pattern, scaled.mean(axis=0))
+        assert cohort.normalized and not cohort.aligned
+
+    def test_normalising_stops_one_loud_block_from_setting_the_topography(self):
+        """jICA's loadings are unconstrained, which is why this is not optional."""
+        patterns = self._patterns()
+        shouting = patterns.copy()
+        shouting[0] *= 500.0
+        np.testing.assert_allclose(
+            cohort_mean_pattern(shouting).pattern,
+            cohort_mean_pattern(patterns).pattern,
+        )
+        # Without it, that one block dominates.
+        assert not np.allclose(
+            cohort_mean_pattern(shouting, normalize=False).pattern,
+            cohort_mean_pattern(patterns, normalize=False).pattern,
+        )
+
+    def test_an_all_zero_block_contributes_nothing_rather_than_dividing_by_zero(self):
+        patterns = self._patterns()
+        patterns[2] = 0.0
+        cohort = cohort_mean_pattern(patterns)
+        assert np.isfinite(cohort.pattern).all()
+        np.testing.assert_allclose(cohort.cosine[2], 0.0)
+
+    def test_the_cosine_reports_a_cancelling_mean(self):
+        """Half the blocks inverted is a cohort with no consensus, and it must show."""
+        patterns = self._patterns()
+        patterns[len(patterns) // 2 :] = -patterns[: len(patterns) - len(patterns) // 2]
+        cohort = cohort_mean_pattern(patterns)
+        assert (cohort.disagreeing_blocks() > 0).any()
+
+    def test_signs_are_left_alone_unless_an_anchor_is_given(self):
+        """A jICA block's sign is a result, so aligning first would invent a consensus."""
+        patterns = self._patterns()
+        mask = np.zeros(C, dtype=bool)
+        mask[: C // 2] = True
+        plain = cohort_mean_pattern(patterns)
+        aligned = cohort_mean_pattern(patterns, align_to=mask)
+        assert not plain.aligned and aligned.aligned
+        assert not np.allclose(plain.pattern, aligned.pattern)
+
+    def test_the_filter_inverts_the_pattern_it_came_from(self):
+        cohort = cohort_mean_pattern(self._patterns())
+        backward = cohort_mean_filter(cohort.pattern)
+        assert backward.shape == cohort.pattern.shape
+        np.testing.assert_allclose(
+            backward @ cohort.pattern.T, np.eye(cohort.n_components), atol=1e-9
+        )
+
+    def test_a_rank_deficient_cohort_model_is_refused(self):
+        """Two components whose cohort topographies collapse cannot be separated."""
+        cohort = cohort_mean_pattern(self._patterns())
+        collapsed = cohort.pattern.copy()
+        collapsed[1] = collapsed[0]
+        with pytest.raises(ValueError, match="rank-deficient"):
+            cohort_mean_filter(collapsed)
+
+    def test_the_sign_is_one_per_component_and_matches_polarity_flip(self):
+        """Same criterion and floor as stage 06, applied at jICA's granularity."""
+        cohort = cohort_mean_pattern(self._patterns())
+        mask = np.zeros(C, dtype=bool)
+        mask[: C // 2] = True
+        flip, strength = component_polarity(cohort.pattern, mask)
+        assert flip.shape == (cohort.n_components,)
+        assert set(np.unique(flip)) <= {-1.0, 1.0}
+        reference_flip, reference_strength = at.polarity_flip(
+            cohort.pattern[np.newaxis], mask
+        )
+        np.testing.assert_allclose(flip, reference_flip[0])
+        np.testing.assert_allclose(strength, reference_strength[0])
+
+    @pytest.mark.parametrize("join", BOTH_JOINS)
+    def test_the_cohort_operator_is_the_same_for_both_conditions(self, join):
+        """Pooling the blocks is what keeps it symmetric in the conditions.
+
+        A condition-specific filter would break the exchangeability the paired contrast
+        rests on — a difference could then come from the operator having changed.
+        """
+        layout = assemble_join(_raw(), PARTICIPANTS, CONDITIONS, join)
+        result = fit_joint_ica(layout, n_ica=2, max_iter=200)
+        cohort = cohort_mean_pattern(result.patterns)
+        # Built from every block at once, so there is nothing per condition to differ.
+        assert cohort.cosine.shape == (layout.n_blocks, result.n_components)
+        mask = np.zeros(layout.n_channels, dtype=bool)
+        mask[: layout.n_channels // 2] = True
+        flip, _strength = component_polarity(cohort.pattern, mask)
+        assert flip.shape == (result.n_components,)

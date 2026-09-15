@@ -128,11 +128,11 @@ python /mnt/scripts/run_assr_raw_pca.py \
     --n_components "$N_COMPONENTS" \
     $REFERENCE_FLAG
 
-# echo "=== Psilocybin at $(date) ==="
-# python /mnt/scripts/run_assr_raw_pca.py \
-#     --condition Psilocybin \
-#     --n_components "$N_COMPONENTS" \
-#     $REFERENCE_FLAG
+echo "=== Psilocybin at $(date) ==="
+python /mnt/scripts/run_assr_raw_pca.py \
+    --condition Psilocybin \
+    --n_components "$N_COMPONENTS" \
+    $REFERENCE_FLAG
 EOF
 
 chmod +x run_inside.sh

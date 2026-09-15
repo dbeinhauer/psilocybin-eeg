@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -N PSILO_IVA_TRACKS_06
 #PBS -l walltime=1:00:00
-#PBS -l select=1:ncpus=4:mem=499gb:scratch_local=80gb
+#PBS -l select=1:ncpus=4:mem=200gb:scratch_local=80gb
 #PBS -m ae
 #PBS -j oe
 
@@ -225,8 +225,12 @@ python /mnt/scripts/run_iva_condition_tracks.py \
 #     --n_jobs -1
 
 # --- Per-band runs ---------------------------------------------------------
-# Slices the concatenated tensor to one band before IVA; plots land under bands/
-# with a '<band>_' prefix, so they never collide with the broadband set.
+# Slices the concatenated tensor to one band BEFORE the per-recording PCA and
+# iva_g, so it changes what is decomposed rather than only what is plotted. The
+# store filename and the figure prefix carry the band, so a band run never
+# collides with the broadband set.
+#
+# Two ways to say it. --band takes a standard band name:
 #
 # for BAND in alpha gamma; do
 #     echo "=== band $BAND at $(date) ==="
@@ -236,6 +240,18 @@ python /mnt/scripts/run_iva_condition_tracks.py \
 #         --band "$BAND" \
 #         "${COMMON_ARGS[@]}"
 # done
+#
+# --band_range takes an explicit (LOW HIGH) window in Hz, for a restriction no
+# standard band describes — the 40 Hz ASSR neighbourhood being the case that
+# forced it, since the narrowest named band containing it is gamma (30-70 Hz).
+# It is named '<low>-<high>hz' everywhere a band name would be.
+# run_condition_tracks_gamma.pbs runs exactly this, uncommented.
+#
+# python /mnt/scripts/run_iva_condition_tracks.py \
+#     --n_pca 10 \
+#     --zscore_mode per_condition \
+#     --band_range 35 45 \
+#     "${COMMON_ARGS[@]}"
 
 # --- psilo_music ------------------------------------------------------------
 # Both music types, each its own run. Note this variant does NOT need the two

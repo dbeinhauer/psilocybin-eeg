@@ -207,6 +207,18 @@ class TestCliDefaults:
         assert args.reuse_wavelets is False
         assert args.subset_cache is False
 
+    def test_an_explicit_band_range_parses_as_two_floats(self):
+        args = _build_arg_parser().parse_args(["--band_range", "30", "50"])
+        assert args.band_range == [30.0, 50.0]
+        assert args.band is None
+
+    def test_a_named_band_and_an_explicit_range_cannot_both_be_given(self):
+        """They would disagree about what was decomposed, so argparse must refuse."""
+        with pytest.raises(SystemExit):
+            _build_arg_parser().parse_args(
+                ["--band", "gamma", "--band_range", "30", "50"]
+            )
+
     def test_subsets_default_to_the_full_extent(self):
         args = _build_arg_parser().parse_args([])
         assert args.n_pairs is None

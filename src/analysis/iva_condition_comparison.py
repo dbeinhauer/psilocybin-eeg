@@ -48,7 +48,7 @@ from src.analysis.wavelet_ica import (
     iva_component_patterns,
     zscore_by_time,
 )
-from src.definitions.frequency import FREQUENCY_BANDS
+from src.definitions.frequency import BandSpec, band_token, resolve_band_range
 
 _logger = logging.getLogger(__name__)
 
@@ -236,24 +236,33 @@ def stack_conditions_on_subject_axis(
 
 
 def slice_to_band(
-    data_4d: np.ndarray, freqs: np.ndarray, band: str | None
+    data_4d: np.ndarray, freqs: np.ndarray, band: BandSpec
 ) -> tuple[np.ndarray, np.ndarray]:
     """Restrict the pooled tensor's frequency axis to one band.
 
+    Applied **before** :func:`decompose_channel_iva`, which is the whole point: that
+    function flattens frequency x time into one sample axis, so every bin left in
+    *freqs* is a bin the per-recording PCA's variance ordering and ``iva_g``'s
+    dependence cost are computed from. Slicing afterwards would restrict the figures
+    and change nothing about what was decomposed.
+
     :param data_4d: ``(S, C, F, T)`` pooled wavelet power.
     :param freqs: ``(F,)`` frequency axis of *data_4d*.
-    :param band: Band name, or ``None`` to keep the whole grid.
+    :param band: A :data:`~src.definitions.frequency.FREQUENCY_BANDS` name, an explicit
+        ``(low, high)`` Hz window, or ``None`` to keep the whole grid.
     :return: ``(sliced, band_freqs)``.
-    :raises ValueError: If the band lies outside the wavelet grid.
+    :raises ValueError: If *band* is not a valid restriction, or lies outside the
+        wavelet grid.
     """
-    if band is None:
+    bounds = resolve_band_range(band)
+    if bounds is None:
         return data_4d, freqs
-    band_lo, band_hi = FREQUENCY_BANDS[band]
+    band_lo, band_hi = bounds
     mask = (freqs >= band_lo) & (freqs <= band_hi)
     if not mask.any():
         raise ValueError(
-            f"Band {band!r} ({band_lo}-{band_hi} Hz) has no frequency inside the "
-            f"wavelet grid {freqs[0]:.1f}-{freqs[-1]:.1f} Hz."
+            f"Band {band_token(band)!r} ({band_lo:g}-{band_hi:g} Hz) has no frequency "
+            f"inside the wavelet grid {freqs[0]:.1f}-{freqs[-1]:.1f} Hz."
         )
     return data_4d[:, :, mask, :], freqs[mask]
 

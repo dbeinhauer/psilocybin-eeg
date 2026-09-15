@@ -23,8 +23,10 @@ stimulus-window grid in one pass, which is exactly what a job wants:
   channel reduction and before the unmixing — so the pair separates the reduction from
   the per-(channel, frequency) rescaling z-scoring adds. In ``zscored`` the last two
   coincide by construction; in the baseline variants they differ.
-* **Three signal variants**, differing in how the LEARNED rows are read and how the
-  signal is put into comparable units:
+* **Seven signal variants**, differing in how the LEARNED rows are read — which spatial
+  filter, on which signal — and in nothing else. **The references never move**: every
+  variant but ``zscored`` carries ``prestim``'s three reference columns verbatim, which
+  is what makes the whole set one comparison rather than seven separate ones.
 
   - ``zscored`` reads the stored per-recording z-scored sources for the IC rows (full
     recording, every onset) and the masks on the z-scored cache. No per-trial baseline.
@@ -33,14 +35,41 @@ stimulus-window grid in one pass, which is exactly what a job wants:
   - ``stored_prestim`` takes the IC rows from the stored sources — the decomposition's
     own output, which the projection only approximates, since the model was fitted on
     time-z-scored data and ``prestim`` applies the same filter to un-z-scored power —
-    and gives them the same per-trial baseline. Its mask rows are ``prestim``'s,
-    unchanged.
+    and gives them the same per-trial baseline.
+  - ``mean_prestim`` is ``prestim`` with a single thing changed: the **cohort-mean
+    filter** (:func:`~src.analysis.assr_trials.cohort_mean_pattern`) in place of each
+    recording's own. Anything that differs between the two rows is the per-recording
+    topography, and nothing else.
+  - ``mean_stored_prestim`` applies that shared filter to the IVA's **own input**,
+    rebuilt in channel space as ``P^T P (z)`` — z-scored along time, then reduced onto
+    that recording's PCA subspace. No stored array is the shared filter on that signal,
+    so it is reconstructed rather than read back.
+  - ``masked_prestim`` is each recording's own filter with every weight **outside the
+    ASSR electrodes zeroed**, on the z-scored cache. It sits between the two things the
+    grid already has — the binary reference reads those electrodes with equal weight,
+    an unrestricted component reads the whole head with learned weights, this reads only
+    those electrodes with learned weights — and so separates a better weighting *inside*
+    the anchor area from access to signal *outside* it, which no other row can tell
+    apart.
+  - ``mean_masked_prestim`` is the same restriction on the cohort-mean filter.
 
-  Because this script streams the **full** cache, ``prestim`` and ``stored_prestim``
-  see identical onsets and identical reference rows; the only thing that differs
-  between them is how the component itself was read. (In the notebooks, whose caches
-  are a 12 s subset, the stored IC rows carry many more trials than the mask rows —
-  that asymmetry does not exist here.)
+  **Polarity.** The three ``mean_*`` rows read ONE shared operator whose sign was
+  anchored once when the cohort mean was built, so no per-recording flip is applied to
+  them — doing so would scramble a quantity that does not carry that sign.
+  ``masked_prestim`` uses each recording's own filter and keeps the flip; zeroing
+  channels does not change a component's sign.
+
+  **The restricted pair reads the z-scored wavelet, not raw power**, because the filters
+  were estimated on data z-scored along time and their weights presume that scaling — a
+  weighted average of raw power is additionally weighted by each electrode's own power
+  level, the same artefact ``roi_channelwise_snr`` exists to remove from the binary
+  reference. And no PCA for them: ``P^T P`` mixes every channel back into the retained
+  subspace, which would defeat "read only these electrodes" entirely.
+
+  Because this script streams the **full** cache, every variant sees identical onsets
+  and identical reference rows; the only thing that differs is how the component itself
+  was read. (In the notebooks, whose caches are a 12 s subset, the stored IC rows carry
+  many more trials than the mask rows — that asymmetry does not exist here.)
 * **Three test families**, participants as the unit, exact Wilcoxon:
   ``contrast`` (Placebo - Psilocybin per source), ``discrimination`` (does an IC separate
   the conditions better than a reference, the interaction, vs each reference) and
@@ -56,12 +85,21 @@ topography per recording, so every projection and polarity anchor is resolved pe
 
 Outputs (per run, all grid cells in one file):
 
-* ``results/<experiment>/assr_snr_grid__<variant>__pca<N>.csv`` — every test row, tagged
-  with its signal variant, frequency selection and stimulus window.
-* ``plots/06-iva-condition-comparison/<Condition>_<Music>/broadband/assr_snr_grid/
+* ``results/<experiment>/assr_snr_grid__<variant>__<spectrum>__pca<N>.csv`` — every test
+  row, tagged with its signal variant, frequency selection and stimulus window.
+* ``plots/06-iva-condition-comparison/<Condition>_<Music>/<spectrum>/assr_snr_grid/
   pca_<N>/<selection>/<window>/`` — one subdirectory per frequency selection (band range)
   and stimulus window (time interval), each holding a p-value summary, an SNR-by-condition
   figure and a per-source trial-course figure for every signal variant.
+* ``.../pca_<N>/{mean,mean_masked}_filter_topomaps.png`` — the two spatial-filter check
+  figures, at the top of the run's directory because the operators they draw depend on
+  neither the selection nor the window. The first asks whether the cohort agreed on the
+  map the ``mean_*`` rows average; the second, how much of each filter's weight survived
+  the ASSR-electrode restriction the ``masked_*`` rows apply.
+
+``<spectrum>`` is ``broadband`` by default and ``bands`` when ``--band`` names a
+band-restricted store (with the band as the first token of every filename), so a run
+over a band-restricted decomposition never lands on top of the broadband one.
 
 Examples::
 
@@ -83,6 +121,7 @@ import argparse
 import logging
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib
@@ -114,13 +153,20 @@ from src.io.loading import (  # noqa: E402
     read_wavelet_cache_header,
     stream_wavelet_cache_subjects,
 )
+from src.visualization.assr_filter_plots import (  # noqa: E402
+    plot_cohort_mean_topomaps,
+    plot_masked_filter_topomaps,
+)
 
 _logger = logging.getLogger(__name__)
 
 _STAGE_DIR = "06-iva-condition-comparison"
 _ANALYSIS_DIR = "assr_snr_grid"
-_FULL_LABEL = "ASSR-mask (full)"
-_PCA_LABEL = "ASSR-mask (PCA)"
+# The row labels come from `assr_trials` rather than from this file: stage-07 emits the
+# same three references, and a row can only be compared across the two stages if both
+# spell it the same way.
+_FULL_LABEL = at.FULL_MASK_LABEL
+_PCA_LABEL = at.PCA_MASK_LABEL
 #: The same subspace-projected electrode average, but read off the Z-SCORED wavelet:
 #: literally the signal the decomposition was handed, after the channel PCA and before
 #: the unmixing. It is the reference-side analogue of the "stored_prestim" IC rows and
@@ -129,12 +175,31 @@ _PCA_LABEL = "ASSR-mask (PCA)"
 #: per-(channel, frequency) rescaling that z-scoring adds. In the "zscored" variant it
 #: necessarily coincides with "ASSR-mask (PCA)", which is a free check that the two
 #: paths agree; in the baseline variants the two genuinely differ.
-_PCA_Z_LABEL = "ASSR-mask (PCA, z)"
-_MASK_LABELS = (_FULL_LABEL, _PCA_LABEL, _PCA_Z_LABEL)
-_SIGNAL_VARIANTS = ("zscored", "prestim", "stored_prestim")
+_PCA_Z_LABEL = at.PCA_Z_MASK_LABEL
+_MASK_LABELS = at.MASK_LABELS
+_SIGNAL_VARIANTS = (
+    "zscored",
+    "prestim",
+    "stored_prestim",
+    "mean_prestim",
+    "mean_stored_prestim",
+    "masked_prestim",
+    "mean_masked_prestim",
+)
 # The variants whose trials are referenced to their own pre-stimulus window. "zscored"
 # is the odd one out: its z-score along time IS the normalisation.
-_BASELINE_VARIANTS = ("prestim", "stored_prestim")
+_BASELINE_VARIANTS = tuple(v for v in _SIGNAL_VARIANTS if v != "zscored")
+#: The variants that read the ONE cohort-mean filter rather than each recording's own.
+#: A shared operator carries a single sign, anchored once when it was built
+#: (:func:`~src.analysis.assr_trials.cohort_mean_pattern`), so applying the
+#: per-recording flip to these rows would scramble a quantity that does not carry it.
+#: ``masked_prestim`` is deliberately NOT here: it uses each recording's own filter, and
+#: zeroing channels does not change a component's sign.
+_SHARED_FILTER_VARIANTS = ("mean_prestim", "mean_stored_prestim", "mean_masked_prestim")
+#: Filenames of the two spatial-filter check figures, written once per run (the
+#: operators do not depend on the frequency selection or the stimulus window).
+_MEAN_FILTER_FIGURE = "mean_filter_topomaps.png"
+_MEAN_MASKED_FILTER_FIGURE = "mean_masked_filter_topomaps.png"
 _CONDITION_COLORS = {
     ConditionVariants.PLACEBO.value: "#0F6E8C",
     ConditionVariants.PSILOCYBIN.value: "#A6357F",
@@ -239,8 +304,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=list(_SIGNAL_VARIANTS),
         choices=list(_SIGNAL_VARIANTS),
         help=(
-            "Which normalisations to test side by side. 'stored_prestim' reads the "
-            "IC rows off the decomposition and keeps 'prestim' references."
+            "Which readings to test side by side. Every variant keeps 'prestim's "
+            "reference rows unchanged, so only the learned rows move. 'stored_prestim' "
+            "reads the IC rows off the decomposition; 'mean_*' swap each recording's "
+            "own filter for the one cohort-mean filter; 'masked_*' zero every filter "
+            "weight outside the ASSR electrodes, which separates a better weighting "
+            "INSIDE that area from access to signal outside it."
         ),
     )
     analysis.add_argument(
@@ -319,6 +388,38 @@ def _wavelet_cache_path(
     return matches[-1]
 
 
+def _cache_frequency_grid(cache_paths: dict, conditions: list[str]) -> np.ndarray:
+    """The wavelet cache's own frequency axis, checked identical across conditions.
+
+    Separate from the store's axis on purpose: a band-restricted store holds only its
+    band's bins, while the cache is always the broadband one, so an index resolved on
+    one grid is meaningless on the other. Reading the header is cheap — it decompresses
+    nothing.
+
+    :param cache_paths: Condition → cache path.
+    :param conditions: Conditions to read, in order.
+    :return: The shared ``(F,)`` frequency grid in Hz.
+    :raises ValueError: If the conditions' caches were built on different grids, which
+        would make one bin index mean two frequencies.
+    """
+    grids = {
+        condition: np.asarray(
+            read_wavelet_cache_header(cache_paths[condition]).freqs, dtype=float
+        )
+        for condition in conditions
+    }
+    reference = grids[conditions[0]]
+    for condition, grid in grids.items():
+        if grid.shape != reference.shape or not np.allclose(grid, reference):
+            raise ValueError(
+                f"The {conditions[0]} and {condition} wavelet caches were built on "
+                f"different frequency grids ({reference.size} vs {grid.size} bins); a "
+                "bin index cannot mean the same frequency in both. Rebuild them with "
+                "the same wavelet settings."
+            )
+    return reference
+
+
 def _default_store_condition(variant: IvaVariants) -> ConditionVariants:
     """The store condition each variant was written under."""
     if variant == IvaVariants.CHANNEL_JOINED_TRACKS:
@@ -357,8 +458,40 @@ def _row_resolver(results, variant: IvaVariants):
 
 
 # ---------------------------------------------------------------------------
-# Projection — one streaming pass produces both signal variants' inputs
+# Projection — one streaming pass produces every signal variant's input
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Projected:
+    """One condition's projections, one array per group of source rows.
+
+    Kept as named arrays rather than one wide stack because the groups are read on
+    different cadences: the reference rows are shared by every variant, the learned rows
+    are what each variant swaps out, and ``roi_raw`` skips the normalisation the others
+    get. Every array is ``(participants, rows, kept freqs, times)``.
+    """
+
+    #: ``components + 2`` rows on the RAW cache: each recording's own IC filters, then
+    #: the full and PCA masks. The reference rows every variant borrows come from here.
+    prestim: np.ndarray
+    #: The two masks on the Z-SCORED cache.
+    zmask: np.ndarray
+    #: The mask's electrodes kept UNCOMBINED, so
+    #: :func:`~src.analysis.assr_trials.roi_channelwise_snr` can normalise each one
+    #: before they are averaged.
+    roi_raw: np.ndarray
+    #: ``components`` rows: the cohort-mean filter on the RAW cache — "prestim" with a
+    #: single thing changed, the filter.
+    mean_raw: np.ndarray
+    #: The cohort-mean filter on the IVA's own input (z-scored, then this recording's
+    #: PCA subspace), rebuilt here because no stored array is ``U_mean`` on that signal.
+    mean_stored_z: np.ndarray
+    #: Each recording's OWN filter, restricted to the anchor electrodes, on the z-scored
+    #: cache.
+    masked_z: np.ndarray
+    #: The cohort-mean filter under the same restriction.
+    mean_masked_z: np.ndarray
 
 
 def _project_condition(
@@ -374,17 +507,30 @@ def _project_condition(
     store_channels: list[str],
     n_times: int | None,
     roi_index: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    mean_filter: np.ndarray,
+    masked_filters: np.ndarray,
+    mean_masked_filter: np.ndarray,
+    projectors: np.ndarray,
+) -> _Projected:
     """Stream one condition once; return every per-condition array the grid needs.
 
-    :return: ``(prestim, zmask, roi_raw)``. ``prestim`` is
-        ``(participants, components + 2, freqs, times)`` (IC filters, then the full and
-        PCA masks, on the RAW cache); ``zmask`` is ``(participants, 2, freqs, times)``
-        (the two masks on the z-scored cache); ``roi_raw`` is
-        ``(participants, ROI channels, freqs, times)``, the mask's electrodes kept
-        UNCOMBINED so :func:`~src.analysis.assr_trials.roi_channelwise_snr` can
-        normalise each one before they are averaged. The z-scored IC rows are read
-        straight from the store, so they are not produced here.
+    Everything is read off the **same** decompressed block, so the four operators the
+    ``mean_*`` / ``masked_*`` variants add cost one more tensordot each rather than
+    another pass over a ~50 GB cache. The z-scored copy of a block is built once and
+    shared by every operator that needs it, for the same reason.
+
+    The z-scored IC rows of ``stored_prestim`` are read straight from the store, so they
+    are not produced here.
+
+    :param mean_filter: ``(components, channels)`` cohort-mean filter, shared by every
+        recording and both conditions.
+    :param masked_filters: ``(rows, components, channels)`` per-recording filters with
+        every weight outside the anchor electrodes zeroed.
+    :param mean_masked_filter: ``(components, channels)`` the same restriction on the
+        cohort-mean filter.
+    :param projectors: ``(rows, channels, channels)`` PCA reconstruction projectors, so
+        the IVA's own input can be rebuilt as ``P^T P (z)`` in channel space.
+    :return: A :class:`_Projected`.
     """
     header = read_wavelet_cache_header(cache_path)
     if header.channel_names != store_channels:
@@ -395,13 +541,19 @@ def _project_condition(
     keep_times = header.n_times if n_times is None else min(n_times, header.n_times)
     wanted = {name: row for row, name in enumerate(participants)}
     n_comp = filters.shape[1]
-    prestim = np.empty(
-        (len(participants), n_comp + 2, freq_indices.size, keep_times), np.float32
-    )
-    zmask = np.empty((len(participants), 2, freq_indices.size, keep_times), np.float32)
-    roi_raw = np.empty(
-        (len(participants), roi_index.size, freq_indices.size, keep_times), np.float32
-    )
+
+    def _empty(rows: int) -> np.ndarray:
+        return np.empty(
+            (len(participants), rows, freq_indices.size, keep_times), np.float32
+        )
+
+    prestim = _empty(n_comp + 2)
+    zmask = _empty(2)
+    roi_raw = _empty(roi_index.size)
+    mean_raw = _empty(n_comp)
+    mean_stored_z = _empty(n_comp)
+    masked_z = _empty(n_comp)
+    mean_masked_z = _empty(n_comp)
     seen = np.zeros(len(participants), bool)
 
     _logger.info(
@@ -425,10 +577,31 @@ def _project_condition(
             [filters[store], full_row, pca_row], axis=0
         )  # (K+2, C)
         prestim[row] = at.project_channels(stacked, block)
+        # The cohort-mean filter on the RAW cache: "prestim" with the filter swapped and
+        # nothing else, so the difference between the two rows IS the topography.
+        mean_raw[row] = at.project_channels(mean_filter, block)
         roi_raw[row] = block[roi_index]
+
+        # The z-scored copy is the expensive intermediate; build it once and hand it to
+        # every operator that reads the standardisation the decomposition was fitted on.
+        block_z = _zscore_time(block)
         zmask[row] = at.project_channels(
-            np.concatenate([full_row, pca_row], axis=0), _zscore_time(block)
+            np.concatenate([full_row, pca_row], axis=0), block_z
         )
+        # The IVA's own input, rebuilt: z-scored, then this recording's PCA subspace.
+        # Composing the two channel operators first keeps the (C, F, T) intermediate
+        # from being materialised twice.
+        mean_stored_z[row] = at.project_channels(
+            mean_filter @ projectors[store], block_z
+        )
+        # The restricted operators read the z-scored wavelet and NOT raw power: the
+        # weights presume that scaling, and a weighted average of raw power is
+        # additionally weighted by each electrode's own power level — the very artefact
+        # roi_channelwise_snr exists to remove from the binary reference. And no PCA:
+        # P^T P mixes every channel back in, which would defeat "read only these
+        # electrodes" entirely.
+        masked_z[row] = at.project_channels(masked_filters[store], block_z)
+        mean_masked_z[row] = at.project_channels(mean_masked_filter, block_z)
         seen[row] = True
         _logger.info(
             f"[{condition}]   {name} ({int(seen.sum())}/{len(participants)}, "
@@ -440,7 +613,15 @@ def _project_condition(
             f"[{condition}] participants {absent} never appeared in the cache."
         )
     _logger.info(f"[{condition}] projected in {time.time() - started:.0f}s")
-    return prestim, zmask, roi_raw
+    return _Projected(
+        prestim=prestim,
+        zmask=zmask,
+        roi_raw=roi_raw,
+        mean_raw=mean_raw,
+        mean_stored_z=mean_stored_z,
+        masked_z=masked_z,
+        mean_masked_z=mean_masked_z,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -769,17 +950,13 @@ def run(args: argparse.Namespace) -> None:
         f"filters); {int(electrode_mask.sum())} ASSR electrode(s)"
     )
 
-    # ---- 2. frequency selections (union streamed once) -------------------
-    selections = {
-        at.selection_label(args.center_freq, h): at.frequency_selection(
-            results.freqs, args.center_freq, h
-        )
-        for h in args.halfwidths
-    }
-    union = np.unique(np.concatenate(list(selections.values())))
-    union_position = {int(b): i for i, b in enumerate(union)}
+    # ---- 1b. the two extra operators the mean_* / masked_* variants read ----
+    # Built once, from the store alone — no cache access — and used by every condition,
+    # which is exactly what makes the shared filter unable to favour either of them.
+    masked_filters = at.restrict_filters_to_mask(filters, electrode_mask)
+    masked_share = at.mask_weight_share(filters, electrode_mask)
 
-    # ---- 3. onsets, caches, paired cohort --------------------------------
+    # ---- 2. onsets, caches, paired cohort --------------------------------
     concat_dir = _concatenated_dir(experiment, args.wavelet_data_dir)
     onsets, cache_labels, cache_paths = {}, {}, {}
     for condition in conditions:
@@ -789,6 +966,50 @@ def run(args: argparse.Namespace) -> None:
         cache_paths[condition] = _wavelet_cache_path(
             args.wavelet_data_dir, experiment, label
         )
+
+    # ---- 3. frequency selections, resolved on BOTH grids -----------------
+    # The store and the cache do NOT share a frequency axis, and a bin index only means
+    # something against the grid it was resolved on. `--band` reads a band-restricted
+    # store whose grid holds only that band's bins, while the cache streamed here is
+    # always the broadband one: on a 30-50 Hz store bin 10 is 40 Hz, but bin 10 of the
+    # cache is 11 Hz. Resolving once and using the indices on both sides therefore read
+    # the references and every projected row out of the wrong part of the spectrum for
+    # any band-restricted run, while leaving broadband runs correct because there the
+    # two grids coincide. Each side now gets the selection resolved on its OWN grid, so
+    # both read the same HERTZ.
+    cache_freqs = _cache_frequency_grid(cache_paths, conditions)
+    store_selections, cache_selections = {}, {}
+    for halfwidth in args.halfwidths:
+        name = at.selection_label(args.center_freq, halfwidth)
+        store_selections[name] = at.frequency_selection(
+            results.freqs, args.center_freq, halfwidth
+        )
+        cache_selections[name] = at.frequency_selection(
+            cache_freqs, args.center_freq, halfwidth
+        )
+        store_hz = np.asarray(results.freqs)[store_selections[name]]
+        cache_hz = cache_freqs[cache_selections[name]]
+        _logger.info(
+            f"[{name}] store bins {store_hz.min():g}-{store_hz.max():g} Hz "
+            f"({store_hz.size}), cache bins {cache_hz.min():g}-{cache_hz.max():g} Hz "
+            f"({cache_hz.size})"
+        )
+        # A band-restricted store can hold only part of the requested window, in which
+        # case the stored IC rows average over less of it than the projected rows do.
+        # That is not an error — each side averages what it has — but it makes "the same
+        # selection" mean two slightly different things, which belongs in the log.
+        if (store_hz.min(), store_hz.max()) != (cache_hz.min(), cache_hz.max()):
+            _logger.warning(
+                f"[{name}] the store covers {store_hz.min():g}-{store_hz.max():g} Hz of "
+                f"this selection but the cache covers "
+                f"{cache_hz.min():g}-{cache_hz.max():g} Hz, so the stored IC rows "
+                "(zscored, stored_prestim) and the projected rows average over "
+                "different parts of it. Narrow --halfwidths, or use a store whose band "
+                "contains the whole window."
+            )
+    # The union is over CACHE bins, because it is what the streaming reader indexes.
+    union = np.unique(np.concatenate(list(cache_selections.values())))
+    union_position = {int(b): i for i, b in enumerate(union)}
 
     store_participants = list(dict.fromkeys(results.participants))
     participants = [
@@ -806,15 +1027,57 @@ def run(args: argparse.Namespace) -> None:
         _logger.warning(f"dropped (not paired / not cached): {dropped}")
     n_participants = len(participants)
 
+    # ---- 3b. the cohort-mean filter, over the ANALYSED rows ---------------
+    # Every recording of the paired cohort pooled into ONE mean, never a mean per
+    # condition: a condition-specific filter would be estimated from the very data the
+    # paired contrast tests. Built from the analysed rows rather than the whole store so
+    # it describes the cohort the CSV reports on.
+    # Deduplicated, because the two variants differ in what a "recording" is: the
+    # subject-axis join resolves a distinct row per (participant, condition), while the
+    # time-axis join shares one mixing matrix across the conditions and resolves the
+    # SAME row twice. Averaging that row twice would not move the mean, but it would
+    # report a cohort of 2P where there are P topographies and halve every diagnostic's
+    # apparent independence.
+    mean_rows = list(
+        dict.fromkeys(resolve(p, c) for p in participants for c in conditions)
+    )
+    cohort = at.cohort_mean_pattern(patterns[mean_rows], electrode_mask)
+    mean_masked_filter = at.restrict_filters_to_mask(
+        cohort.spatial_filter, electrode_mask
+    )
+    mean_masked_share = at.mask_weight_share(cohort.spatial_filter, electrode_mask)
+    weak_mean, total_mean = at.polarity_weak_count(cohort.input_strength)
+    _logger.info(
+        f"cohort-mean filter over {cohort.n_recordings} recording(s): "
+        f"|U_mean A_mean - I| = {cohort.identity_error:.2e}; "
+        f"{weak_mean}/{total_mean} input anchor(s) below "
+        f"{at.POLARITY_CORR_FLOOR}"
+    )
+    for k in range(n_components):
+        _logger.info(
+            f"  {ic_labels[k]}: corr(mean topo, mask) {cohort.mask_corr[k]:+.3f}, "
+            f"median cos to mean {np.median(cohort.cosine_to_mean[:, k]):.3f}, "
+            f"|w| kept by the ROI restriction "
+            f"{mean_masked_share[k]:.1%} shared / "
+            f"{np.median(masked_share[mean_rows][:, k]):.1%} median per-recording"
+        )
+    low_cosine = [
+        ic_labels[k]
+        for k in range(n_components)
+        if np.median(cohort.cosine_to_mean[:, k]) < 0.3
+    ]
+    if low_cosine:
+        _logger.warning(
+            f"the cohort does not agree on the map of {low_cosine} (median cosine to "
+            "the mean < 0.3), so those components' mean_* rows describe an average "
+            "topography nobody resembles rather than a shared response."
+        )
+
     # ---- 4. project both conditions (one stream each) --------------------
     roi_index = np.flatnonzero(electrode_mask)
-    prestim_proj, zmask_proj, roi_proj = {}, {}, {}
+    projected: dict[str, _Projected] = {}
     for condition in conditions:
-        (
-            prestim_proj[condition],
-            zmask_proj[condition],
-            roi_proj[condition],
-        ) = _project_condition(
+        projected[condition] = _project_condition(
             cache_paths[condition],
             condition,
             participants,
@@ -827,7 +1090,14 @@ def run(args: argparse.Namespace) -> None:
             store_channels,
             args.n_times,
             roi_index,
+            cohort.spatial_filter,
+            masked_filters,
+            mean_masked_filter,
+            projectors,
         )
+    prestim_proj = {c: projected[c].prestim for c in conditions}
+    zmask_proj = {c: projected[c].zmask for c in conditions}
+    roi_proj = {c: projected[c].roi_raw for c in conditions}
 
     # ---- 5. epoch geometry (shared window) -------------------------------
     sfreq = results.sfreq
@@ -868,6 +1138,10 @@ def run(args: argparse.Namespace) -> None:
         flip[condition] = np.concatenate(
             [flip_ic, np.ones((n_participants, len(_MASK_LABELS)))], axis=1
         )
+    # The shared-filter variants read ONE operator whose sign was anchored once when the
+    # cohort mean was built, so there is no per-recording sign for them to carry and
+    # applying the flip above would scramble a quantity that does not have it.
+    shared_flip = np.ones((n_participants, len(labels)))
 
     # The stored z-scored IC sources, per condition, on that condition's OWN time axis:
     #   * subject-axis join (per_recording): tf_maps[row] IS the single recording.
@@ -921,22 +1195,57 @@ def run(args: argparse.Namespace) -> None:
             )
             + f" (|corr| < {at.POLARITY_CORR_FLOOR})"
         )
+    # The shared-filter figures get their own line: their direction rests on the ONE
+    # anchor the cohort mean carries, not on n_participants x n_components of them.
+    shared_polarity_note = (
+        f"shared filter, sign anchored once when the cohort mean was built over "
+        f"{cohort.n_recordings} recording(s); no per-recording flip"
+    )
 
     # ---- 6. the grid: selection x window ---------------------------------
     rows_out: list[dict] = []
+    # The spectrum directory follows the STORE that was read, not the cache: a
+    # band-restricted decomposition is a different product, so its figures must not
+    # land on top of the broadband ones. `--band` names the store, and the canonical
+    # layout puts anything but broadband under `bands/` with the band as the first
+    # filename token (which `_plot_prefix` supplies below).
+    spectrum = (
+        SpectrumTypeVariants.BROADBAND.value
+        if args.band is None
+        else SpectrumTypeVariants.BANDS.value
+    )
     plots_dir = (
         (Path(args.save_dir) if args.save_dir else ProjectPaths.PLOTS_PATH)
         / _STAGE_DIR
         / f"{store_condition.value}_{music_type.value}"
-        / SpectrumTypeVariants.BROADBAND.value
+        / spectrum
         / _ANALYSIS_DIR
         / f"pca_{args.n_pca}"
     )
+    # Band as the first token of every filename, per the canonical plot layout.
+    plot_prefix = "" if args.band is None else f"{args.band}_"
     if not args.skip_plots:
         plots_dir.mkdir(parents=True, exist_ok=True)
+        # The spatial-filter check figures, at the top of the pca_<N> directory rather
+        # than inside a <selection>/<window>/ cell: the operators do not depend on
+        # either, so one copy per run is the honest placement. They are what says
+        # whether the mean_* / masked_* rows below are worth reading at all.
+        _write_filter_plots(
+            plots_dir,
+            plot_prefix,
+            results,
+            cohort,
+            mean_masked_filter,
+            mean_masked_share,
+            electrode_mask,
+            coordinate_system,
+        )
 
-    for sel_name, bins in selections.items():
-        take = [union_position[int(b)] for b in bins]
+    for sel_name, bins in store_selections.items():
+        # `bins` indexes the STORE (it slices the stored IC sources); `take` indexes the
+        # projected arrays, whose frequency axis is the streamed union of CACHE bins.
+        # The two are resolved on different grids and must never be swapped.
+        take = [union_position[int(b)] for b in cache_selections[sel_name]]
         # cut trials once per condition per variant input
         cut: dict[str, dict[str, np.ndarray]] = {name: {} for name in _SIGNAL_VARIANTS}
         roi_snr: dict[str, np.ndarray] = {}
@@ -977,6 +1286,24 @@ def run(args: argparse.Namespace) -> None:
             cut["stored_prestim"][condition], _ = at.cut_trials(
                 stored_band, onsets_inside, pre, post
             )
+            # The four filter variants. Each swaps ONLY the learned rows and keeps
+            # "prestim"'s reference columns verbatim, exactly as stored_prestim does, so
+            # the fixed quantity every variant is judged against never moves and a
+            # difference between two rows is a difference of spatial filters alone.
+            reference_band = prestim_band[:, n_components:]  # (P, 3, T)
+            for name, learned in (
+                ("mean_prestim", projected[condition].mean_raw),
+                ("mean_stored_prestim", projected[condition].mean_stored_z),
+                ("masked_prestim", projected[condition].masked_z),
+                ("mean_masked_prestim", projected[condition].mean_masked_z),
+            ):
+                learned_band = learned[:, :, take, :].mean(axis=2)  # (P, K, T)
+                cut[name][condition], _ = at.cut_trials(
+                    np.concatenate([learned_band, reference_band], axis=1),
+                    onsets_inside,
+                    pre,
+                    post,
+                )
             # The binary-ROI row, built the equal-weight way: each electrode is
             # referenced to its OWN pre-stimulus window before the ROI is averaged, and
             # the average is then referenced to its own again so the row lands back in
@@ -1017,17 +1344,31 @@ def run(args: argparse.Namespace) -> None:
         )
 
         for lo, hi in args.stimulus_intervals:
-            window = (times >= lo) & (times <= hi)
+            # The paradigm's own interval is read HALF-OPEN, as AssrEpoch.stimulus_mask
+            # defines it — 500 ms at 250 Hz is exactly 125 samples, and `<= hi` would
+            # add the first sample after the stimulus ended. It is also how the stage-07
+            # read-out reads its default window, so the two stages' default cells cover
+            # the same samples and their shared reference row is comparable to the digit
+            # rather than to the third decimal. Any other interval is taken as typed.
+            if (lo, hi) == (0.0, AssrEpoch.STIMULUS_DURATION_S):
+                window = AssrEpoch.stimulus_mask(times)
+            else:
+                window = (times >= lo) & (times <= hi)
             if not window.any():
                 raise ValueError(f"window {lo}-{hi}s selects no epoch sample.")
             window_label = f"{lo:g}-{hi:g}s"
 
             for signal in args.signal_variants:
+                # Which sign convention this variant's learned rows carry. A shared
+                # operator was anchored once when it was built, so it takes no
+                # per-recording flip; everything else does.
+                shared_filter = signal in _SHARED_FILTER_VARIANTS
                 # value (window-reduced) and course (full epoch) per condition, both from
-                # the SAME normalised trials, anchored by the per-condition flip.
+                # the SAME normalised trials, anchored by that variant's flip.
                 value, course = {}, {}
                 for condition in conditions:
                     trials = cut[signal][condition]  # (P, K+3, N, W)
+                    signs = shared_flip if shared_filter else flip[condition]
                     if signal in _BASELINE_VARIANTS:
                         normed, _rel, _pos = at.baseline_normalise(
                             trials, baseline_mask
@@ -1039,10 +1380,8 @@ def run(args: argparse.Namespace) -> None:
                     else:
                         normed = trials
                     per_trial = normed[..., window].mean(axis=-1)  # (P, K+3, N)
-                    value[condition] = np.median(per_trial, axis=2) * flip[condition]
-                    course[condition] = (
-                        np.median(normed, axis=2) * flip[condition][:, :, None]
-                    )
+                    value[condition] = np.median(per_trial, axis=2) * signs
+                    course[condition] = np.median(normed, axis=2) * signs[:, :, None]
 
                 cell = {
                     "variant": signal,
@@ -1063,6 +1402,7 @@ def run(args: argparse.Namespace) -> None:
                 if not args.skip_plots:
                     _write_cell_plots(
                         plots_dir,
+                        plot_prefix,
                         cell,
                         value,
                         course,
@@ -1074,7 +1414,7 @@ def run(args: argparse.Namespace) -> None:
                         args.alpha,
                         rows_out,
                         n_participants,
-                        polarity_note,
+                        shared_polarity_note if shared_filter else polarity_note,
                     )
 
     # ---- 7. one CSV for the whole grid -----------------------------------
@@ -1084,12 +1424,14 @@ def run(args: argparse.Namespace) -> None:
         else ProjectPaths.PROJECT_ROOT / "results" / experiment.value
     )
     results_root.mkdir(parents=True, exist_ok=True)
-    csv_path = results_root / f"assr_snr_grid__{variant.value}__pca{args.n_pca}.csv"
+    csv_path = results_root / (
+        f"assr_snr_grid__{variant.value}__{spectrum}__pca{args.n_pca}.csv"
+    )
     frame = pd.DataFrame(rows_out)
     frame.to_csv(csv_path, index=False)
     _logger.info(f"saved {csv_path} ({len(frame)} test rows)")
     print(
-        f"\n{len(frame)} tests over {len(selections)} selection(s) x "
+        f"\n{len(frame)} tests over {len(store_selections)} selection(s) x "
         f"{len(args.stimulus_intervals)} window(s) x {len(args.signal_variants)} "
         f"variant(s), n = {n_participants}. Floor p = "
         f"{at.p_floor(n_participants):.5f} two-sided."
@@ -1164,8 +1506,70 @@ def _accumulate_tests(
                 )
 
 
+def _write_filter_plots(
+    plots_dir,
+    plot_prefix,
+    results,
+    cohort,
+    mean_masked_filter,
+    mean_masked_share,
+    electrode_mask,
+    coordinate_system,
+) -> None:
+    """The two spatial-filter check figures, written once per run.
+
+    They sit at the top of the ``pca_<N>`` directory rather than inside a grid cell,
+    because the operators they draw depend on neither the frequency selection nor the
+    stimulus window. What they are for: a ``mean_*`` row is only readable if the cohort
+    agreed on the map that was averaged, and a ``masked_*`` row only means "a cleaner
+    view of the same component" if the component had weight on the anchor electrodes to
+    begin with. Both figures answer their question by eye, in one page.
+
+    A store written without channel names cannot place a value on a scalp, so the
+    figures are skipped with a warning rather than failing the run — the CSV, which is
+    the product, does not depend on them.
+
+    :param plots_dir: The run's ``pca_<N>`` directory.
+    :param plot_prefix: Band token plus underscore, or empty for a broadband run.
+    :param results: The loaded store, for :meth:`topo_info`.
+    :param cohort: The :class:`~src.analysis.assr_trials.CohortMeanFilter`.
+    :param mean_masked_filter: ``(components, channels)`` restricted shared filter.
+    :param mean_masked_share: ``(components,)`` share of its L2 weight kept.
+    :param electrode_mask: Boolean ``(channels,)`` anchor mask.
+    :param coordinate_system: Montage the stored channel names belong to.
+    """
+    try:
+        info = results.topo_info(coordinate_system)
+    except (ValueError, FileNotFoundError) as exc:
+        _logger.warning(
+            f"no topography layout for this store ({exc}); skipping the spatial-filter "
+            "check figures. The grid itself is unaffected."
+        )
+        return
+    plot_cohort_mean_topomaps(
+        cohort.pattern,
+        info,
+        electrode_mask,
+        mask_corr=cohort.mask_corr,
+        cosine_to_mean=cohort.cosine_to_mean,
+        n_recordings=cohort.n_recordings,
+        save_path=plots_dir / f"{plot_prefix}{_MEAN_FILTER_FIGURE}",
+    )
+    plot_masked_filter_topomaps(
+        mean_masked_filter,
+        info,
+        weight_share=mean_masked_share,
+        n_mask_channels=int(np.asarray(electrode_mask).sum()),
+        variant="mean_masked_prestim",
+        save_path=plots_dir / f"{plot_prefix}{_MEAN_MASKED_FILTER_FIGURE}",
+    )
+    plt.close("all")
+    _logger.info(f"wrote the spatial-filter check figures to {plots_dir}")
+
+
 def _write_cell_plots(
     plots_dir,
+    plot_prefix,
     cell,
     value,
     course,
@@ -1185,6 +1589,10 @@ def _write_cell_plots(
     own subdirectory, ``<selection>/<window>/``, so the two signal variants of a cell sit
     together and the grid is browsable by band and window; the variant stays in the
     filename. The figure titles keep the full ``variant__selection__window`` context.
+
+    *plot_prefix* is the band token plus an underscore for a band-restricted store, and
+    empty for a broadband one -- the canonical layout wants the band as the first token
+    of every filename under ``bands/``.
 
     *polarity_note* names how many (participant, component) sign anchors were decided
     on a weak topography correlation. It rides on the trial-course figure because that
@@ -1221,7 +1629,7 @@ def _write_cell_plots(
         ic_labels,
         alpha,
         f"Condition contrast & discrimination — {tag}, n={n_participants}",
-        cell_dir / f"pvalue_summary__{variant}.png",
+        cell_dir / f"{plot_prefix}pvalue_summary__{variant}.png",
     )
     _plot_snr(
         cell_tables,
@@ -1230,7 +1638,7 @@ def _write_cell_plots(
         ic_labels,
         alpha,
         f"IC SNR vs reference, per condition — {tag}, n={n_participants}",
-        cell_dir / f"snr_by_condition__{variant}.png",
+        cell_dir / f"{plot_prefix}snr_by_condition__{variant}.png",
     )
     _plot_courses(
         course,
@@ -1241,7 +1649,7 @@ def _write_cell_plots(
         conditions,
         alpha,
         f"Trial course per spatial filter — {tag}, n={n_participants}\n{polarity_note}",
-        cell_dir / f"trial_course_by_source__{variant}.png",
+        cell_dir / f"{plot_prefix}trial_course_by_source__{variant}.png",
     )
 
 

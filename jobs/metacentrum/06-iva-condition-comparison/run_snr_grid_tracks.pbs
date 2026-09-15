@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -N PSILO_SNR_GRID_TRACKS_06
 #PBS -l walltime=1:00:00
-#PBS -l select=1:ncpus=4:mem=400gb:scratch_local=10gb
+#PBS -l select=1:ncpus=4:mem=200gb:scratch_local=100gb
 #PBS -m ae
 #PBS -j oe
 
@@ -37,15 +37,31 @@
 # THE GRID this job runs at once:
 #   --halfwidths 0 5            -> 40 Hz single bin AND 35-45 Hz band mean
 #   --stimulus_intervals        -> 0-500 ms AND 200-500 ms test windows
-# crossed with all three signal variants -> 2 x 2 x 3 = 12 cells, all in one CSV.
-# The third, stored_prestim, costs no extra streaming: it reuses the stored IC rows the
-# zscored variant already reads and the reference columns prestim already projects.
+# crossed with all seven signal variants -> 2 x 2 x 7 = 28 cells, all in one CSV.
+#
+# WHAT THE SEVEN VARIANTS ARE. The references never move — every variant but zscored
+# carries prestim's three reference columns verbatim — so the whole set is ONE
+# comparison in which only the learned rows change:
+#   zscored / prestim / stored_prestim   how the participant's OWN filter is read
+#   mean_prestim / mean_stored_prestim   the same, through the ONE cohort-mean filter,
+#                                        so the difference from the pair above IS the
+#                                        per-participant topography and nothing else
+#   masked_prestim / mean_masked_prestim both filters with every weight OUTSIDE the
+#                                        ASSR electrodes zeroed, which separates a
+#                                        better weighting inside that area from access
+#                                        to signal outside it
+# None of them costs another pass over the cache: the extra operators ride the same
+# streamed block, and stored_prestim reuses the stored IC rows zscored already reads.
+# In THIS variant the mixing matrix is shared across the conditions, so the cohort mean
+# averages one topography per participant rather than one per recording.
 #
 # RESOURCES. Like run_trial_stats.pbs this is I/O bound: the cost is one streamed
 # pass over the ~50 GB DEFLATE cache per condition (~13 min each), decompressed
-# subject by subject. mem=32gb comfortably holds the stored tf_maps (~1 GB) plus
-# the kept-frequency projections; ncpus=4 because the decompression is
-# single-threaded. Do NOT copy the 499gb/8cpu header from run_condition_tracks.pbs.
+# subject by subject. Memory holds the stored tf_maps (~1 GB) plus the kept-frequency
+# projections — the four filter variants add four more (P, K, F, T) arrays per
+# condition, together smaller than the ROI block already held; ncpus=4 because the
+# decompression is single-threaded. Do NOT copy the 499gb/8cpu header from
+# run_condition_tracks.pbs.
 #
 # NEEDS ON DISK (all from earlier stages):
 #   data/processed/assr/iva_results/JoinedTracks/iva_*__pca<N>.npz   (the store)
@@ -54,9 +70,15 @@
 #   data/processed/assr/concatenated/<Cond>_ASSR.metadata.csv
 #
 # WRITES:
-#   results/assr/assr_snr_grid__iva_channel_joined_tracks__pca<N>.csv   (all cells)
+#   results/assr/assr_snr_grid__iva_channel_joined_tracks__broadband__pca<N>.csv
 #   plots/06-iva-condition-comparison/JoinedTracks_ASSR/broadband/assr_snr_grid/
 #       pca_<N>/<sel>/<window>/{pvalue_summary,snr_by_condition,trial_course_by_source}__<variant>.png
+#       pca_<N>/{mean,mean_masked}_filter_topomaps.png    the spatial-filter check
+#           figures: whether the cohort agreed on the map the mean_* rows average, and
+#           how much of each filter survived the ASSR-electrode restriction. Read them
+#           BEFORE the mean_* / masked_* rows — a component whose median cosine to the
+#           mean is near zero has no cohort map, so its mean_* rows describe an average
+#           nobody resembles.
 #
 # The joined (subject-axis) counterpart is run_snr_grid_joined.pbs.
 # ---------------------------------------------------------------------------
@@ -105,7 +127,9 @@ python /mnt/scripts/run_assr_snr_grid.py \
    --n_pca 5 \
    --halfwidths 0 5 \
    --stimulus_intervals 0:0.5 0.2:0.5 \
-   --signal_variants zscored prestim stored_prestim \
+   --signal_variants prestim stored_prestim \
+                     mean_prestim mean_stored_prestim \
+                     masked_prestim mean_masked_prestim \
    --contrast_alternative greater \
    --snr_alternative less \
    --store_dir "$DATA_DIR" \

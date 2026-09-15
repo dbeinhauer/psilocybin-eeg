@@ -75,7 +75,7 @@ Output (canonical per-condition layout)::
             condition_mean_tf_maps.png
             condition_mean_tf_maps_onset.png
             participants/*.png
-        bands/iva_channel_joined/pca_<n_pca>/          # when --band <name>
+        bands/iva_channel_joined/pca_<n_pca>/          # --band / --band_range
             <band>_condition_mean_topomaps.png
             ...
 
@@ -144,6 +144,7 @@ from src.definitions.fields import (  # noqa: E402
     MusicTypeVariants,
     SpectrumTypeVariants,
 )
+from src.definitions.frequency import BandSpec, band_token  # noqa: E402
 from src.io.iva_store import save_iva_components  # noqa: E402
 from src.visualization.iva_condition_plots import (  # noqa: E402
     plot_condition_mean_tf_maps,
@@ -325,14 +326,30 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "cache."
         ),
     )
-    parser.add_argument(
+    band_group = parser.add_mutually_exclusive_group()
+    band_group.add_argument(
         "--band",
         choices=[b.value for b in FrequencyBandNames],
         default=None,
         help=(
-            "Optional frequency band. When set, the pooled broadband tensor is "
-            "sliced to the band's frequency range before IVA, and plots are "
-            "written to 'bands/' with a '<band>_' prefix."
+            "Optional standard frequency band. When set, the pooled broadband "
+            "tensor is sliced to the band's frequency range BEFORE the PCA and "
+            "IVA, and plots are written to 'bands/' with a '<band>_' prefix."
+        ),
+    )
+    band_group.add_argument(
+        "--band_range",
+        nargs=2,
+        type=float,
+        metavar=("LOW", "HIGH"),
+        default=None,
+        help=(
+            "An explicit frequency window in Hz, for a restriction no standard band "
+            "describes -- e.g. '--band_range 30 50' for the ASSR's neighbourhood, "
+            "where the narrowest named band (gamma, 30-70 Hz) is the whole upper half "
+            "of the wavelet grid. Slices exactly as --band does and is named "
+            "'<low>-<high>hz' in the store filename and the figure prefix, so a "
+            "windowed run coexists with the broadband and named-band ones."
         ),
     )
     parser.add_argument(
@@ -483,7 +500,7 @@ def run_condition_comparison(
     iva_opt_approach: str,
     iva_max_iter: int,
     iva_w_diff_stop: float,
-    band: str | None,
+    band: BandSpec,
     show_difference: bool,
     onset_average: bool,
     min_onsets: int,
@@ -515,7 +532,8 @@ def run_condition_comparison(
     :param iva_opt_approach: ``iva_g`` optimisation method.
     :param iva_max_iter: Maximum ``iva_g`` iterations.
     :param iva_w_diff_stop: ``iva_g`` convergence threshold.
-    :param band: Optional frequency band to restrict to.
+    :param band: Frequency restriction applied before the decomposition: a
+        standard band name, an explicit ``(low, high)`` Hz window, or ``None``.
     :param show_difference: Draw the between-condition difference row.
     :param onset_average: Draw the stimulus-averaged TF comparison.
     :param min_onsets: Minimum epochs required for that average.
@@ -555,6 +573,11 @@ def run_condition_comparison(
     # with the component store, which names the condition from the enum.
     label = f"{ConditionVariants.JOINED.value}_{music_type.value}"
     sfreq = pooled.data.sfreq
+    # One canonical name for the restriction, used by the store, the plot
+    # directory and every figure filename. A named band keeps its name so
+    # existing products keep their paths; an explicit window becomes
+    # '<low>-<high>hz'.
+    band_name = band_token(band)
     data_4d, iva_freqs = slice_to_band(pooled.data.data, freqs_full, band)
     n_subjects, n_ch, n_freqs, n_t = data_4d.shape
     _logger.info(
@@ -655,7 +678,7 @@ def run_condition_comparison(
             condition=ConditionVariants.JOINED,
             variant=IvaVariants.CHANNEL_JOINED,
             music_type=music_type,
-            band=band,
+            band=band_name,
             n_pca=n_pca,
             sfreq=sfreq,
             participants=list(pooled.participants),
@@ -690,13 +713,13 @@ def run_condition_comparison(
     # Canonical layout: plots/<stage>/<Condition>_<MusicType>/<spectrum>/<type>/pca_N/
     spectrum = (
         SpectrumTypeVariants.BROADBAND.value
-        if band is None
+        if band_name is None
         else SpectrumTypeVariants.BANDS.value
     )
     out_dir = save_root / _STAGE_DIR / label / spectrum / _ANALYSIS_DIR / f"pca_{n_pca}"
     out_dir.mkdir(parents=True, exist_ok=True)
     participants_dir = out_dir / "participants"
-    prefix = "" if band is None else f"{band}_"
+    prefix = "" if band_name is None else f"{band_name}_"
     _logger.info(f"[{label}] writing figures to {out_dir}")
 
     condition_rows = [c.value for c in pooled.conditions]
@@ -885,11 +908,16 @@ def main(argv: list[str] | None = None) -> None:
     # The CLI takes 1-based component numbers, matching the "IC <k>" figure labels.
     components = None if args.components is None else [k - 1 for k in args.components]
 
+    # One band spec from the two mutually exclusive flags: a name, an explicit Hz
+    # window, or None for the whole grid. Resolved here so everything downstream takes
+    # a single argument and never has to know which flag the user reached for.
+    band = tuple(args.band_range) if args.band_range is not None else args.band
+
     _logger.info(
         f"IVA condition comparison: experiment={experiment_name.value}, "
         f"conditions={[c.value for c in conditions]}, "
         f"music_types={[mt.value for mt in music_types]}, n_pca={args.n_pca}, "
-        f"band={args.band or SpectrumTypeVariants.BROADBAND.value}, "
+        f"band={band_token(band) or SpectrumTypeVariants.BROADBAND.value}, "
         f"iva_opt={args.iva_opt_approach}"
     )
     _logger.info(f"Wavelet source cache : {wavelet_dir}")
@@ -916,7 +944,7 @@ def main(argv: list[str] | None = None) -> None:
             iva_opt_approach=args.iva_opt_approach,
             iva_max_iter=args.iva_max_iter,
             iva_w_diff_stop=args.iva_w_diff_stop,
-            band=args.band,
+            band=band,
             show_difference=not args.no_difference_row,
             onset_average=not args.skip_onset_average,
             min_onsets=args.min_onsets,

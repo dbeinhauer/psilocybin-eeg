@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -N PSILO_JICA_TRACKS_07
-#PBS -l walltime=6:00:00
-#PBS -l select=1:ncpus=4:mem=499gb:scratch_local=80gb
+#PBS -l walltime=2:00:00
+#PBS -l select=1:ncpus=4:mem=499gb:scratch_local=120gb
 #PBS -m ae
 #PBS -j oe
 
@@ -175,9 +175,17 @@
 #                                time per spatial filter, Placebo vs Psilocybin,
 #                                mean +/- SEM ACROSS PARTICIPANTS, each panel
 #                                carrying its one-sided p
-#   pvalue_summary_*             the two test families as forest plots
-#   snr_vs_reference_*           each component's response minus the reference's,
+#   pvalue_summary_*_<ref>       the two test families as forest plots
+#   snr_vs_reference_*_<ref>     each component's response minus the reference's,
 #                                per condition
+#
+# <ref> is full | pca | pca_z: the read-out carries THREE fixed reference rows — the
+# ASSR-electrode average on the whole channel space, the same average read only through
+# the retained subspace on raw power, and that operator on the z-scored signal the fit
+# was handed — and "better than the reference?" is a different question for each, so
+# each gets its own figure. The first is built exactly as the stage-06 IVA read-out
+# builds it (run_assr_snr_grid.py), which is what makes the two stages comparable on
+# that row; every CSV row names the reference it was judged against.
 #
 # Output:
 #   plots/07-ica-condition-comparison/JoinedTracks_ASSR/broadband/

@@ -38,24 +38,83 @@ the same operator reads both conditions there, so a condition difference cannot 
 artefact of the filter having changed; run ``joined`` as the check that the conclusion
 survives when each recording gets its own filter.
 
-**What jICA buys over IVA**, and it is the reason this stage exists: a component's
-sign flips its map and its whole mixing column together, so there is **no
-per-recording sign ambiguity** to resolve. The IVA path spends two alignment passes
-on it (``Sigma_N``, then PC1 of the TF maps) and carries the risk that arbitrary
-flips manufacture a condition difference; here the only free sign is one global one
-per component. **What it costs**: a per-block filter is that recording's
-*contribution* to a shared source rather than its own copy of the component, so a
-participant with a near-zero loading has a near-noise time course and still carries
-full weight in every group statistic. The loading figures are what say which those
-are.
+**What jICA buys over IVA**, and it is the reason this stage exists: FastICA's
+objective is invariant under flipping an *entire* unmixing row and nothing else, so a
+component's sign flips its map and its whole mixing column together and there is **no
+per-recording sign ambiguity** to resolve. IVA-G's ``sum_k log det Sigma_k`` *is*
+invariant under per-dataset flips, so the IVA path must spend alignment passes on
+signs that are genuinely unidentifiable, carrying the risk that arbitrary flips
+manufacture a condition difference. Here the only free sign is one per component, and
+this script pins it once — anchored to the cohort topography, identical for every
+recording and both conditions. **A per-recording flip is therefore NOT applied**: it
+would overwrite a determined quantity, and under ``--join joined`` could flip one
+condition of a pair and not the other, turning the paired difference into a sum.
 
-Three signal variants run side by side (``--signal_variants``), filling the reachable
-cells of (raw | z-scored) x (no baseline | per-trial baseline): ``prestim`` projects raw
-power and baselines each trial; ``zscored`` applies the filter to exactly the signal the
-fit saw, so it is the component itself rather than an approximation; and
-``zscored_prestim`` is that exact component in pre-stimulus-SD units, borrowing its
-fixed-reference row from ``prestim`` so the two differ only in how the component was
-derived. See :data:`~src.analysis.wavelet_jica.SIGNAL_VARIANTS`.
+**What it costs**: a per-block filter is that recording's *contribution* to a shared
+source rather than its own copy of the component, so a participant with a near-zero
+loading has a near-noise time course and still carries full weight in every group
+statistic. The loading figures are what say which those are.
+
+The read-out runs a **(spatial filter x signal) grid** (``--signal_variants``), six
+cells by default, every one of them per-trial baselined so all six are in the same
+units and directly comparable — the IVA stage's grid cell for cell, so a row of either
+stage's CSV can be read against the other::
+
+                          | raw wavelet power | z-scored (what the fit saw)
+    ----------------------+-------------------+-----------------------------
+    that block's filter   | prestim           | zscored_prestim
+    cohort-mean filter    | mean_prestim      | mean_zscored_prestim
+    ... ASSR electrodes   | -                 | masked_prestim
+    cohort mean, ASSR     | -                 | mean_masked_prestim
+
+Down one axis: applying the filter to raw power drops the per-channel ``1/sd``
+weighting the fit folded in, so it *approximates* the component, while the z-scored
+half reads exactly the signal the fit saw and so IS the component. Down the other: the
+cohort-mean filter is one operator shared by everybody, built by averaging the
+unit-normalised per-block topographies over both conditions and inverting
+(:func:`~src.analysis.wavelet_jica.cohort_mean_pattern`,
+:func:`~src.analysis.wavelet_jica.cohort_mean_filter`). It exists because a
+per-recording filter spends ``C`` parameters rediscovering a stereotyped topography and
+the variance of that estimate can exceed the bias it removes — and because it is the
+like-for-like learned comparison to the fixed electrode mask, which is itself a single
+group-level spatial weighting. The **masked** pair is either of those with every weight
+outside the ASSR electrodes zeroed, which separates a better weighting *inside* the
+anchor area from access to signal *outside* it; both read the z-scored signal only,
+because a restricted filter's weights presume the scaling they were fitted on. Every
+baselined variant borrows its reference rows from ``prestim``, so the whole grid is
+judged against one set of numbers. See
+:data:`~src.analysis.wavelet_jica.SIGNAL_VARIANTS`.
+
+**Three fixed reference rows**, the same three ``run_assr_snr_grid.py`` emits for the
+IVA stage and named identically (:data:`~src.analysis.assr_trials.MASK_LABELS`), in
+increasing proximity to what the decomposition actually saw:
+
+* ``ASSR-mask (full)`` — the fronto-central electrode average on the whole channel
+  space, built with **equal weight per electrode**: each ROI electrode is referenced to
+  its own pre-stimulus window and divided by its baseline SD *pooled over trials*
+  **before** the ROI is averaged, and the average is referenced to its own pre-stimulus
+  again — against ONE constant shared by both conditions, so the paired contrast is
+  never rescaled per participant
+  (:func:`~src.analysis.assr_trials.roi_channelwise_snr`). Averaging raw power first
+  would weight each electrode by its own power level, which is uncorrelated with whether
+  that electrode carries any 40 Hz response, and would leave the reference off the units
+  every component row is in — which
+  :func:`~src.analysis.assr_trials.reference_snr_tests` subtracts from directly. This is
+  the row the two stages compute identically, so it is where they can be checked against
+  each other.
+* ``ASSR-mask (PCA)`` — the same average read only through the retained subspace, on RAW
+  power (:func:`~src.analysis.wavelet_jica.subspace_mask_rows`), so a component is judged
+  against a reference that lost the same directions it did.
+* ``ASSR-mask (PCA, z)`` — that operator on the Z-SCORED signal, i.e. exactly what the
+  fit was handed. Read beside the row above it separates the channel reduction from the
+  per-(channel, frequency) rescaling z-scoring adds; in ``zscored`` the two coincide by
+  construction, which is a free check that both paths agree.
+
+**The subspace rows are joint**, and that is the one place this stage's reference
+differs in kind from the IVA stage's: jICA reduces the *stacked* channel axis, so what
+it kept for one recording genuinely depends on the others at the same sample, whereas
+the IVA store's PCA is fitted per recording. Both families of tests run against all
+three references, and every test row names the one it was judged against.
 
 **There is no per-participant test on the global TF maps**, and that is structural
 rather than an omission: jICA's ``tf_maps`` is ``(K, F, T)`` — one map per component,
@@ -104,10 +163,16 @@ Figures (canonical per-product layout)::
             participants/*.png                   # with --participant_grids
         ica_component_analysis/ica_<n>/          # the 40 Hz read-out
             trial_course_by_source_<selection>_<variant>.png
-            pvalue_summary_<selection>_<variant>.png
-            snr_vs_reference_<selection>.png
+            pvalue_summary_<selection>_<variant>_<reference>.png
+            snr_vs_reference_<selection>_<reference>.png
 
-Tests are written to one CSV per run::
+``<reference>`` is ``full``, ``pca`` or ``pca_z``
+(:data:`~src.analysis.assr_trials.MASK_SLUGS`): "better than the reference?" is a
+different question for each of the three, so each gets its own figure. The course
+figure is drawn once per cell and carries all three reference rows as panels.
+
+Tests are written to one CSV per run, with a ``reference`` column naming which row each
+``vs_reference`` / ``snr`` test was judged against (empty for ``contrast``)::
 
     results/<experiment>/jica_tests__<join>__<MusicType>__ica<n>.csv
 
@@ -154,6 +219,7 @@ from src.analysis import assr_trials as at  # noqa: E402
 from src.analysis import iva_quality  # noqa: E402
 from src.analysis.wavelet_ica import zscore_by_time  # noqa: E402
 from src.analysis.wavelet_jica import (  # noqa: E402
+    DEFAULT_SIGNAL_VARIANTS,
     IDENTITY_TOLERANCE,
     SIGNAL_VARIANTS,
     VARIANT_RECIPE,
@@ -163,7 +229,12 @@ from src.analysis.wavelet_jica import (  # noqa: E402
     JoinLayout,
     assemble_join,
     bootstrap_median_ci,
+    cohort_mean_filter,
+    cohort_mean_pattern,
+    component_polarity,
     fit_joint_ica,
+    subspace_mask_rows,
+    subspace_reference_rows,
 )
 from src.definitions.constants import AssrEpoch, ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
@@ -199,9 +270,15 @@ _logger = logging.getLogger(__name__)
 #: Stage directory under ``plots/``.
 _STAGE_DIR = "07-ica-condition-comparison"
 
-#: What pinned the component sign, printed on every decomposition figure. One sign per
-#: component, not per recording: jICA has no per-recording ambiguity to resolve.
+#: What pinned the component sign on the DECOMPOSITION figures: the hypothesis-free
+#: rule `orient_components` applies at fit time. One sign per component, not per
+#: recording — jICA has no per-recording ambiguity to resolve.
 _SIGN_NOTE = "largest |TF| excursion positive (one sign per component)"
+
+#: What pinned it on the READ-OUT figures, where a directional test needs "higher =
+#: more power over the reference electrodes" to be true. Still one sign per component,
+#: re-anchored to the cohort topography by `component_polarity`.
+_READOUT_SIGN_NOTE = "corr(cohort topography, ASSR mask), one sign per component"
 
 #: Frequency (Hz) marked on every TF panel — the ASSR stimulation frequency.
 _TF_FREQ_MARKS = [iva_quality.ASSR_FREQ]
@@ -380,7 +457,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Base data directory holding the per-condition wavelet caches. The "
-            "'<experiment>/wavelets' suffix is appended automatically."
+            "'<experiment>/wavelets/broadband' suffix is appended automatically."
         ),
     )
     parser.add_argument(
@@ -460,17 +537,47 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--signal_variants",
         nargs="+",
         choices=list(SIGNAL_VARIANTS),
-        default=list(SIGNAL_VARIANTS),
+        default=list(DEFAULT_SIGNAL_VARIANTS),
         help=(
-            "Normalisations to run side by side, filling the reachable cells of "
-            "(raw | z-scored) x (no baseline | per-trial baseline). 'prestim' projects "
-            "RAW power and references every trial to its own pre-stimulus SD (an SNR), "
-            "which approximates the component because it drops the per-channel 1/sd "
-            "weighting the fit folded in. 'zscored' applies the filter to exactly the "
-            "signal the fit saw, so it IS the component, but carries no baseline. "
-            "'zscored_prestim' is that exact component put into pre-stimulus-SD units, "
-            "and it borrows its fixed-reference row from 'prestim' so the two differ "
-            "only in how the component was derived — so it requires 'prestim'."
+            "Read-out cells to run side by side, as a (spatial filter x signal) grid. "
+            "The default is the six per-trial-baselined cells — the IVA stage's grid "
+            "cell for cell — so every row is in units of its own pre-stimulus SD and "
+            "all six are comparable: {'prestim', 'zscored_prestim'} use each block's "
+            "OWN filter, {'mean_prestim', 'mean_zscored_prestim'} one cohort-mean "
+            "filter shared by everybody, and {'masked_prestim', 'mean_masked_prestim'} "
+            "either of those with every weight outside the ASSR electrodes zeroed, "
+            "which separates a better weighting INSIDE the anchor area from access to "
+            "signal outside it. The 'zscored*' and 'masked*' rows apply the filter to "
+            "exactly the signal the fit saw (so the per-block term IS the component), "
+            "the rest to RAW power (which approximates it, dropping the per-channel "
+            "1/sd weighting the fit folded in). Every baselined variant borrows its "
+            "reference rows from 'prestim', so they require it. 'zscored' (no "
+            "baseline) is kept for back-compatibility and is off by default: without a "
+            "baseline it is not in the reference's units, which is what the grid is for."
+        ),
+    )
+    parser.add_argument(
+        "--mean_filter_align",
+        action="store_true",
+        help=(
+            "Flip each block's pattern toward the reference electrodes BEFORE "
+            "averaging them into the cohort filter — the stage-06 IVA convention. Off "
+            "by default here, and that is deliberate: IVA-G's objective is invariant "
+            "under per-dataset sign flips so those signs are arbitrary and must be "
+            "aligned, whereas a jICA block's sign is a RESULT, so aligning first would "
+            "manufacture a coherent cohort topography where the cohort has none. The "
+            "per-block cosine-to-mean reported by the run is what says whether it "
+            "would have mattered."
+        ),
+    )
+    parser.add_argument(
+        "--mean_filter_raw_patterns",
+        action="store_true",
+        help=(
+            "Average the cohort filter's patterns at their native scale instead of "
+            "normalising each to unit L2 norm first. Not recommended: jICA's per-block "
+            "loadings are unconstrained, so one high-loading block would set the "
+            "cohort topography by itself."
         ),
     )
     parser.add_argument(
@@ -975,9 +1082,14 @@ def _write_onset_tf_grid(
     at once. Each condition is epoched with **its own** onsets on its own segment,
     because a time join leaves the tracks on their own time bases.
 
-    No baseline subtraction: the decomposition's z-scoring already zeroed each
-    series' time-mean, so the pre-onset interval reads about zero by construction and
-    structure there is a warning sign rather than a response.
+    Each frequency is then referenced to its own pre-onset mean
+    (:func:`~src.analysis.iva_quality.subtract_epoch_baseline`), exactly as the stage-06
+    decomposition does. The z-scoring puts the pre-onset interval near 0 over the
+    **whole** recording, but not within any one epoch — the local level still drifts —
+    so this is what makes the map a change rather than a level. Only the mean is
+    removed; see that function for why no divisor is applied. Each condition is
+    referenced to its own baseline before the difference row is taken, so the difference
+    is between two changes rather than between two levels.
     """
     conditions = list(layout.conditions)
     geometries: dict[str, tuple] = {}
@@ -999,6 +1111,10 @@ def _write_onset_tf_grid(
             return
     pre, post = at.common_epoch_window(geometries)
 
+    epoch_times = at.epoch_time_base(pre, post, cohort.sfreq)
+    epoch_marks = [0.0, min(AssrEpoch.STIMULUS_DURATION_S, float(epoch_times[-1]))]
+    baseline_mask = epoch_times < 0.0
+
     rows: dict[str, np.ndarray] = {}
     for condition in conditions:
         onsets = geometries[condition][0]
@@ -1011,14 +1127,16 @@ def _write_onset_tf_grid(
             )
             return
         averaged, n_used = iva_quality.epoch_average(track, onsets, pre, post)
-        rows[condition] = averaged
-        _logger.info(f"[{cohort.label}] {condition}: averaged {n_used} epoch(s)")
+        # Per FREQUENCY, so the delta row and the gamma row each get their own baseline.
+        rows[condition] = iva_quality.subtract_epoch_baseline(averaged, baseline_mask)
+        _logger.info(
+            f"[{cohort.label}] {condition}: averaged {n_used} epoch(s), each frequency "
+            "referenced to its own pre-onset mean"
+        )
         if by_condition is None:
             # One shared map: both conditions read the same onsets, so one row.
             break
 
-    epoch_times = at.epoch_time_base(pre, post, cohort.sfreq)
-    epoch_marks = [0.0, min(AssrEpoch.STIMULUS_DURATION_S, float(epoch_times[-1]))]
     if by_condition is None:
         row_order = [shared_row]
         rows = {shared_row: rows[conditions[0]]}
@@ -1093,9 +1211,32 @@ def _run_analysis(
             "so a leading channel slice does not contain it."
         )
     reference_filter = at.binary_filter_weights(mask, normalize=not args.mask_sum)
+    # Kept UNCOMBINED alongside the weighting above so the reference row can be built
+    # the equal-weight way below: each electrode normalised before the ROI is averaged,
+    # which `reference_filter` — a mean of raw power — cannot express.
+    roi_index = np.flatnonzero(mask)
 
-    labels = at.source_labels(result.n_components)
-    reference_index = labels.index(at.BINARY_FILTER_LABEL)
+    # THREE reference rows, the same three the IVA stage emits and named identically
+    # (`at.MASK_LABELS`), in increasing proximity to what the fit actually saw: the
+    # electrode average on the whole channel space, the same average read only through
+    # the retained subspace on RAW power, and that operator on the Z-SCORED signal —
+    # the signal the decomposition was handed. Reading the first beside the last says
+    # how much of the reference's advantage is access to directions the reduction
+    # dropped rather than a better weighting.
+    labels = [
+        at.COMPONENT_LABEL.format(k=k + 1) for k in range(result.n_components)
+    ] + list(at.MASK_LABELS)
+    ic_labels = labels[: result.n_components]
+    reference_columns = {label: labels.index(label) for label in at.MASK_LABELS}
+    mask_columns = list(reference_columns.values())
+    # The equal-weight row replaces this column in every baselined variant; it is also
+    # the reference the figures lead with, and the only one the IVA stage and this one
+    # compute identically (the PCA rows read each stage's own reduction).
+    full_index = reference_columns[at.FULL_MASK_LABEL]
+    # The mask carried into the JOINT reduction — one row per channel block, spanning
+    # the whole stacked feature axis. Independent of the selection and of the variant,
+    # so it is built once and applied to the data per selection below.
+    subspace_rows = subspace_mask_rows(result, reference_filter)
 
     # ---- the epoch window every condition can supply ---------------------
     geometries = {}
@@ -1116,6 +1257,12 @@ def _run_analysis(
     epoch_times = at.epoch_time_base(pre, post, cohort.sfreq)
     baseline_mask = epoch_times < 0.0
     if args.stimulus_interval is None:
+        window_mask = AssrEpoch.stimulus_mask(epoch_times)
+        window_desc = f"0-{AssrEpoch.STIMULUS_DURATION_S:.3f} s (paradigm default)"
+    elif tuple(args.stimulus_interval) == (0.0, AssrEpoch.STIMULUS_DURATION_S):
+        # Typing the paradigm's own interval means the paradigm's own window, read
+        # half-open like the default rather than a sample wider — so the row is the
+        # same whichever way it was asked for, and the same one the IVA stage reads.
         window_mask = AssrEpoch.stimulus_mask(epoch_times)
         window_desc = f"0-{AssrEpoch.STIMULUS_DURATION_S:.3f} s (paradigm default)"
     else:
@@ -1149,27 +1296,61 @@ def _run_analysis(
         for name, bins in selections.items()
     }
 
-    # ---- the polarity anchor ---------------------------------------------
-    # Reads the FORWARD PATTERN's projection onto a fixed electrode selection — a
-    # spatial property — never the tested response, so it cannot manufacture a
-    # condition difference. Under a time join the pattern is shared, so the flip is
-    # identical for both conditions and the paired difference is untouched.
-    flip_by_condition = {}
-    for condition in conditions:
-        flip, strength = at.polarity_flip(
-            result.recording_patterns(layout, condition), mask
+    # ---- the cohort-mean filter, and the one sign per component ----------
+    # Both come off the SAME object: the cohort forward model, averaged over every
+    # block with both conditions pooled. Pooling is what keeps the operator symmetric
+    # in the conditions, so neither the `mean_*` rows nor the sign can manufacture a
+    # condition difference.
+    cohort_topo = cohort_mean_pattern(
+        result.patterns,
+        normalize=not args.mean_filter_raw_patterns,
+        align_to=mask if args.mean_filter_align else None,
+    )
+    mean_filter = cohort_mean_filter(cohort_topo.pattern)
+    flip_k, strength_k = component_polarity(cohort_topo.pattern, mask)
+
+    # The per-block correlations are NOT applied — that is the whole point — but they
+    # are what says whether the cohort expresses a component coherently, so they are
+    # reported. A component whose blocks disagree has a weak cohort topography however
+    # large its loadings.
+    block_flip, block_strength = at.polarity_flip(result.patterns, mask)
+    disagreeing = cohort_topo.disagreeing_blocks()
+    n_blocks = block_flip.shape[0]
+    _logger.info(
+        f"[{cohort.label}] polarity: ONE sign per component, anchored to "
+        "corr(cohort topography, ASSR mask). jICA leaves no per-recording sign to "
+        "resolve, so no per-recording flip is applied."
+    )
+    for k in range(result.n_components):
+        against = int((block_flip[:, k] != flip_k[k]).sum())
+        _logger.info(
+            f"[{cohort.label}]   IC {k + 1}: flip {flip_k[k]:+.0f}, "
+            f"|corr(cohort topo, mask)| {strength_k[k]:.3f}"
+            f"{' (WEAK)' if strength_k[k] < at.POLARITY_CORR_FLOOR else ''}; "
+            f"{against}/{n_blocks} block(s) anchor the other way, "
+            f"{int(disagreeing[k])}/{n_blocks} point away from the cohort mean "
+            f"(median |corr| {np.median(block_strength[:, k]):.3f}, median cosine "
+            f"{np.median(cohort_topo.cosine[:, k]):+.3f})"
         )
-        determined = at.polarity_is_determined(strength)
-        if not determined.all():
-            weak = [k + 1 for k, ok in enumerate(determined) if not ok]
-            _logger.warning(
-                f"[{cohort.label}] {condition}: IC {weak} barely project onto the "
-                "reference electrodes, so their polarity anchor is decided on noise."
-            )
-        full = np.concatenate([flip, np.ones((n_participants, 1))], axis=1)
-        flip_by_condition[condition] = (
-            full if not args.no_polarity_anchor else np.ones_like(full)
+    weak = [
+        k + 1
+        for k in range(result.n_components)
+        if strength_k[k] < at.POLARITY_CORR_FLOOR
+    ]
+    if weak:
+        _logger.warning(
+            f"[{cohort.label}] IC {weak}: the cohort topography barely projects onto "
+            "the reference electrodes, so the component's sign — and with it the "
+            "direction of every one-sided test on that row — is decided on noise."
         )
+
+    # One vector over components, broadcast over participants and identical for both
+    # conditions. The reference column is never flipped: it is a non-negative electrode
+    # average, so "higher = more power there" already holds for it.
+    source_flip = np.ones(len(labels))
+    if not args.no_polarity_anchor:
+        source_flip[: result.n_components] = flip_k
+    flip_by_condition = {condition: source_flip for condition in conditions}
 
     # ---- project, cut, normalise, reduce ---------------------------------
     # Every selection is carried through, so the CSV says whether a result survives
@@ -1178,6 +1359,91 @@ def _run_analysis(
     course_by_cell: dict[tuple[str, str], dict[str, np.ndarray]] = {}
     n_trials: dict[str, int] = {}
     for selection, bins in local_bins.items():
+        # ---- the fixed reference row, built the equal-weight way ----------
+        # Each ROI electrode is referenced to its own pre-stimulus window and divided by
+        # its baseline SD (pooled over trials) BEFORE the ROI is averaged, and the
+        # average is then referenced to its own again so the row lands back in units of
+        # its own baseline SD. Averaging raw power first — which is what a plain
+        # `reference_filter` projection does — silently weights each electrode by its
+        # own power level, and that level is uncorrelated with whether the electrode
+        # carries any 40 Hz response. The mask's whole intent is equal weight, so the
+        # normalisation has to come first. It also matters for the comparison: one
+        # normalised channel has baseline SD 1, but the MEAN of correlated channels does
+        # not, so without this the reference sits systematically off every component row
+        # — which `at.reference_snr_tests` subtracts from directly.
+        #
+        # Advanced-indexed on both the ROI channels and the selection's frequency bins
+        # at once, so only that corner of the (possibly ~44 GB) raw tensor is ever
+        # materialised.
+        roi_snr: dict[str, np.ndarray] = {}
+        roi_scale: dict[str, dict[str, float]] = {}
+        for condition in conditions:
+            roi_band = cohort.raw_by_condition[condition][
+                :, roi_index[:, None], selections[selection][None, :], :
+            ].mean(axis=2)  # (P, R, T)
+            roi_cut, _kept = at.cut_trials(
+                roi_band, geometries[condition][0], pre, post
+            )
+            roi_snr[condition], roi_scale[condition] = at.roi_channelwise_snr(
+                roi_cut, baseline_mask
+            )
+        # Put every condition on ONE scale. Each call derived its own from its own
+        # participants and those differ between conditions — leaving them apart would
+        # rescale a participant's two conditions differently and corrupt the very paired
+        # difference the contrast tests. The rescale is exact, not a re-fit:
+        # snr / shared == (snr / own) * (own / shared).
+        shared_roi_scale = float(
+            np.median([d["roi_baseline_sd"] for d in roi_scale.values()])
+        )
+        for condition in conditions:
+            roi_snr[condition] = roi_snr[condition] * (
+                roi_scale[condition]["roi_baseline_sd"] / shared_roi_scale
+            )
+        _logger.info(
+            f"[{cohort.label}] {selection}: equal-weight ROI over {roi_index.size} "
+            f"electrode(s), shared baseline SD {shared_roi_scale:.3f} "
+            f"(~{1.0 / shared_roi_scale**2:.1f} effective channels); per-condition "
+            + ", ".join(
+                f"{c} {roi_scale[c]['roi_baseline_sd']:.3f} (participant spread "
+                f"{roi_scale[c]['participant_sd_spread']:.2f}x, NOT applied)"
+                for c in conditions
+            )
+            + "; max |per-channel z| "
+            f"{max(d['max_abs_z1'] for d in roi_scale.values()):.0f}"
+        )
+
+        # ---- the two subspace reference rows ------------------------------
+        # The same electrode average read only through what the reduction kept, on RAW
+        # power and on the z-scored signal the fit was handed. Neither depends on the
+        # variant, so both are built once per selection and carried into every cell —
+        # the same discipline the equal-weight row above follows.
+        pca_reference = {
+            zscore: subspace_reference_rows(
+                cohort.raw_by_condition,
+                layout,
+                subspace_rows,
+                selections[selection],
+                zscore=zscore,
+            )
+            for zscore in (False, True)
+        }
+        # What the reduction left of the mask, as a share of its norm — scale-free, so
+        # it says something the raw medians cannot: those are in raw power units and
+        # look like zero however well the row is doing. A small share is expected and
+        # is the joint reduction's doing (K directions out of blocks x channels, chosen
+        # on z-scored data); it is why the "(PCA)" row is the weak one here and the
+        # "(PCA, z)" row the informative one. See `subspace_reference_rows`.
+        surviving = np.linalg.norm(subspace_rows, axis=1) / np.linalg.norm(
+            reference_filter
+        )
+        _logger.info(
+            f"[{cohort.label}] {selection}: subspace reference over "
+            f"{layout.n_blocks} block(s) x {layout.n_channels} channel(s), "
+            f"{result.retained * 100:.1f}% of the joint channel space retained; "
+            f"the mask keeps {np.median(surviving) * 100:.2f}% of its norm "
+            f"(min {surviving.min() * 100:.2f}%, max {surviving.max() * 100:.2f}%)"
+        )
+
         for variant in args.signal_variants:
             cell_value: dict[str, np.ndarray] = {}
             cell_course: dict[str, np.ndarray] = {}
@@ -1196,15 +1462,44 @@ def _run_analysis(
                     sliced = zscore_by_time(sliced)
                 band = sliced[:, :, bins, :].mean(axis=2)  # (P, C, T)
 
-                stacked = at.stack_filters(
-                    result.recording_filters(layout, condition), reference_filter
-                )
+                # The filter axis of the grid. "own" gives each recording its own
+                # unmixing row — C free parameters per recording; "mean" gives everybody
+                # the one cohort operator, which is the same KIND of thing the fixed
+                # electrode mask is (a single group-level spatial weighting) and so is
+                # the like-for-like learned comparison to it. The "masked" pair is
+                # either of those with every weight outside the ASSR electrodes zeroed,
+                # which separates a better weighting INSIDE the anchor area from access
+                # to signal outside it.
+                filter_kind = str(recipe["filter"])
+                if filter_kind.startswith("mean"):
+                    learned = np.broadcast_to(
+                        mean_filter, (n_participants,) + mean_filter.shape
+                    )
+                else:
+                    learned = result.recording_filters(layout, condition)
+                if filter_kind.endswith("masked"):
+                    learned = at.restrict_filters_to_mask(learned, mask)
+                stacked = at.stack_filters(learned, reference_filter)
                 projected = np.stack(
                     [
                         at.project_channels(stacked[i], band[i])
                         for i in range(n_participants)
                     ]
-                )  # (P, S, T)
+                )  # (P, K + 1, T)
+                # The two subspace rows are not per-block channel filters — the joint
+                # reduction mixes the blocks — so they are computed outside this
+                # projection and appended here. In a variant with no per-trial baseline
+                # the "(PCA)" row reads the z-scored signal too, which makes it coincide
+                # with "(PCA, z)" by construction: a free check that the two agree.
+                subspace_source = pca_reference[bool(recipe["zscore"])]
+                projected = np.concatenate(
+                    [
+                        projected,
+                        subspace_source[condition][:, np.newaxis, :],
+                        pca_reference[True][condition][:, np.newaxis, :],
+                    ],
+                    axis=1,
+                )  # (P, K + 3, T)
                 trials, kept = at.cut_trials(
                     projected, geometries[condition][0], pre, post
                 )
@@ -1216,10 +1511,19 @@ def _run_analysis(
                     )
                 if recipe["baseline"]:
                     # Units of each trial's own pre-stimulus SD — an SNR, and the unit
-                    # the fixed reference is already in.
+                    # the fixed reference is already in. The mean is per trial (drift is
+                    # local), the SD pooled across trials; see `at.baseline_normalise`.
                     signal, _rel, _positive = at.baseline_normalise(
                         trials, baseline_mask
                     )
+                    # Swap in the equal-weight reference row. Only the baseline variants
+                    # get it: `zscored` has no per-trial baseline to build it on, and
+                    # there its reference is the mask on exactly the signal the fit saw.
+                    # Safe in place: `baseline_normalise` returns a fresh array, never a
+                    # view of `trials`. The two subspace rows keep the plain per-trial
+                    # baseline: they are projections, not electrode averages, so there is
+                    # no per-electrode normalisation for them to skip.
+                    signal[:, full_index] = roi_snr[condition]
                 else:
                     # Already dimensionless: z-scored along time before projection.
                     signal = trials
@@ -1227,24 +1531,33 @@ def _run_analysis(
                 reduced = signal[..., window_mask].mean(axis=-1)
                 if args.response_measure == "stimulus_minus_rest":
                     reduced = reduced - signal[..., ~window_mask].mean(axis=-1)
+                # One sign per SOURCE, broadcast over participants: identical for every
+                # recording and both conditions, so it cannot touch the paired contrast.
                 flip = flip_by_condition[condition]
                 cell_value[condition] = np.nanmedian(reduced, axis=2) * flip
-                cell_course[condition] = np.nanmedian(signal, axis=2) * flip[:, :, None]
+                cell_course[condition] = np.nanmedian(signal, axis=2) * flip[:, None]
             value_by_cell[(selection, variant)] = cell_value
             course_by_cell[(selection, variant)] = cell_course
 
-        # The fixed-electrode row is the quantity a component is judged against, so a
-        # variant that borrows it is compared against exactly the same numbers as the
+        # The reference rows are the quantity a component is judged against, so a
+        # variant that borrows them is compared against exactly the same numbers as the
         # variant it borrows from — which is what makes the comparison isolate how the
-        # COMPONENT was derived, and nothing else.
+        # COMPONENT was derived, and nothing else. ALL THREE move together: a grid whose
+        # cells were judged against three references two of which had shifted would not
+        # be one comparison.
         for variant, source_variant in VARIANT_REFERENCE_FROM.items():
             if variant not in args.signal_variants:
                 continue
+            if (selection, source_variant) not in value_by_cell:
+                # Only reachable for a raw-signal variant run without `prestim`, which
+                # `main` allows because its own rows come out identical anyway. A
+                # z-scored one is refused there rather than silently left unborrowed.
+                continue
             for condition in conditions:
                 for store in (value_by_cell, course_by_cell):
-                    store[(selection, variant)][condition][:, reference_index] = store[
+                    store[(selection, variant)][condition][:, mask_columns] = store[
                         (selection, source_variant)
-                    ][condition][:, reference_index]
+                    ][condition][:, mask_columns]
 
     floor = at.p_floor(n_participants)
     _logger.info(
@@ -1261,7 +1574,8 @@ def _run_analysis(
 
     # ---- the tests --------------------------------------------------------
     rows_out: list[dict] = []
-    figure_snr_rows: dict[str, dict[str, list[dict]]] = {}
+    # variant -> reference -> condition -> records
+    figure_snr_rows: dict[str, dict[str, dict[str, list[dict]]]] = {}
     figure_values: dict[str, dict[str, np.ndarray]] = {}
     for (selection, variant), value in value_by_cell.items():
         contrast_rows = [
@@ -1274,29 +1588,45 @@ def _run_analysis(
             }
             for s, source in enumerate(labels)
         ]
-        versus_rows = [
-            {
-                "source": source,
-                "IC contrast": float(
-                    np.nanmedian(at.condition_contrast(value, conditions, s))
-                ),
-                **at.paired_test(
-                    at.discrimination_gain(value, conditions, s, reference_index),
-                    "two-sided",
-                ),
-            }
-            for s, source in enumerate(labels)
-            if s != reference_index
-        ]
+        # Both families run against EVERY reference row, which is the IVA stage's
+        # structure and the reason the extra rows are worth their runtime: a component
+        # that beats the whole-head electrode average but not the same average
+        # restricted to the subspace the fit kept has not earned much, and only the
+        # pair of numbers says which of the two it is. Learned rows only — a reference
+        # judged against another reference is neither family's question.
+        versus_rows = {
+            reference: [
+                {
+                    "source": source,
+                    "reference": reference,
+                    "IC contrast": float(
+                        np.nanmedian(at.condition_contrast(value, conditions, s))
+                    ),
+                    **at.paired_test(
+                        at.discrimination_gain(value, conditions, s, column),
+                        "two-sided",
+                    ),
+                }
+                for s, source in enumerate(ic_labels)
+            ]
+            for reference, column in reference_columns.items()
+        }
         snr_rows = {
-            condition: at.reference_snr_tests(
-                value[condition],
-                labels,
-                condition=condition,
-                reference_index=reference_index,
-                alternative=args.snr_alternative,
-            )
-            for condition in conditions
+            reference: {
+                condition: [
+                    {**row, "reference": reference}
+                    for row in at.reference_snr_tests(
+                        value[condition],
+                        labels,
+                        condition=condition,
+                        reference_index=column,
+                        alternative=args.snr_alternative,
+                    )
+                    if row["source"] in set(ic_labels)
+                ]
+                for condition in conditions
+            }
+            for reference, column in reference_columns.items()
         }
 
         common = {
@@ -1311,12 +1641,16 @@ def _run_analysis(
         }
         for family, records in (
             ("contrast", contrast_rows),
-            ("vs_reference", versus_rows),
-            *(("snr", rows) for rows in snr_rows.values()),
+            *(("vs_reference", rows) for rows in versus_rows.values()),
+            *(
+                ("snr", rows)
+                for by_condition in snr_rows.values()
+                for rows in by_condition.values()
+            ),
         ):
             for row in records:
                 d = _difference_for(
-                    family, row, value, labels, conditions, reference_index
+                    family, row, value, labels, conditions, reference_columns
                 )
                 low, high = bootstrap_median_ci(
                     d,
@@ -1335,7 +1669,12 @@ def _run_analysis(
         figure_snr_rows[variant] = snr_rows
         note = (
             f"{n_participants} participants, variant {variant}, {selection} @ "
-            f"{window_desc}"
+            f"{window_desc} — "
+            + (
+                _READOUT_SIGN_NOTE
+                if not args.no_polarity_anchor
+                else "polarity anchor OFF, direction NOT interpretable"
+            )
         )
         fig = plot_response_courses(
             course_by_cell[(selection, variant)],
@@ -1346,6 +1685,8 @@ def _run_analysis(
             label=cohort.label,
             units=VARIANT_UNITS.get(variant, variant),
             selection=selection,
+            reference_label=at.FULL_MASK_LABEL,
+            mask_labels=at.MASK_LABELS,
             condition_colors=_CONDITION_COLORS,
             spread_mode=args.course_spread,
             test_interval=(
@@ -1358,38 +1699,47 @@ def _run_analysis(
             save_path=out_dir / f"trial_course_by_source_{selection}_{variant}.png",
         )
         plt.close(fig)
-        fig = plot_pvalue_summary(
-            value,
+        # One p-value summary per reference: the left panel (the contrast per source)
+        # is the same in all of them, the right panel — "better than the reference?" —
+        # is the whole point of having three.
+        for reference, slug in at.MASK_SLUGS.items():
+            fig = plot_pvalue_summary(
+                value,
+                labels,
+                conditions,
+                contrast_rows,
+                versus_rows[reference],
+                label=cohort.label,
+                units=VARIANT_UNITS.get(variant, variant),
+                reference_label=reference,
+                mask_labels=at.MASK_LABELS,
+                alpha=args.alpha,
+                n_bootstrap=args.n_bootstrap,
+                bootstrap_seed=args.random_state,
+                note=f"floor p = {floor:.5f} — {note}",
+                save_path=out_dir / f"pvalue_summary_{selection}_{variant}_{slug}.png",
+            )
+            plt.close(fig)
+
+    for reference, slug in at.MASK_SLUGS.items():
+        fig = plot_snr_vs_reference(
+            figure_values,
+            {variant: rows[reference] for variant, rows in figure_snr_rows.items()},
             labels,
             conditions,
-            contrast_rows,
-            versus_rows,
             label=cohort.label,
-            units=VARIANT_UNITS.get(variant, variant),
+            units_by_variant=VARIANT_UNITS,
+            reference_label=reference,
+            mask_labels=at.MASK_LABELS,
+            condition_colors=_CONDITION_COLORS,
+            alternative=args.snr_alternative,
             alpha=args.alpha,
             n_bootstrap=args.n_bootstrap,
             bootstrap_seed=args.random_state,
-            note=f"floor p = {floor:.5f} — {note}",
-            save_path=out_dir / f"pvalue_summary_{selection}_{variant}.png",
+            note=f"n = {n_participants}, {test_selection} @ {window_desc}",
+            save_path=out_dir / f"snr_vs_reference_{test_selection}_{slug}.png",
         )
         plt.close(fig)
-
-    fig = plot_snr_vs_reference(
-        figure_values,
-        figure_snr_rows,
-        labels,
-        conditions,
-        label=cohort.label,
-        units_by_variant=VARIANT_UNITS,
-        condition_colors=_CONDITION_COLORS,
-        alternative=args.snr_alternative,
-        alpha=args.alpha,
-        n_bootstrap=args.n_bootstrap,
-        bootstrap_seed=args.random_state,
-        note=f"n = {n_participants}, {test_selection} @ {window_desc}",
-        save_path=out_dir / f"snr_vs_reference_{test_selection}.png",
-    )
-    plt.close(fig)
     _logger.info(f"read-out figures -> {out_dir}")
     return rows_out
 
@@ -1400,7 +1750,7 @@ def _difference_for(
     value: dict[str, np.ndarray],
     labels: list[str],
     conditions: list[str],
-    reference_index: int,
+    reference_columns: dict[str, int],
 ) -> np.ndarray:
     """The per-participant differences a test row was computed from.
 
@@ -1412,13 +1762,20 @@ def _difference_for(
     :param value: Condition → ``(P, S)`` per-participant response.
     :param labels: Source label per column.
     :param conditions: The two conditions, in contrast order.
-    :param reference_index: Column holding the fixed reference.
+    :param reference_columns: Reference label → column, for the families that name one
+        (every row of those carries a ``"reference"`` entry saying which).
     :return: ``(P,)`` differences.
-    :raises ValueError: On an unknown *family*.
+    :raises ValueError: On an unknown *family*, or a row naming an unknown reference.
     """
     source = labels.index(row["source"])
     if family == "contrast":
         return at.condition_contrast(value, conditions, source)
+    if row.get("reference") not in reference_columns:
+        raise ValueError(
+            f"A {family!r} row must name one of {sorted(reference_columns)}; got "
+            f"{row.get('reference')!r}."
+        )
+    reference_index = reference_columns[row["reference"]]
     if family == "vs_reference":
         return at.discrimination_gain(value, conditions, source, reference_index)
     if family == "snr":
@@ -1453,7 +1810,9 @@ def run_jica(
     :param conditions: Conditions to join, in block/segment order.
     :param exclusion_categories: Exclusion categories applied to both conditions.
     :param freqs: Morlet frequency grid the caches were written with.
-    :param wavelet_dir: Per-condition wavelet cache directory.
+    :param wavelet_dir: Per-condition wavelet cache directory, band subdirectory
+        included (``data/processed/<experiment>/wavelets/broadband``). A path without
+        it misses the stage-03 caches and silently recomputes them.
     :param subset_cache_dir: Notebook-level subset cache, or ``None`` to disable.
     :param save_root: Base ``plots/`` directory.
     :param results_root: Directory the test CSV goes in.
@@ -1592,9 +1951,15 @@ def main(argv: list[str] | None = None) -> None:
     else:
         music_types = [MusicTypeVariants.CLASSICAL, MusicTypeVariants.PSYTRANCE]
 
+    # Only a variant that reads the Z-SCORED signal is REFUSED without its source: its
+    # own reference rows would be the mask on z-scored data, a different quantity that
+    # nothing puts back in the others' units. A raw-signal variant borrows too — the
+    # invariant is stated once, in VARIANT_REFERENCE_FROM — but it recomputes the
+    # identical numbers, so running it alone is legitimate and is allowed.
     for variant, source_variant in VARIANT_REFERENCE_FROM.items():
         if (
             variant in args.signal_variants
+            and VARIANT_RECIPE[variant]["zscore"]
             and source_variant not in args.signal_variants
         ):
             raise ValueError(
@@ -1621,7 +1986,16 @@ def main(argv: list[str] | None = None) -> None:
         if args.results_dir is not None
         else ProjectPaths.PROJECT_ROOT / "results" / experiment_name.value
     )
-    wavelet_dir = resolve_wavelet_dir(args.wavelet_data_dir, experiment_name)
+    # The BAND SUBDIRECTORY is part of the path, not an optional decoration: the
+    # per-condition caches stage-03 writes live in `<experiment>/wavelets/broadband/`,
+    # and a path one level above them is simply a cache MISS — on which the loader
+    # recomputes the whole transform (tens of GB and ~40 min per condition) from the
+    # SPLICED time-domain signal, which carries edge artefacts at every splice point.
+    # Every other wavelet script and every stage-06/07 notebook appends it the same way.
+    wavelet_dir = (
+        resolve_wavelet_dir(args.wavelet_data_dir, experiment_name)
+        / SpectrumTypeVariants.BROADBAND.value
+    )
     subset_cache_dir = (
         resolve_notebook_wavelet_cache_dir(experiment_name)
         / SpectrumTypeVariants.BROADBAND.value

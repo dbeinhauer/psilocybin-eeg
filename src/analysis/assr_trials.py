@@ -60,6 +60,31 @@ BINARY_FILTER_LABEL = "ASSR-mask"
 #: every figure in the project uses.
 COMPONENT_LABEL = "IC {k}"
 
+#: The three fixed reference rows, in increasing proximity to what a decomposition
+#: actually saw. Defined here rather than in either CLI because **both** stages emit
+#: them and a row is only comparable across stages if it is named the same in both:
+#:
+#: * ``FULL_MASK_LABEL`` — the electrode average on the whole channel space, built the
+#:   equal-weight way (:func:`roi_channelwise_snr`).
+#: * ``PCA_MASK_LABEL`` — the same average read only through the retained PCA subspace,
+#:   on RAW power. The apples-to-apples reference for what the reduction left available.
+#: * ``PCA_Z_MASK_LABEL`` — that operator on the Z-SCORED signal, i.e. exactly what the
+#:   decomposition was handed. Read beside the one above it separates the channel
+#:   reduction from the per-(channel, frequency) rescaling z-scoring adds; in a variant
+#:   with no per-trial baseline the two coincide by construction.
+FULL_MASK_LABEL = f"{BINARY_FILTER_LABEL} (full)"
+PCA_MASK_LABEL = f"{BINARY_FILTER_LABEL} (PCA)"
+PCA_Z_MASK_LABEL = f"{BINARY_FILTER_LABEL} (PCA, z)"
+MASK_LABELS = (FULL_MASK_LABEL, PCA_MASK_LABEL, PCA_Z_MASK_LABEL)
+
+#: Filename-safe slug per reference row, so a figure written per reference says which
+#: one it is without a space or a comma in the path.
+MASK_SLUGS = {
+    FULL_MASK_LABEL: "full",
+    PCA_MASK_LABEL: "pca",
+    PCA_Z_MASK_LABEL: "pca_z",
+}
+
 #: Prefixes of the per-condition arrays inside a stored trial file. Per-condition rather
 #: than one stacked array because the conditions may keep different trial counts, and
 #: padding them to a common length would invent data.
@@ -300,6 +325,210 @@ def pca_mask_rows(binary_filter: np.ndarray, projectors: np.ndarray) -> np.ndarr
         )
     # (C,) @ (rows, C, C) -> (rows, C): binary @ projectors[s] for every recording s.
     return binary @ proj
+
+
+def restrict_filters_to_mask(
+    filters: np.ndarray, electrode_mask: np.ndarray
+) -> np.ndarray:
+    """Zero every filter weight outside the anchor electrodes.
+
+    The operator that sits between the two references this module already has: the
+    binary row reads the anchor electrodes with *equal* weight, an unrestricted
+    component reads the *whole head* with learned weights, and this reads *only* those
+    electrodes with learned weights. It is what separates the two advantages a learned
+    filter might have — a better weighting inside the anchor area, or access to signal
+    outside it — which no other row can tell apart.
+
+    **Not renormalised after masking**, deliberately: every reported number is divided
+    by its own pre-stimulus SD (:func:`baseline_normalise`), so a filter's overall scale
+    never reaches one, and rescaling here would invite comparisons of magnitudes that
+    are not comparable anyway.
+
+    :param filters: ``(..., channels)`` spatial filters — one operator or a stack.
+    :param electrode_mask: Boolean mask over the channel axis.
+    :return: The same shape, zeroed outside the mask.
+    :raises ValueError: If the mask does not match the channel axis, or selects nothing.
+    """
+    weights = np.asarray(filters, dtype=float)
+    mask = np.asarray(electrode_mask, dtype=bool)
+    if mask.ndim != 1 or mask.size != weights.shape[-1]:
+        raise ValueError(
+            f"electrode_mask must be ({weights.shape[-1]},) to match the filters' "
+            f"channel axis; got {mask.shape}."
+        )
+    if not mask.any():
+        raise ValueError("The electrode mask selects no channel.")
+    return weights * mask.astype(float)
+
+
+def mask_weight_share(filters: np.ndarray, electrode_mask: np.ndarray) -> np.ndarray:
+    """Share of each filter's L2 weight that survives the restriction.
+
+    Reads as "was this component looking at the anchor area anyway?". Near 1 means the
+    restricted row should track the unrestricted one; near 0 means the component lives
+    mostly elsewhere, so its restricted row is a *different signal* rather than a
+    cleaner version of the same one — which is what stops the restricted row from being
+    read as a strictly better component.
+
+    :param filters: ``(..., channels)`` spatial filters.
+    :param electrode_mask: Boolean mask over the channel axis.
+    :return: ``(...)`` shares in ``[0, 1]``; zero for a filter with no weight at all.
+    """
+    weights = np.asarray(filters, dtype=float)
+    kept = np.linalg.norm(restrict_filters_to_mask(weights, electrode_mask), axis=-1)
+    total = np.linalg.norm(weights, axis=-1)
+    return np.divide(kept, total, out=np.zeros_like(kept), where=total > 0)
+
+
+@dataclass(frozen=True)
+class CohortMeanFilter:
+    """The single spatial filter every recording shares, plus what it is worth.
+
+    Produced by :func:`cohort_mean_pattern`. The diagnostics travel with the operator
+    because the operator alone cannot be read: a mean topography is only meaningful if
+    the cohort agreed on the map it averages, and :attr:`cosine_to_mean` is what says
+    whether they did.
+    """
+
+    #: ``(components, channels)`` cohort-average forward pattern — what a topomap shows.
+    pattern: np.ndarray
+    #: ``(components, channels)`` the shared backward operator, ``pinv(pattern.T)``.
+    spatial_filter: np.ndarray
+    #: ``(recordings, components)`` of +-1: the flip applied before averaging.
+    input_flip: np.ndarray
+    #: ``(recordings, components)`` of ``|corr(pattern, mask)|`` behind that flip.
+    input_strength: np.ndarray
+    #: ``(recordings, components)`` cosine between each aligned topography and the mean.
+    #: Near 1 means the shared filter stands in for everybody; near 0 means it does not.
+    cosine_to_mean: np.ndarray
+    #: ``(components,)`` correlation of the MEAN topography with the 0/1 anchor mask.
+    mask_corr: np.ndarray
+    #: ``max |U_mean A_mean - I|`` of the inversion, for the record.
+    identity_error: float
+
+    @property
+    def n_recordings(self) -> int:
+        """How many recordings went into the average."""
+        return int(self.input_flip.shape[0])
+
+
+def cohort_mean_pattern(
+    channel_patterns: np.ndarray,
+    electrode_mask: np.ndarray,
+    *,
+    align_polarity: bool = True,
+    normalize: bool = True,
+    tolerance: float = 1e-6,
+) -> CohortMeanFilter:
+    """One spatial filter for the whole cohort, from the average topography.
+
+    The alternative to reading every recording through its **own** topography: a single
+    operator, shared by every recording and every condition, so anything that differs
+    between a ``mean_*`` row and its per-recording counterpart is the topography and
+    nothing else.
+
+    **Pool every recording into ONE mean**, never a mean per condition. A
+    condition-specific filter would be estimated from the very data the paired contrast
+    tests, which breaks the exchangeability that test rests on; one shared filter cannot
+    favour either condition.
+
+    Three things have to happen before an average of topographies means anything, in
+    this order:
+
+    1. **Sign.** A component's polarity is arbitrary per recording, so averaging the
+       stored patterns as they are drives the mean toward zero — the same cancellation
+       :func:`polarity_flip` exists to prevent. Every ``(recording, component)`` is
+       flipped to ``corr(topography, mask) > 0`` first, and the resulting mean is
+       anchored the same way, so "positive = more power over the anchor area" holds for
+       the shared filter exactly as it does for the per-recording ones.
+    2. **Scale.** A topography's overall amplitude is arbitrary too. Left alone, one
+       large-amplitude recording sets the mean's shape, so each is normalised to unit L2
+       norm and contributes its *shape* and nothing else.
+    3. **Average the pattern, then invert — never the other way round.** The mean is
+       taken over the forward patterns and the filter is ``pinv(A_mean)``. Averaging the
+       *filters* would average ``Sigma^-1``-reweighted backward operators, which is not
+       the backward operator of the average topography — the same filter-vs-pattern
+       distinction :func:`recover_spatial_filters` rests on.
+
+    Component *k* may be averaged across recordings at all because IVA aligns its
+    sources across datasets by construction: component *k* is the same component for
+    everyone. That is not true of a per-recording ICA, and this function would be
+    meaningless there.
+
+    :param channel_patterns: ``(recordings, components, channels)`` forward patterns, as
+        the store holds them. Pass the rows that are actually analysed, not the whole
+        store, so the average describes the analysed cohort.
+    :param electrode_mask: Boolean mask over the channel axis — the anchor area.
+    :param align_polarity: Apply step 1. Off only to see what the cancellation costs.
+    :param normalize: Apply step 2.
+    :param tolerance: Largest tolerated ``|U_mean A_mean - I|``.
+    :return: A :class:`CohortMeanFilter`.
+    :raises ValueError: If *channel_patterns* is not 3-D, or the averaged patterns are
+        rank-deficient so no shared filter can be recovered from them.
+    """
+    patterns = np.asarray(channel_patterns, dtype=float)
+    if patterns.ndim != 3:
+        raise ValueError(
+            f"channel_patterns must be (recordings, components, channels); got "
+            f"{patterns.shape}."
+        )
+    n_components = patterns.shape[1]
+    mask = np.asarray(electrode_mask, dtype=bool)
+
+    # 1. SIGN — so the average adds rather than cancels.
+    input_flip, input_strength = polarity_flip(patterns, mask)
+    aligned = patterns * input_flip[:, :, None] if align_polarity else patterns
+
+    # 2. SCALE — shape only, no recording's amplitude decides the mean.
+    if normalize:
+        norms = np.linalg.norm(aligned, axis=-1, keepdims=True)
+        aligned = aligned / np.where(norms == 0, 1.0, norms)
+
+    mean_pattern = aligned.mean(axis=0)  # (K, C)
+    # Anchor the MEAN itself. With step 1 on this is nearly always a no-op; it is cheap
+    # insurance that the orientation is never left to chance.
+    mean_flip, _mean_strength = polarity_flip(mean_pattern[None], mask)
+    if align_polarity:
+        mean_pattern = mean_pattern * mean_flip[0][:, None]
+
+    # 3. INVERT — A_mean is mean_pattern.T (C, K), so U_mean = pinv(A_mean) is (K, C).
+    spatial_filter = np.linalg.pinv(mean_pattern.T)
+    identity_error = float(
+        np.abs(spatial_filter @ mean_pattern.T - np.eye(n_components)).max()
+    )
+    if identity_error > tolerance:
+        raise ValueError(
+            f"pinv of the mean topography does not invert it (max residual "
+            f"{identity_error:.2e}, tolerance {tolerance:.1e}). The averaged patterns "
+            "are rank-deficient — two components collapsed onto the same map — so no "
+            "shared filter can be recovered from them."
+        )
+
+    # How representative is the average? Cosine between each ALIGNED topography and the
+    # mean, per component.
+    denominator = np.linalg.norm(aligned, axis=-1) * np.linalg.norm(
+        mean_pattern, axis=-1
+    )
+    cosine_to_mean = np.einsum("rkc,kc->rk", aligned, mean_pattern)
+    cosine_to_mean = np.divide(
+        cosine_to_mean,
+        denominator,
+        out=np.zeros_like(cosine_to_mean),
+        where=denominator > 0,
+    )
+    indicator = mask.astype(float)
+    mask_corr = np.array(
+        [np.corrcoef(mean_pattern[k], indicator)[0, 1] for k in range(n_components)]
+    )
+    return CohortMeanFilter(
+        pattern=mean_pattern,
+        spatial_filter=spatial_filter,
+        input_flip=input_flip,
+        input_strength=input_strength,
+        cosine_to_mean=cosine_to_mean,
+        mask_corr=mask_corr,
+        identity_error=identity_error,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1057,21 +1286,32 @@ def trials_filename(
     music_type: str,
     selection: str,
     n_pca: int,
+    band: str | None = None,
 ) -> str:
     """Canonical filename of an extracted trial set.
 
     Mirrors :func:`~src.io.iva_store.iva_results_filename`: the settings that decide
     what is in the file are in its name, so an entry can be found without opening it.
     The frequency selection is part of the name because two selections of the same run
-    are two different products.
+    are two different products, and so is the *band* of the decomposition the filters
+    came from: the trials a band-restricted run extracts are not the trials the
+    broadband run at the same ``n_pca`` and selection extracts, and writing them to one
+    name would silently replace the other. A broadband run passes ``None`` and keeps
+    the name it has always had.
 
     :param variant: The IVA variant the filters came from.
     :param music_type: Music type (a placeholder for ASSR).
     :param selection: Frequency-selection label (:func:`selection_label`).
     :param n_pca: The run's component count.
+    :param band: Band token of the store the filters came from
+        (:func:`~src.definitions.frequency.band_token`), or ``None`` for a broadband
+        one.
     :return: The filename, with extension.
     """
-    return f"assr_trials__{variant}__{music_type}__{selection}__pca{n_pca}.npz"
+    band_part = "" if band is None else f"__{band}"
+    return (
+        f"assr_trials__{variant}__{music_type}{band_part}__{selection}__pca{n_pca}.npz"
+    )
 
 
 def save_assr_trials(path: Path, trial_set: AssrTrialSet) -> Path:

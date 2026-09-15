@@ -405,6 +405,147 @@ class TestPolarityIsDetermined:
 
 
 # ---------------------------------------------------------------------------
+# ROI restriction and the cohort-mean filter
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def roi_mask():
+    keep = np.zeros(10, dtype=bool)
+    keep[:4] = True
+    return keep
+
+
+class TestRestrictFiltersToMask:
+    def test_zeroes_everything_outside_the_mask(self, roi_mask):
+        filters = np.arange(2 * 3 * 10, dtype=float).reshape(2, 3, 10)
+        restricted = at.restrict_filters_to_mask(filters, roi_mask)
+        assert (restricted[..., ~roi_mask] == 0).all()
+
+    def test_keeps_the_weights_inside_untouched(self, roi_mask):
+        # The whole point of the operator: the LEARNED weighting inside the ROI is what
+        # distinguishes it from the equal-weight binary reference.
+        filters = np.arange(3 * 10, dtype=float).reshape(3, 10)
+        restricted = at.restrict_filters_to_mask(filters, roi_mask)
+        assert np.array_equal(restricted[:, roi_mask], filters[:, roi_mask])
+
+    def test_does_not_renormalise(self, roi_mask):
+        # Deliberate: every reported number is divided by its own pre-stimulus SD, so
+        # rescaling here would only invite incomparable magnitude comparisons.
+        filters = np.ones((1, 10))
+        restricted = at.restrict_filters_to_mask(filters, roi_mask)
+        assert restricted[0, roi_mask].tolist() == [1.0] * int(roi_mask.sum())
+
+    def test_rejects_mask_mismatch(self):
+        with pytest.raises(ValueError, match="electrode_mask"):
+            at.restrict_filters_to_mask(np.zeros((2, 10)), np.ones(5, dtype=bool))
+
+    def test_rejects_empty_mask(self):
+        with pytest.raises(ValueError, match="no channel"):
+            at.restrict_filters_to_mask(np.zeros((2, 10)), np.zeros(10, dtype=bool))
+
+
+class TestMaskWeightShare:
+    def test_filter_living_entirely_inside_keeps_everything(self, roi_mask):
+        filters = np.zeros((1, 10))
+        filters[0, :4] = [1.0, 2.0, 3.0, 4.0]
+        assert at.mask_weight_share(filters, roi_mask) == pytest.approx([1.0])
+
+    def test_filter_living_entirely_outside_keeps_nothing(self, roi_mask):
+        filters = np.zeros((1, 10))
+        filters[0, 4:] = 1.0
+        assert at.mask_weight_share(filters, roi_mask) == pytest.approx([0.0])
+
+    def test_is_the_l2_share(self, roi_mask):
+        filters = np.zeros((1, 10))
+        filters[0, :4] = 3.0 / 2  # |inside| = 3
+        filters[0, 4:] = 4.0 / np.sqrt(6)  # |outside| = 4, so |total| = 5
+        assert at.mask_weight_share(filters, roi_mask) == pytest.approx([0.6])
+
+    def test_an_all_zero_filter_is_zero_rather_than_nan(self, roi_mask):
+        assert at.mask_weight_share(np.zeros((2, 10)), roi_mask).tolist() == [0.0, 0.0]
+
+
+class TestCohortMeanPattern:
+    @pytest.fixture
+    def patterns(self, roi_mask):
+        # Six recordings of one shared map plus noise, with half of them stored upside
+        # down — the situation the sign step exists for.
+        rng = np.random.default_rng(11)
+        shared = np.zeros(10)
+        shared[:4] = 1.0
+        shared[4:] = -0.2
+        maps = shared[None, None, :] + 0.05 * rng.normal(size=(6, 1, 10))
+        maps[1::2] *= -1.0
+        return maps
+
+    def test_inverts_the_mean_pattern(self, patterns, roi_mask):
+        cohort = at.cohort_mean_pattern(patterns, roi_mask)
+        identity = cohort.spatial_filter @ cohort.pattern.T
+        assert np.allclose(identity, np.eye(cohort.pattern.shape[0]), atol=1e-6)
+        assert cohort.identity_error < 1e-6
+
+    def test_averages_rather_than_cancels_upside_down_recordings(
+        self, patterns, roi_mask
+    ):
+        # Without the sign step the mean of an evenly split cohort is ~zero; the point
+        # of anchoring first is that the average survives.
+        aligned = at.cohort_mean_pattern(patterns, roi_mask)
+        raw = at.cohort_mean_pattern(patterns, roi_mask, align_polarity=False)
+        assert np.linalg.norm(aligned.pattern) > 10 * np.linalg.norm(raw.pattern)
+
+    def test_mean_is_anchored_to_the_mask(self, patterns, roi_mask):
+        cohort = at.cohort_mean_pattern(patterns, roi_mask)
+        assert (cohort.mask_corr > 0).all()
+
+    def test_agreeing_cohort_has_high_cosine_to_the_mean(self, patterns, roi_mask):
+        cohort = at.cohort_mean_pattern(patterns, roi_mask)
+        assert np.median(cohort.cosine_to_mean) > 0.9
+
+    def test_disagreeing_cohort_has_low_cosine_to_the_mean(self, roi_mask):
+        # Random maps have no shared topography, so the mean stands in for nobody —
+        # which is what the diagnostic has to say out loud.
+        rng = np.random.default_rng(12)
+        cohort = at.cohort_mean_pattern(rng.normal(size=(20, 1, 10)), roi_mask)
+        assert abs(np.median(cohort.cosine_to_mean)) < 0.6
+
+    def test_normalisation_stops_one_loud_recording_deciding_the_shape(self, roi_mask):
+        # One recording with a 100x amplitude and a map living OUTSIDE the ROI, against
+        # five that agree on a map inside it. Unit-norming first means the mean follows
+        # the five; without it the loud one sets the shape, whichever way the sign
+        # anchor happens to turn it.
+        maps = np.zeros((6, 1, 10))
+        maps[:5, 0, :4] = 1.0
+        maps[5, 0, 4:] = 100.0
+        normalised = at.cohort_mean_pattern(maps, roi_mask)
+        unnormalised = at.cohort_mean_pattern(maps, roi_mask, normalize=False)
+
+        def dominant_region(pattern):
+            inside = np.abs(pattern[0, roi_mask]).mean()
+            outside = np.abs(pattern[0, ~roi_mask]).mean()
+            return "inside" if inside > outside else "outside"
+
+        assert dominant_region(normalised.pattern) == "inside"
+        assert dominant_region(unnormalised.pattern) == "outside"
+
+    def test_n_recordings_counts_the_input(self, patterns, roi_mask):
+        assert at.cohort_mean_pattern(patterns, roi_mask).n_recordings == 6
+
+    def test_rejects_a_two_dimensional_stack(self, roi_mask):
+        with pytest.raises(ValueError, match="recordings, components, channels"):
+            at.cohort_mean_pattern(np.zeros((3, 10)), roi_mask)
+
+    def test_rejects_rank_deficient_patterns(self, roi_mask):
+        # Two components collapsed onto the same map: no shared filter exists, and
+        # silently returning a pinv that does not invert would poison every mean_* row.
+        maps = np.zeros((4, 2, 10))
+        maps[:, 0, :4] = 1.0
+        maps[:, 1, :4] = 1.0
+        with pytest.raises(ValueError, match="rank-deficient"):
+            at.cohort_mean_pattern(maps, roi_mask)
+
+
+# ---------------------------------------------------------------------------
 # Epoching
 # ---------------------------------------------------------------------------
 
@@ -757,6 +898,24 @@ class TestTrialsFilename:
         first = at.trials_filename("v", "ASSR", "40hz", 5)
         second = at.trials_filename("v", "ASSR", "35-45hz", 5)
         assert first != second
+
+    def test_a_broadband_run_keeps_the_name_it_always_had(self):
+        """The band is optional, so no existing product is renamed by adding it."""
+        assert at.trials_filename("v", "ASSR", "40hz", 5) == at.trials_filename(
+            "v", "ASSR", "40hz", 5, band=None
+        )
+
+    def test_a_band_restricted_run_does_not_overwrite_the_broadband_one(self):
+        """The same selection through band and broadband filters is two products.
+
+        The trials a 30-50 Hz decomposition's filters extract at 40 Hz are not the ones
+        the broadband decomposition extracts at 40 Hz -- same cache, same bins, different
+        spatial filters -- so one name for both would silently replace the other.
+        """
+        broadband = at.trials_filename("v", "ASSR", "40hz", 5)
+        band = at.trials_filename("v", "ASSR", "40hz", 5, band="30-50hz")
+        assert broadband != band
+        assert "30-50hz" in band
 
 
 class TestResolveConditions:
