@@ -1,166 +1,84 @@
 # Claude Code Workflow
 
-This document describes how Claude Code is used for development on this project.
+How Claude Code is used for development on this project.
 
 ## Overview
 
-All development is done locally via the Claude Code CLI on a Claude Pro subscription.
-GitHub is used for issue tracking, pull requests, and code review — no API-powered
-GitHub Actions are involved.
+Development happens **locally and interactively** in the Claude Code CLI — describe the
+task, iterate on it in the session, review the diff, commit. There is no issue-driven
+automation and no API-powered GitHub Actions. GitHub is used for tracking and review only.
 
 ## Prerequisites
 
-- **Claude Pro subscription** ($20/month) — covers Claude Code CLI usage
-- **`gh` CLI** — GitHub's official CLI, used for issue fetching and PR creation
 - **Claude Code** installed locally (`npm install -g @anthropic-ai/claude-code`)
+- **`gh` CLI** for anything that touches issues or PRs
 
-## Workflow
+## Environment
 
-```
-1. Create issue on GitHub (using issue template)
-2. In terminal:  /work-on <issue-number>
-3. Claude reads issue, checks model, creates branch, implements, tests, opens PR
-4. Review PR on GitHub
-5. Optionally: /validate to run consistency checks
-6. Merge on GitHub
-```
+Run Claude Code from the repository root, so `import src` resolves. The working
+interpreter is the conda env `psilo-music`; there is no usable `.venv` in the repo and the
+package is not installed.
 
 ## Skills
 
-Four custom skills are available in `.claude/skills/`:
-
-### `/work-on <issue-number>` — Main entry point
-
-Fetches the GitHub issue, determines the right model tier based on the issue
-category, creates a `claude/issue-N` branch, implements the work, and opens a PR.
-
-**Model selection logic:**
-- Sonnet (cheaper, faster): `fix/*`, `docs/*`, `test/*`, `refactor/simple`, `catalog/*`
-- Opus (smarter, costlier): `feature/*`, `refactor/complex`
-
-If the wrong model is active, the skill stops and tells you to switch:
-```
-/model sonnet    # or /model opus
-/work-on 42      # re-run
-```
+Three custom skills live in `.claude/skills/`:
 
 ### `/validate` — Consistency checker
 
-Runs 8 checks across the codebase:
+Runs seven checks and reports a pass/fail table:
 
 1. **Enum sync** — no hardcoded categorical strings (use enums from `fields.py`)
 2. **Path sync** — no hardcoded paths (use `ProjectPaths`)
-3. **Test coverage** — every `src/` module has a test file
-4. **Import isolation** — `viz_catalog/` has zero imports from `src/`
-5. **Catalog sync** — every analysis module has a `catalog.yaml` entry
-6. **Notebook template** — notebooks follow the 6-cell template
-7. **Script-job parity** — every CLI script has an HPC job template
-8. **Doc freshness** — documentation matches current project structure
+3. **Enum/data vocabulary sync** — values stored in `data/` still resolve to enum members,
+   in both directions
+4. **Test coverage** — every core-logic module has tests (plotting is deliberately exempt)
+5. **Notebook template** — notebooks follow the template, hold no workflow logic, and have
+   stripped outputs
+6. **Script-job parity** — scripts and PBS templates still line up, both ways
+7. **Doc freshness** — `CLAUDE.md` and `README.md` match the code, and fences balance
 
-Reports results as a pass/fail table. Run this after any significant change.
-
-Recommended model: **Sonnet** (checklist execution, no creativity needed).
+Worth running after any significant change.
 
 ### `/new-analysis <name>` — Scaffold a new analysis
 
-Creates the full analysis workflow in one command:
-- `notebooks/NN-<name>/` with exploration notebook
-- `src/analysis/<name>.py` module
-- `scripts/run_<name>.py` CLI script
-- `jobs/metacentrum/NN-<name>/` HPC job template
-- `tests/test_<name>.py` test file
-- `viz_catalog/catalog.yaml` entry
-- Documentation updates
-
-Recommended model: **Sonnet** (follows rigid template from CLAUDE.md).
+Creates notebook, `src/analysis/` module, plotting module, thin CLI script, PBS template,
+tests and doc updates, following the "Adding a New Analysis" workflow in `CLAUDE.md`.
 
 ### `/sync-docs` — Update stale documentation
 
-Scans the project and updates:
-- `CODEBASE_STRUCTURE.md`
-- `src/analysis/README.md`, `src/preprocessing/README.md`
-- `viz_catalog/README.md`
-- `docs/` files (pipeline overview, data dictionary, HPC guide)
-- `CLAUDE.md` (architecture section, sketch type count)
+Compares `CLAUDE.md`, `README.md`, the two `src/*/README.md` files and `docs/` against the
+actual project state and edits only what has gone stale.
 
-Only edits sections that are actually stale. Reports what was changed.
+## Conventions worth stating to Claude
 
-Recommended model: **Sonnet** (read + compare + update text).
+These are in `CLAUDE.md`, but they are the ones most often gotten wrong:
+
+- **Sphinx docstrings**, kept short. Say only what the name and signature do not.
+- **Tests for core logic only** — no plotting tests, no notebook tests, nothing that
+  restates an argparse default or an enum's own literal.
+- **Notebooks select parameters**; shared logic belongs in `src/`.
+- **Enum members can be a data vocabulary** — check `data/` before removing one.
+- Plot outputs, `results/` and `data/` are treated as data and are not reorganized.
 
 ## Issue Templates
 
-Two templates in `.github/ISSUE_TEMPLATE/`:
-
-### Simple task (`simple-task.yml`)
-
-For: bug fixes, lint fixes, typos, doc updates, adding tests, simple refactors,
-catalog updates.
-
-Categories: `fix/bug`, `fix/lint`, `fix/typo`, `docs/update`, `docs/sync`,
-`test/add`, `test/fix`, `refactor/simple`, `catalog/update`
-
-Model: **Sonnet** — est. ~$0 (Pro subscription), 10–20 messages per task.
-
-### Complex task (`complex-task.yml`)
-
-For: new analyses, new visualizations, new pipeline steps, infrastructure changes,
-multi-module refactors.
-
-Categories: `feature/analysis`, `feature/viz`, `feature/pipeline`, `feature/infra`,
-`refactor/complex`
-
-Model: **Opus** — est. ~$0 (Pro subscription), 30–60 messages per task.
-
-## Label Catalog
-
-| Label | Model | Color | Typical use |
-|---|---|---|---|
-| `fix/bug` | Sonnet | red | Fix broken ISC calculation, test failure |
-| `fix/lint` | Sonnet | red | Fix ruff/formatting violations |
-| `fix/typo` | Sonnet | red | Typo in code, docs, comments |
-| `docs/update` | Sonnet | blue | Update README, docstrings |
-| `docs/sync` | Sonnet | blue | Sync docs with current structure |
-| `test/add` | Sonnet | light blue | Add missing tests |
-| `test/fix` | Sonnet | light blue | Fix broken test |
-| `refactor/simple` | Sonnet | yellow | Rename, extract, move (single module) |
-| `catalog/update` | Sonnet | light blue | Update catalog YAML or sketch |
-| `feature/analysis` | Opus | teal | New analysis (full workflow) |
-| `feature/viz` | Opus | teal | New plot type, explorer feature |
-| `feature/pipeline` | Opus | teal | New preprocessing step, CLI script |
-| `feature/infra` | Opus | teal | HPC job template, CI/CD |
-| `refactor/complex` | Opus | yellow | Multi-module restructuring |
-
-## Weekly Capacity (Pro subscription, 2.5 days/week)
-
-| Model | Per 5-hour window | Per week (~6-7 windows) |
-|---|---|---|
-| Opus | ~1 complex task | 5–7 complex tasks max |
-| Sonnet | ~8–10 simple tasks | 40–60 simple tasks max |
-
-**Typical mixed week:** 2 features (Opus) + 5–8 simple tasks (Sonnet) + validate/sync runs.
-
-If you hit rate limits, switch to the other model or wait for the 5-hour window to reset.
-
-## Branch Convention
-
-All Claude-created branches follow the pattern `claude/issue-<number>`.
-The `/work-on` skill checks for other `claude/*` branches before editing shared files
-to avoid merge conflicts.
+`.github/ISSUE_TEMPLATE/` holds `simple-task.yml` and `complex-task.yml`, left over from
+an earlier issue-driven flow. They are still usable for tracking, but nothing consumes
+their category labels automatically any more.
 
 ## File Inventory
 
 ```
 .github/
 ├── workflows/
-│   └── code-quality.yml              # Existing linter (Black, Ruff, nbstripout)
+│   └── code-quality.yml       # Black, Ruff, nbstripout on PRs
 └── ISSUE_TEMPLATE/
-    ├── simple-task.yml               # fix/docs/test/refactor/catalog
-    └── complex-task.yml              # feature/refactor-complex
+    ├── simple-task.yml
+    └── complex-task.yml
 
 .claude/
 └── skills/
-    ├── work-on.md                    # /work-on <N> — main entry point
-    ├── validate.md                   # /validate — consistency checks
-    ├── new-analysis.md               # /new-analysis <name> — scaffold
-    └── sync-docs.md                  # /sync-docs — update docs
+    ├── validate/SKILL.md      # /validate     — consistency checks
+    ├── new-analysis/SKILL.md  # /new-analysis — scaffold
+    └── sync-docs/SKILL.md     # /sync-docs    — update docs
 ```

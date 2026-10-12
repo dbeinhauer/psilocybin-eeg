@@ -1,0 +1,114 @@
+#!/bin/bash
+#PBS -N PSILO_CONTRASTIVE_TRAIN_08
+#PBS -q gpu
+#PBS -l walltime=4:00:00
+#PBS -l select=1:ncpus=4:ngpus=1:gpu_mem=16gb:mem=32gb:scratch_local=10gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-08 contrastive synchrony model: train, then score group synchrony.
+#
+# Reads the stage-03 wavelet store (data/processed/psilo_music/wavelets/<label>/,
+# one float32 file per participant), so store_wavelets.pbs must have run for every
+# label in data.conditions x data.music_types. Power is averaged into
+# data.frame_rate frames as it is read; nothing else is precomputed.
+#
+# Every setting comes from config/models/contrastive_synchrony.yaml. To try a
+# variant, either write a short YAML holding only the keys it changes and pass it
+# with --config, or override keys with --set. Give every variant its own
+# --run_name: the run name is the output directory, so two runs never collide.
+#
+# Output:
+#   results/psilo_music/contrastive_synchrony/<run_name>/
+#       config.yaml model_fold<k>.pt history.csv synchrony.csv candidates.csv
+#       subject_synchrony.csv
+#   plots/08-contrastive-synchrony/<run_name>/*.png
+#
+# CROSS-FITTING. A model makes the moments it trained on synchronous by
+# construction, so each track is cut into training.n_folds (5) time blocks and one
+# model is trained per held-out block; every window is scored by the model that
+# never saw it. A run is therefore n_folds trainings.
+#
+# RESOURCES. Loading reads ~130 GB of float32 wavelets for Placebo (both tracks)
+# with --n_jobs 4 threads, one participant each, reducing a channel at a time:
+# ncpus=4, and memory holds only the result. At 25 Hz frames and five bands that
+# result is ~1.3 GB, held on the GPU whole, so training needs no data loader. With
+# data.freq_pooling=none it grows tenfold (~13 GB): still fits gpu_mem=16gb.
+# The default model is small (~0.4 M parameters). Without a GPU the same run falls
+# back to the CPU (training.device=auto).
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+cd /mnt
+nvidia-smi || echo "No GPU visible; training falls back to the CPU."
+
+echo "=== baseline at $(date) ==="
+python scripts/run_contrastive_synchrony.py \
+    --config config/models/contrastive_synchrony.yaml \
+    --n_jobs 4
+
+# --- Variants -------------------------------------------------------------
+# One line per idea; each writes to its own run directory.
+#
+# python scripts/run_contrastive_synchrony.py --run_name mlp \
+#     --set model.name=mlp
+#
+# python scripts/run_contrastive_synchrony.py --run_name full_freq \
+#     --set data.freq_pooling=none
+#
+# python scripts/run_contrastive_synchrony.py --run_name window8s \
+#     --set data.window_s=8 training.exclusion_s=8
+#
+# python scripts/run_contrastive_synchrony.py --run_name folds10 \
+#     --set training.n_folds=10
+#
+# Score the Psilocybin tracks with the model trained above, without retraining:
+# python scripts/run_contrastive_synchrony.py --skip_training \
+#     --set "data.conditions=[Placebo, Psilocybin]"
+
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch

@@ -1,0 +1,145 @@
+#!/bin/bash
+#PBS -N ASSR_SEP_ICA_04
+#PBS -l walltime=0:30:00
+#PBS -l select=1:ncpus=4:mem=400gb:scratch_local=40gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-04 per-participant ("separate") channel-ICA of the stimulus-locked ASSR
+# wavelet power.
+#
+# Whole-cohort counterpart of
+# notebooks/04-wavelet-ica-analysis/separate_assr_wavelet_ica_channel.ipynb: the
+# notebook reads a subject subset to stay interactive, this job streams the cache
+# once and decomposes EVERY participant, for both conditions.
+#
+# Per subject: the stimulus-locked wavelet power is z-scored against the whole
+# recording, epoch-averaged around every fam+ onset, and FastICA is run over the
+# CHANNEL axis with the joint (frequency x time) plane as the sample axis. Each
+# component gives a stimulus-locked TF map plus a forward-model scalp topography.
+#
+# There is NO PCA step and none is needed: FastICA(n_components=K) whitens by SVD
+# and keeps its leading K directions, which is the same subspace a PCA(K) would
+# produce. Measured on this data, adding an explicit PCA first gives an identical
+# subspace, identical retained variance, and identical components wherever FastICA
+# converges. N_ICA is therefore the only dimensionality knob.
+#
+# N_ICA (below) sets it, and results land in a pca_<N_ICA> subdirectory — the same
+# layout the IVA jobs use — so runs at different counts sit side by side instead
+# of overwriting each other. Override at submit time:
+#     qsub -v N_ICA=6 run_separate_assr_ica_channel.pbs
+#
+# IMPORTANT: convergence is SUBJECT-DEPENDENT and degrades as N_ICA grows —
+# measured on this data, 3 converges for every subject, 6 already fails for some,
+# 10 fails for all — and raising --ica_max_iter makes the result drift further
+# rather than settle. A non-converged unmixing is wherever the solver stopped
+# rather than a fixed point, so component identities are not reproducible between
+# runs. The job prints convergence per subject; read it before trusting any
+# component identity. Identities also shift with N_ICA, so IC numbers are only
+# comparable within one pca_<N_ICA> directory.
+#
+# Components are then given a display sign (largest absolute TF excursion made
+# positive - hypothesis-free, says nothing about 40 Hz) and ordered by the share
+# of channel variance they account for. Both are conventions, not claims: the job
+# asserts that neither changes the components' back-projection.
+#
+# Finally, each component's trial-averaged time course at ASSR_FREQ is correlated
+# with a binary stimulus regressor (1 while the stimulus is on, 0 otherwise) and
+# the ABSOLUTE correlation is reported. Absolute because flipping a component
+# flips the sign of r, so a signed value would report the display convention
+# rather than a property of the component.
+#
+# Ranks are SUBJECT-LOCAL: with independent per-subject decompositions there is no
+# reason subject A's IC1 is subject B's IC1. That is what the joint channel-IVA
+# analysis (jobs/metacentrum/05-wavelet-iva-analysis/run_channel.pbs) provides and
+# this one deliberately does not.
+#
+# Resources: the work is one sequential read of each participant's wavelets plus a
+# small per-subject SVD, so 4 CPUs is what the code can actually use.
+# Memory peaks on the back-projection assertion, which holds two
+# (n_subj, n_freqs*win, n_channels) arrays (~0.8 GB for 19 subjects).
+#
+# Requires (per condition), produced by the stimulus alignment + wavelet store:
+#   data/processed/assr/concatenated/<Condition>_ASSR.stimulus_onsets.npy
+#   data/processed/assr/concatenated/<Condition>_ASSR.metadata.csv
+#   data/processed/assr/wavelets/<Condition>_ASSR/<participant>__wavelet_power__*.npy
+#   data/processed/assr/<RAW_CROPPED recording>  (header only, for the montage)
+# A condition whose inputs are absent is skipped cleanly rather than failing.
+#
+# Output (one figure per participant, plus the cohort correlation panels + table):
+#   plots/04-wavelet-ica-analysis/<Condition>_ASSR/broadband/
+#       separate_assr_wavelet_ica_channel/separate_ica_<PSInnn>_components.png
+#       separate_assr_wavelet_ica_channel/separate_ica_stimulus_correlation.png
+#       separate_assr_wavelet_ica_channel/separate_ica_stimulus_correlation.csv
+# ---------------------------------------------------------------------------
+
+set -e
+
+# Ensure clean_scratch runs on exit, even on error
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+# Independent components per subject — the only dimensionality knob (FastICA
+# whitens the channels itself). Results go to a pca_<N_ICA> subdirectory, so runs
+# at different counts sit side by side instead of overwriting each other.
+# Override with:  qsub -v N_ICA=6 run_separate_assr_ica_channel.pbs
+N_ICA="${N_ICA:-5}"
+echo "Components: $N_ICA"
+
+# Create the runner script for inside the container. The heredoc is quoted so
+# $(date) below is evaluated at run time, which is also why N_ICA cannot be
+# substituted here — it is passed to the script as an argument instead.
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+
+N_ICA="$1"
+
+# for CONDITION in Placebo Psilocybin; do
+echo "=== Placebo at $(date) ==="
+python /mnt/scripts/run_separate_assr_wavelet_ica_channel.py \
+    --condition Placebo \
+    --experiment assr \
+    --n_ica "$N_ICA" \
+    --random_state 42
+# done
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+# Bind the project directory as /mnt inside the container
+singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh "$N_ICA" || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch

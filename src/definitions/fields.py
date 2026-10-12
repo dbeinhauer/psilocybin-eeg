@@ -75,7 +75,7 @@ class ConditionVariants(Enum):
     """
     All variants of experimental conditions, values are ids from filenames.
 
-    :attr:`JOINED` and :attr:`JOINED_TRACKS` are *virtual* conditions: no recording
+    :attr:`JOINED_SEPARATE` and :attr:`JOINED_TRACKS` are *virtual* conditions: no recording
     ever carries either. Both select both real conditions at once, restricted to
     participants that contribute a recording to both (see
     :meth:`~src.filtering.dataset_filter.DatasetFilter.filter_dataset_by_all_categories`),
@@ -88,8 +88,8 @@ class ConditionVariants(Enum):
     subset — is pure filtering on top of that. The two differ only in *which axis* the
     conditions are pooled along:
 
-    * :attr:`JOINED` pools on the **subject** axis: every recording is one subject, so
-      a participant appears twice. Products are named ``Joined_<MusicType>``; recover a
+    * :attr:`JOINED_SEPARATE` pools on the **subject** axis: every recording is one subject, so
+      a participant appears twice. Products are named ``JoinedSeparate_<MusicType>``; recover a
       condition with a subject-axis mask
       (:func:`~scripts.analysis_common.condition_index_mask`).
     * :attr:`JOINED_TRACKS` pools on the **time** axis: each participant is one subject
@@ -100,7 +100,7 @@ class ConditionVariants(Enum):
 
     PLACEBO = "Placebo"
     PSILOCYBIN = "Psilocybin"
-    JOINED = "Joined"
+    JOINED_SEPARATE = "JoinedSeparate"
     JOINED_TRACKS = "JoinedTracks"
 
 
@@ -110,7 +110,7 @@ REAL_CONDITIONS = (ConditionVariants.PLACEBO, ConditionVariants.PSILOCYBIN)
 
 # Conditions that select both real conditions and restrict to complete participant
 # pairs. They differ only in the axis the two conditions are pooled along.
-JOINED_CONDITIONS = (ConditionVariants.JOINED, ConditionVariants.JOINED_TRACKS)
+JOINED_CONDITIONS = (ConditionVariants.JOINED_SEPARATE, ConditionVariants.JOINED_TRACKS)
 
 
 class MusicTypeVariants(Enum):
@@ -245,8 +245,8 @@ class IvaVariants(Enum):
     * :attr:`TIME` — mixing = time, samples = channel x frequency. The transposed
       companion of :attr:`FREQUENCY_CHANNEL`: a temporal pattern ``(T,)`` plus a
       spectro-spatial score map ``(F, C)``.
-    * :attr:`CHANNEL_JOINED` — :attr:`CHANNEL` run on the subject-axis join
-      (:attr:`ConditionVariants.JOINED`): every recording is one dataset, so a
+    * :attr:`CHANNEL_JOINED_SEPARATE` — :attr:`CHANNEL` run on the subject-axis join
+      (:attr:`ConditionVariants.JOINED_SEPARATE`): every recording is one dataset, so a
       participant occupies one row per condition.
     * :attr:`CHANNEL_JOINED_TRACKS` — :attr:`CHANNEL` run on the time-axis join
       (:attr:`ConditionVariants.JOINED_TRACKS`): one dataset per participant, whose
@@ -257,7 +257,7 @@ class IvaVariants(Enum):
     CHANNEL = "iva_channel"
     FREQUENCY_CHANNEL = "iva_frequency_channel"
     TIME = "iva_time"
-    CHANNEL_JOINED = "iva_channel_joined"
+    CHANNEL_JOINED_SEPARATE = "iva_channel_joined_separate"
     CHANNEL_JOINED_TRACKS = "iva_channel_joined_tracks"
 
 
@@ -275,8 +275,8 @@ class JicaVariants(Enum):
     ``(F, T)`` plus a mixing column that splits into a per-recording topography
     ``(C,)`` and, in the size of that block, a per-recording loading.
 
-    * :attr:`CHANNEL_JOINED` — the recording-axis join
-      (:attr:`ConditionVariants.JOINED`): one channel block per recording, so each
+    * :attr:`CHANNEL_JOINED_SEPARATE` — the recording-axis join
+      (:attr:`ConditionVariants.JOINED_SEPARATE`): one channel block per recording, so each
       condition gets its own topography and loading and the condition contrast
       lives there. The TF maps are shared by construction.
     * :attr:`CHANNEL_JOINED_TRACKS` — the time-axis join
@@ -289,7 +289,7 @@ class JicaVariants(Enum):
       stimulus-locked trials, and tested against the fixed ASSR-electrode reference.
     """
 
-    CHANNEL_JOINED = "ica_channel_joined"
+    CHANNEL_JOINED_SEPARATE = "ica_channel_joined_separate"
     CHANNEL_JOINED_TRACKS = "ica_channel_joined_tracks"
     COMPONENT_ANALYSIS = "ica_component_analysis"
 

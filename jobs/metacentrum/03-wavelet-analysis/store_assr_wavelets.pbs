@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -N ASSR_STORE_WAVELETS_03
-#PBS -l walltime=4:00:00
-#PBS -l select=1:ncpus=8:mem=400gb:scratch_local=100gb
+#PBS -l walltime=2:00:00
+#PBS -l select=1:ncpus=8:mem=499gb:scratch_local=100gb
 #PBS -m ae
 #PBS -j oe
 
@@ -21,9 +21,9 @@
 #     RAW_AFTER_ICA recordings *before* the stimulus splice, then trimmed to
 #     the aligned segments. This avoids the Morlet edge artifacts that would
 #     appear at every splice point if wavelets were computed on the already
-#     spliced RAW_CROPPED signal. The cache lands in
-#     data/processed/assr/wavelets/broadband/ — the canonical location every
-#     downstream stage reads from.
+#     spliced RAW_CROPPED signal. The wavelets land in the per-subject store
+#     data/processed/assr/wavelets/<Condition>_ASSR/ — the canonical location
+#     every downstream stage reads from.
 #   * Omitting --process_and_save is fine: the concatenated time-domain array
 #     is loaded if present and built (from RAW_CROPPED) + saved automatically
 #     on first use. Pass --process_and_save only to force a rebuild.
@@ -34,14 +34,13 @@
 # shapes). So this job will still fail if neither the saved concatenated array
 # nor the RAW_CROPPED data exists — run Stage-02 stimulus alignment first.
 #
-# Memory is much lower than psilo_music because subjects are processed
-# one at a time (peak ≈ one subject's wavelet tensor) rather than all at
-# once.
+# Each subject is stored as soon as it is transformed, so a run that stops
+# part-way resumes at the first subject not yet stored.
 #
-# Output:
-#   data/processed/assr/wavelets/broadband/
-#       Placebo_ASSR__wavelet_power__1.000_50.000_50__freqdim1.npz
-#       Placebo_ASSR__wavelet_phase__1.000_50.000_50__freqdim1.npz
+# Output (one float32 file per participant, src/io/wavelet_store.py):
+#   data/processed/assr/wavelets/<Condition>_ASSR/
+#       wavelet_power__1.000_50.000_50.json              shared axes
+#       <participant>__wavelet_power__1.000_50.000_50.npy  (channels, freqs, times)
 # ---------------------------------------------------------------------------
 
 set -e
@@ -79,21 +78,26 @@ source /opt/myproject/.venv/bin/activate
 
 WAVELET_DIR="/mnt/data/processed"
 
-echo "=== Wavelet power at $(date) ==="
-python /mnt/scripts/run_analysis.py \
-    --analysis wavelet_power \
-    --experiment assr \
-    --condition Placebo \
-    --wavelet_data_dir "$WAVELET_DIR" \
-    --n_jobs -1
+# --condition takes one value, so each condition is its own run. Subjects
+# already stored are not recomputed; drop a condition from the list to skip
+# its stage-03 plots too.
+for CONDITION in Placebo Psilocybin; do
+    echo "=== Wavelet power ($CONDITION) at $(date) ==="
+    python /mnt/scripts/run_analysis.py \
+        --analysis wavelet_power \
+        --experiment assr \
+        --condition "$CONDITION" \
+        --wavelet_data_dir "$WAVELET_DIR" \
+        --n_jobs -1
 
-# echo "=== Wavelet phase at $(date) ==="
-# python /mnt/scripts/run_analysis.py \
-#     --analysis wavelet_phase \
-#     --experiment assr \
-#     --condition Placebo \
-#     --wavelet_data_dir "$WAVELET_DIR" \
-#     --n_jobs -1
+    # echo "=== Wavelet phase ($CONDITION) at $(date) ==="
+    # python /mnt/scripts/run_analysis.py \
+    #     --analysis wavelet_phase \
+    #     --experiment assr \
+    #     --condition "$CONDITION" \
+    #     --wavelet_data_dir "$WAVELET_DIR" \
+    #     --n_jobs -1
+done
 EOF
 
 chmod +x run_inside.sh

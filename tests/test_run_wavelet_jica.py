@@ -203,14 +203,14 @@ def _argv(save_dir: Path, results_dir: Path, *extra: str) -> list[str]:
 
 
 def _product(join: str) -> str:
-    return "JoinedTracks_ASSR" if join == "joined_tracks" else "Joined_ASSR"
+    return "JoinedTracks_ASSR" if join == "joined_tracks" else "JoinedSeparate_ASSR"
 
 
 def _decomposition_dir(save_dir: Path, join: str) -> Path:
     variant = (
         JicaVariants.CHANNEL_JOINED_TRACKS
         if join == "joined_tracks"
-        else JicaVariants.CHANNEL_JOINED
+        else JicaVariants.CHANNEL_JOINED_SEPARATE
     )
     return (
         save_dir
@@ -325,19 +325,18 @@ class TestCliDefaults:
             main(["--conditions", "Placebo", "Placebo", "--skip_analysis"])
 
 
-@pytest.mark.parametrize("join", ["joined_tracks", "joined"])
+@pytest.mark.parametrize("join", ["joined_tracks", "joined_separate"])
 class TestWaveletCache:
-    """The stage-03 caches are read, never silently recomputed."""
+    """The stage-03 store is read, never silently recomputed."""
 
-    def test_the_source_cache_path_carries_the_band_subdirectory(
+    def test_the_loaders_get_the_experiment_wavelet_root(
         self, join, stub_loaders, monkeypatch, tmp_path
     ):
-        """A path one level up is a cache miss, and a miss recomputes tens of GB.
+        """Any other directory is a store miss, and a miss recomputes tens of GB.
 
-        The loaders take the cache directory with the band subdirectory already on it,
-        so resolving only ``<experiment>/wavelets`` matches nothing and sends the run
-        through the Morlet transform again — on the spliced signal, which is not what
-        the cache holds.
+        The per-subject store lives in ``<experiment>/wavelets/<label>/``; the loaders
+        append the label themselves, so they must be handed the ``wavelets`` root —
+        with no band level, which the store does not have.
         """
         seen: list[Path] = []
         stubbed = notebook_helpers.compute_wavelet_datasets
@@ -360,14 +359,10 @@ class TestWaveletCache:
 
         assert seen, "the loaders were never asked for a wavelet dataset"
         for path in seen:
-            assert path.parts[-3:] == (
-                ExperimentNames.ASSR.value,
-                "wavelets",
-                SpectrumTypeVariants.BROADBAND.value,
-            )
+            assert path.parts[-2:] == (ExperimentNames.ASSR.value, "wavelets")
 
 
-@pytest.mark.parametrize("join", ["joined_tracks", "joined"])
+@pytest.mark.parametrize("join", ["joined_tracks", "joined_separate"])
 class TestEndToEnd:
     def test_decomposition_and_readout_figures_are_written(
         self, join, stub_loaders, tmp_path
@@ -531,7 +526,7 @@ class TestEndToEnd:
         )
 
 
-@pytest.mark.parametrize("join", ["joined_tracks", "joined"])
+@pytest.mark.parametrize("join", ["joined_tracks", "joined_separate"])
 class TestComponentPolarity:
     """jICA orients each component ONCE, never per recording.
 

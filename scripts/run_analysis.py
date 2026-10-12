@@ -35,13 +35,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from scripts.analysis_common import (
     add_common_arguments,
     load_analyzers,
+    add_subset_arguments,
     analyzers_to_datasets,
+    apply_subset,
     precompute_pre_alignment_wavelet_cache,
     resolve_wavelet_dir,
     run_wavelet_workflow,
 )
 from src.definitions.fields import (
-    SpectrumTypeVariants,
     MusicTypeVariants,
     ConditionVariants,
     ExclusionCategories,
@@ -60,7 +61,8 @@ _STAGE_DIR = "03-wavelet-analysis"
 # ──────────────────────────────────────────────────────────────────────
 
 
-if __name__ == "__main__":
+def _build_arg_parser() -> argparse.ArgumentParser:
+    """The CLI surface, so a notebook can build the same namespace the job uses."""
     parser = argparse.ArgumentParser(
         description=("Run EEG wavelet analysis on preprocessed data."),
     )
@@ -71,12 +73,24 @@ if __name__ == "__main__":
         default=None,
         help="Base directory for output plots. Defaults to project plots/ root.",
     )
+    add_subset_arguments(parser)
 
-    args = parser.parse_args()
+    return parser
 
+
+def run(args: argparse.Namespace) -> None:
+    """Run the wavelet analysis for an already-parsed argument namespace.
+
+    Split out of the ``__main__`` block so a notebook can drive the same code path the
+    CLI and the PBS job take, without going through ``sys.argv``.
+
+    :param args: Parsed arguments, as :func:`_build_arg_parser` produces.
+    """
     # Early validation: reshape requires keep
     if args.wavelet_reshape_frequency_dim and not args.wavelet_keep_frequency_dim:
-        parser.error(
+        # Raised rather than parser.error(): run() is also called from a notebook, where
+        # exiting the process on a bad argument is the wrong response.
+        raise ValueError(
             "--wavelet_reshape_frequency_dim requires --wavelet_keep_frequency_dim"
         )
 
@@ -120,24 +134,24 @@ if __name__ == "__main__":
         experiment_name=experiment_name,
     )
     raw_datasets = analyzers_to_datasets(analyzers) if run_wavelet else None
+    if raw_datasets is not None:
+        raw_datasets = apply_subset(raw_datasets, args)
 
     # Canonical plot root shared by both power and phase workflows. Each
     # analysis writes under the same ``03-wavelet-analysis`` tree so the
     # Results Browser picks them up using the same notebook-based ID.
     save_root = args.save_dir if args.save_dir is not None else ProjectPaths.PLOTS_PATH
-    wavelet_plots_root = save_root / _STAGE_DIR
-    # Shared wavelet cache directory — power and phase outputs coexist since
-    # the representation is encoded in the cached filename. This lets the
-    # power workflow reuse a pre-computed phase cache for the power-vs-phase
-    # joint plot.
+    wavelet_plots_root = ProjectPaths.analysis_plots_dir(_STAGE_DIR, "", root=save_root)
+    # The experiment's wavelet store: one directory per label, one file per
+    # participant, power and phase side by side (the representation is in the name).
     wavelet_cache_root = resolve_wavelet_dir(args.wavelet_data_dir, experiment_name)
 
     # ── Pre-alignment wavelet cache (stimulus-based experiments) ──
     # For experiments that use stimulus-based alignment (e.g. ASSR), wavelets
     # computed on the spliced RAW_CROPPED signal suffer from edge artifacts at
-    # every splice point.  When the cache is not being reused, pre-compute the
+    # every splice point.  When the store is not being reused, pre-compute the
     # wavelet transform on the continuous RAW_AFTER_ICA data and trim
-    # afterwards, then tell the workflow to reuse the just-saved cache.
+    # afterwards, then tell the workflow to reuse the just-stored subjects.
     reuse_wavelets_for_workflow = args.reuse_wavelets
     if (
         run_wavelet
@@ -147,18 +161,15 @@ if __name__ == "__main__":
         representations = (["power"] if run_wavelet_power else []) + (
             ["phase"] if run_wavelet_phase else []
         )
-        # The workflow (and all Stage-04/05 consumers) read the broadband
-        # wavelet cache from ``<wavelet_dir>/broadband`` (see
-        # ``_broadband_wavelet_4d``). Write the pre-aligned cache to that same
-        # subdirectory so it is actually reused downstream — otherwise the
-        # workflow would silently recompute wavelets from the stimulus-spliced
-        # RAW_CROPPED signal, reintroducing the splice-edge artifacts this
-        # pre-alignment step exists to avoid.
+        # Written to the same store the workflow (and every later stage) reads, so
+        # it is actually reused downstream — otherwise the workflow would recompute
+        # wavelets from the stimulus-spliced RAW_CROPPED signal, reintroducing the
+        # splice-edge artifacts this pre-alignment step exists to avoid.
         precompute_pre_alignment_wavelet_cache(
             analyzers,
             freqs=wavelet_freqs,
             representations=representations,
-            wavelet_dir=wavelet_cache_root / SpectrumTypeVariants.BROADBAND.value,
+            wavelet_dir=wavelet_cache_root,
             resample_freq=250.0,
             n_jobs=args.n_jobs,
         )
@@ -214,3 +225,15 @@ if __name__ == "__main__":
         )
 
     _logger.info("All requested analyses complete.")
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Parse arguments and run.
+
+    :param argv: Command-line arguments; ``None`` reads ``sys.argv``.
+    """
+    run(_build_arg_parser().parse_args(argv))
+
+
+if __name__ == "__main__":
+    main()

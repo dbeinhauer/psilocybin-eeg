@@ -9,7 +9,7 @@ Scaffold a new analysis called `{{ name }}`. Follow the "Adding a New Analysis" 
 
 ## Steps
 
-1. **Determine the next analysis number**: Look at existing `notebooks/NN-*/` directories and pick the next available two-digit ID.
+1. **Determine the next analysis number**: Look at existing `notebooks/NN-*/` directories and pick the next available two-digit ID. Use the same number for the notebook, plot and job directories.
 
 2. **Create notebook directory**: `notebooks/NN-{{ name }}/`
 
@@ -21,25 +21,34 @@ Scaffold a new analysis called `{{ name }}`. Follow the "Adding a New Analysis" 
    - Cell 5 (code): Dataset selection
    - Cell 6+ (code): Analysis steps (placeholder)
 
+   The notebook selects **parameters**; it does not hold workflow logic. Every cell should
+   be short and call into `src/`. If a cell grows past ~80 lines, that code belongs in a
+   module.
+
 4. **Create src module**: `src/analysis/{{ name_snake }}.py` with:
    - Type-hinted function signatures
-   - Google-style docstrings
+   - **Sphinx-style** docstrings (`:param:` / `:return:` / `:raises:`), only where the
+     name and signature do not already say it; no docstrings on private one-liners
    - Input dimension validation
    - Returns pandas DataFrame with metadata columns
    - Copies input data before mutation
 
-5. **Create CLI script**: `scripts/run_{{ name_snake }}.py` with argparse, defaulting to Placebo
+5. **Create plotting module** (if the analysis needs figures):
+   `src/visualization/{{ name_snake }}_plots.py`. Reuse the shared helpers rather than
+   copying them, and close every figure you create.
 
-6. **Create HPC job template**: `jobs/metacentrum/NN-{{ name }}/run_{{ name_snake }}.pbs`
+6. **Create CLI script**: `scripts/run_{{ name_snake }}.py` — argparse wiring and
+   orchestration only, defaulting to Placebo. Numerical work goes in `src/`, not here.
 
-7. **Create test file**: `tests/test_{{ name_snake }}.py` with:
+7. **Create HPC job template**: `jobs/metacentrum/NN-{{ name }}/run_{{ name_snake }}.pbs`.
+   Copy an existing template's structure and resource shape rather than inventing one.
+
+8. **Create test file**: `tests/test_{{ name_snake }}.py` covering the **core logic**:
    - Fixtures from conftest.py where applicable
-   - Happy path and edge case tests
-   - Mocked file I/O
+   - Happy path and edge cases, with meaningful numerical assertions
+   - No plotting tests, no notebook tests, no tests that restate argparse defaults
 
-8. **Update catalog**: Add entry to `viz_catalog/catalog.yaml` with all required fields
-
-9. **Update docs**: Update `CODEBASE_STRUCTURE.md` and `src/analysis/README.md`
+9. **Update docs**: `CLAUDE.md` (module lists) and `src/analysis/README.md`.
 
 10. **Verify**: Run `ruff check .` and `python -m pytest tests/test_{{ name_snake }}.py -v`
 

@@ -15,15 +15,15 @@
 # detection (raw mean signal, time-frequency maps, 40 Hz ASSR-band time course,
 # and z-scored wavelet-power topomaps).
 #
-# The wavelet cache (tens of GB, stored by jobs/metacentrum/03-wavelet-analysis/
-# store_assr_wavelets.pbs) is read lazily in one sequential streaming pass —
-# every channel block is decompressed once and immediately reduced — so memory
-# stays low; walltime is dominated by decompressing the cache once per condition.
+# The wavelets (tens of GB, stored per participant by jobs/metacentrum/
+# 03-wavelet-analysis/store_assr_wavelets.pbs) are read lazily, one memory-mapped
+# participant at a time — every channel block is read once and immediately
+# reduced — so memory stays low; walltime is dominated by that read.
 #
 # Requires (per condition), produced by the stimulus alignment + wavelet store:
 #   data/processed/assr/concatenated/<Condition>_ASSR.npy (+ .stimulus_onsets.npy,
 #       + .metadata.csv)
-#   data/processed/assr/wavelets/broadband/<Condition>_ASSR__wavelet_power__*.npz
+#   data/processed/assr/wavelets/<Condition>_ASSR/<participant>__wavelet_power__*.npy
 # A condition whose inputs are absent (e.g. Psilocybin not yet generated) is
 # skipped cleanly rather than failing the job.
 #

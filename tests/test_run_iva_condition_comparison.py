@@ -175,7 +175,7 @@ def _out_dir(save_dir: Path, spectrum: str = "broadband", n_pca: int = 3) -> Pat
     return (
         save_dir
         / _STAGE_DIR
-        / "Joined_ASSR"
+        / "JoinedSeparate_ASSR"
         / spectrum
         / _ANALYSIS_DIR
         / f"pca_{n_pca}"
@@ -211,11 +211,8 @@ class TestCliDefaults:
         assert args.n_channels is None
         assert args.n_times is None
 
-    def test_caches_are_opt_in(self):
-        """Neither cache may be written unless asked for."""
-        args = _build_arg_parser().parse_args([])
-        assert args.reuse_wavelets is False
-        assert args.subset_cache is False
+    def test_wavelet_reuse_is_opt_in(self):
+        assert _build_arg_parser().parse_args([]).reuse_wavelets is False
 
     def test_the_stimulus_average_is_on_by_default(self):
         assert _build_arg_parser().parse_args([]).skip_onset_average is False
@@ -416,10 +413,10 @@ class TestOnsetAverage:
 
 
 class TestProductName:
-    """The run is named ``Joined_<MusicType>`` — never the pooled *data* label.
+    """The run is named ``JoinedSeparate_<MusicType>`` — never the pooled *data* label.
 
     The wavelet transform appends its representation to the data label
-    ("Joined_ASSR (wavelet power 1-50 Hz)"). That describes the array, but it is
+    ("JoinedSeparate_ASSR (wavelet power 1-50 Hz)"). That describes the array, but it is
     unfit to name a path: it would put spaces, parentheses and a frequency range
     into the plot directory and every figure filename, and disagree with the
     component store, which names the condition from the enum.
@@ -428,7 +425,7 @@ class TestProductName:
     def test_the_plot_directory_is_the_canonical_name(self, tmp_path, stub_loaders):
         main(_argv(tmp_path, "--skip_onset_average"))
         stage = tmp_path / _STAGE_DIR
-        assert [p.name for p in stage.iterdir()] == ["Joined_ASSR"]
+        assert [p.name for p in stage.iterdir()] == ["JoinedSeparate_ASSR"]
 
     def test_no_representation_suffix_reaches_any_path(self, tmp_path, stub_loaders):
         main(_argv(tmp_path, "--skip_onset_average"))
@@ -446,8 +443,8 @@ class TestProductName:
             p.name for p in (_out_dir(tmp_path) / "participants").glob("*.png")
         )
         assert names == [
-            "condition_tf_ic02_participants_Joined_ASSR.png",
-            "condition_topomap_ic02_participants_Joined_ASSR.png",
+            "condition_tf_ic02_participants_JoinedSeparate_ASSR.png",
+            "condition_topomap_ic02_participants_JoinedSeparate_ASSR.png",
         ], names
 
     def test_the_plot_tree_and_the_store_agree_on_the_condition(
@@ -465,13 +462,15 @@ class TestProductName:
         )
         entries = list_iva_results(ExperimentNames.ASSR, processed_data_dir=store)
         # The store names the condition from the enum; the plot tree must match it.
-        assert [p.parent.name for p in entries] == [ConditionVariants.JOINED.value]
+        assert [p.parent.name for p in entries] == [
+            ConditionVariants.JOINED_SEPARATE.value
+        ]
         # pca_<n> -> <analysis type> -> <spectrum> -> the run's product name.
         assert (
             _out_dir(tmp_path).parents[2].name
-            == f"{ConditionVariants.JOINED.value}_{MusicTypeVariants.ASSR.value}"
+            == f"{ConditionVariants.JOINED_SEPARATE.value}_{MusicTypeVariants.ASSR.value}"
         )
-        assert load_iva_components(entries[0]).label == "Joined_ASSR"
+        assert load_iva_components(entries[0]).label == "JoinedSeparate_ASSR"
 
 
 class TestEndToEnd:
@@ -508,8 +507,8 @@ class TestEndToEnd:
             p.name for p in (_out_dir(tmp_path) / "participants").glob("*.png")
         )
         assert names == [
-            "condition_tf_ic02_participants_Joined_ASSR.png",
-            "condition_topomap_ic02_participants_Joined_ASSR.png",
+            "condition_tf_ic02_participants_JoinedSeparate_ASSR.png",
+            "condition_topomap_ic02_participants_JoinedSeparate_ASSR.png",
         ], names
 
     def test_an_out_of_range_component_raises(self, tmp_path, stub_loaders):
@@ -534,18 +533,6 @@ class TestEndToEnd:
         ]
         # The band prefix never leaks into the broadband tree.
         assert not any(p.name.startswith("gamma_") for p in broadband.rglob("*.png"))
-
-    def test_the_subset_cache_is_written_only_when_asked(
-        self, tmp_path, stub_loaders, monkeypatch
-    ):
-        cache = tmp_path / "subset_cache"
-        monkeypatch.setattr(
-            run_iva_condition_comparison,
-            "resolve_notebook_wavelet_cache_dir",
-            lambda experiment_name: cache,
-        )
-        main(_argv(tmp_path, "--skip_onset_average"))
-        assert not cache.exists(), "the cache was written without --subset_cache"
 
     def test_psilo_music_defaults_to_both_music_types(
         self, tmp_path, stub_loaders, monkeypatch
@@ -584,8 +571,8 @@ class TestComponentStore:
     def _load(self, store, n_pca=3, band=None):
         return load_iva_components(
             experiment=ExperimentNames.ASSR,
-            condition=ConditionVariants.JOINED,
-            variant=IvaVariants.CHANNEL_JOINED,
+            condition=ConditionVariants.JOINED_SEPARATE,
+            variant=IvaVariants.CHANNEL_JOINED_SEPARATE,
             music_type=MusicTypeVariants.ASSR,
             band=band,
             n_pca=n_pca,
@@ -695,8 +682,10 @@ class TestComponentStore:
             )
         )
         entries = list_iva_results(ExperimentNames.ASSR, processed_data_dir=store)
-        assert [p.parent.name for p in entries] == ["Joined"]
-        assert entries[0].name == "iva_channel_joined__ASSR__broadband__pca3.npz"
+        assert [p.parent.name for p in entries] == ["JoinedSeparate"]
+        assert (
+            entries[0].name == "iva_channel_joined_separate__ASSR__broadband__pca3.npz"
+        )
 
     def test_a_band_run_stores_a_separate_entry(self, tmp_path, stub_loaders):
         store = tmp_path / "processed"
@@ -716,8 +705,8 @@ class TestComponentStore:
             for p in list_iva_results(ExperimentNames.ASSR, processed_data_dir=store)
         )
         assert names == [
-            "iva_channel_joined__ASSR__broadband__pca3.npz",
-            "iva_channel_joined__ASSR__gamma__pca3.npz",
+            "iva_channel_joined_separate__ASSR__broadband__pca3.npz",
+            "iva_channel_joined_separate__ASSR__gamma__pca3.npz",
         ]
         gamma = self._load(store, band="gamma")
         assert gamma.freqs.max() <= 50.0

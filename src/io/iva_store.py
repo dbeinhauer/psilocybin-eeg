@@ -29,7 +29,7 @@ produced it. A file therefore carries a participant label *and* a condition per
 row, and :class:`IvaComponentResults` resolves rows by those labels
 (:meth:`~IvaComponentResults.row`, :meth:`~IvaComponentResults.rows`) rather than
 asking the caller to remember the order. This matters most for
-:attr:`~src.definitions.fields.ConditionVariants.JOINED`, where one participant
+:attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE`, where one participant
 owns **two** rows and a bare label is ambiguous — the accessors say so instead of
 silently returning the first match.
 
@@ -211,7 +211,7 @@ class IvaComponentResults:
         mapping — a row means nothing without it.
     :param subject_conditions: Condition of each recording, in row order. Constant
         for a single-condition run; alternating for
-        :attr:`~src.definitions.fields.ConditionVariants.JOINED`, where a
+        :attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE`, where a
         participant owns one row per condition.
     :param arrays: Canonical array name → ``(S, K, ...)`` array. Which names are
         present depends on :attr:`variant`; read them through :meth:`array`.

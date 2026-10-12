@@ -27,7 +27,7 @@ class DatasetFilter:
         """
         Resolve the virtual conditions to the real conditions they stand for.
 
-        :attr:`~src.definitions.fields.ConditionVariants.JOINED` and
+        :attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE` and
         :attr:`~src.definitions.fields.ConditionVariants.JOINED_TRACKS` are selectors,
         not values any recording carries, so every filter that touches the metadata
         must expand them first. They expand identically — the difference between them
@@ -62,7 +62,7 @@ class DatasetFilter:
         Keep only participants contributing a recording to *every* given condition,
         ordered by condition block and then by participant.
 
-        This is what makes :attr:`~src.definitions.fields.ConditionVariants.JOINED` a
+        This is what makes :attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE` a
         balanced within-subject design. Exclusions are already applied by the caller
         and — because
         :meth:`filter_dataset_by_all_categories` drops by participant ID rather than by
@@ -146,13 +146,13 @@ class DatasetFilter:
         :param excluded_participants_metadata: The excluded participants metadata DataFrame to filter
         :param music_types: List of music types to include.
         :param conditions: List of conditions to include. May contain
-            :attr:`~src.definitions.fields.ConditionVariants.JOINED`, which selects both
+            :attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE`, which selects both
             real conditions and additionally restricts the result to participants
             present in both (see :meth:`restrict_to_complete_pairs`).
         :param exclusion_categories: List of exclusion categories to include.
         :return: Filtered DataFrame containing only rows that match the specified music types, conditions, and exclusion categories.
         """
-        # JOINED is a selector over the real conditions, so resolve it before anything
+        # JOINED_SEPARATE is a selector over the real conditions, so resolve it before anything
         # touches the metadata. Note that requesting both conditions also widens the
         # exclusion step below: it drops by participant ID, so a participant excluded
         # under either condition is dropped from both — which is exactly what a paired
@@ -265,7 +265,7 @@ class DatasetFilter:
         Filter dataset metadata by selected conditions.
 
         Note this applies the condition selection only. When
-        :attr:`~src.definitions.fields.ConditionVariants.JOINED` is requested it expands
+        :attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE` is requested it expands
         to both real conditions, but the complete-pair restriction that makes a joined
         dataset balanced is *not* applied here — it must run after exclusions, so it
         lives in :meth:`filter_dataset_by_all_categories`.

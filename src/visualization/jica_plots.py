@@ -273,9 +273,11 @@ def plot_loading_bars(
         ax = axes[panel // ncols][panel % ncols]
         for c, condition in enumerate(conditions):
             heights = [
-                values[row_of[(participant, condition)], k]
-                if (participant, condition) in row_of
-                else np.nan
+                (
+                    values[row_of[(participant, condition)], k]
+                    if (participant, condition) in row_of
+                    else np.nan
+                )
                 for participant in bar_participants
             ]
             ax.bar(
@@ -480,7 +482,7 @@ def plot_pvalue_summary(
     labels: Sequence[str],
     conditions: Sequence[str],
     contrast_rows: Sequence[Mapping],
-    versus_rows: Sequence[Mapping],
+    versus_rows: Sequence[Mapping] | Mapping[str, Sequence[Mapping]],
     *,
     label: str,
     units: str,
@@ -513,7 +515,10 @@ def plot_pvalue_summary(
     :param contrast_rows: Records from
         :func:`~src.analysis.wavelet_jica.condition_contrast_tests`.
     :param versus_rows: Records from
-        :func:`~src.analysis.wavelet_jica.reference_interaction_tests`.
+        :func:`~src.analysis.wavelet_jica.reference_interaction_tests`. Pass a mapping
+        of reference label → records to judge the components against several references
+        at once; the figure then carries one right-hand panel per reference, in the
+        mapping's order.
     :param label: Dataset label shown in the title.
     :param units: Units of the difference axis.
     :param reference_label: Which source label this figure judges against.
@@ -543,16 +548,31 @@ def plot_pvalue_summary(
     first = np.asarray(value_by_condition[conditions[0]], dtype=float)
     second = np.asarray(value_by_condition[conditions[1]], dtype=float)
     contrast_by_source = {row["source"]: row for row in contrast_rows}
-    versus_by_source = {row["source"]: row for row in versus_rows}
+    # A flat sequence judges the components against reference_label alone; a mapping
+    # gives one right-hand panel per reference it names.
+    versus_panels = (
+        {ref: list(rows) for ref, rows in versus_rows.items()}
+        if isinstance(versus_rows, Mapping)
+        else {reference_label: list(versus_rows)}
+    )
+    missing = [ref for ref in versus_panels if ref not in labels]
+    if missing:
+        raise ValueError(f"No column in *labels* for reference(s) {missing}.")
     # Every reference row is excluded from the right panel, not just the one this
     # figure is about: a run with several references would otherwise judge two of them
     # against the third as though they were components.
     fixed_rows = set(mask_labels) if mask_labels else {reference_label}
     ic_labels = [s for s in labels if s not in fixed_rows]
 
+    n_panels = len(versus_panels)
     fig, axes = plt.subplots(
-        1, 2, figsize=(14.5, 5.0), gridspec_kw={"width_ratios": [1.0, 1.12]}
+        1,
+        1 + n_panels,
+        figsize=(7.6 + 5.9 * n_panels, 5.0),
+        gridspec_kw={"width_ratios": [1.0] + [1.12] * n_panels},
+        squeeze=False,
     )
+    axes = axes[0]
 
     differences = {
         source: first[:, s] - second[:, s] for s, source in enumerate(labels)
@@ -577,30 +597,31 @@ def plot_pvalue_summary(
         fontsize=12,
     )
 
-    reference_index = labels.index(reference_label)
-    reference_contrast = first[:, reference_index] - second[:, reference_index]
-    interaction = {
-        source: (first[:, labels.index(source)] - second[:, labels.index(source)])
-        - reference_contrast
-        for source in ic_labels
-    }
-    _forest(
-        axes[1],
-        ic_labels,
-        interaction,
-        versus_by_source,
-        alpha=alpha,
-        n_bootstrap=n_bootstrap,
-        bootstrap_seed=bootstrap_seed,
-        bootstrap=bootstrap_median_ci,
-        zero_lw=1.6,
-    )
-    axes[1].set_xlabel(f"(IC contrast) - ({reference_label} contrast)   ({units})")
-    axes[1].set_title(
-        f"Better than {reference_label}?\ntwo-sided; 0 = as good as the reference",
-        loc="left",
-        fontsize=12,
-    )
+    for ax, (panel_reference, rows) in zip(axes[1:], versus_panels.items()):
+        reference_index = labels.index(panel_reference)
+        reference_contrast = first[:, reference_index] - second[:, reference_index]
+        interaction = {
+            source: (first[:, labels.index(source)] - second[:, labels.index(source)])
+            - reference_contrast
+            for source in ic_labels
+        }
+        _forest(
+            ax,
+            ic_labels,
+            interaction,
+            {row["source"]: row for row in rows},
+            alpha=alpha,
+            n_bootstrap=n_bootstrap,
+            bootstrap_seed=bootstrap_seed,
+            bootstrap=bootstrap_median_ci,
+            zero_lw=1.6,
+        )
+        ax.set_xlabel(f"(IC contrast) - ({panel_reference} contrast)   ({units})")
+        ax.set_title(
+            f"Better than {panel_reference}?\ntwo-sided; 0 = as good as this reference",
+            loc="left",
+            fontsize=12,
+        )
 
     fig.suptitle(
         f"Exact Wilcoxon signed-rank — {label}{'' if not note else f' — {note}'}",

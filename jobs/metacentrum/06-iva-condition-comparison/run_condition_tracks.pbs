@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -N PSILO_IVA_TRACKS_06
 #PBS -l walltime=1:00:00
-#PBS -l select=1:ncpus=4:mem=200gb:scratch_local=80gb
+#PBS -l select=1:ncpus=4:mem=400gb:scratch_local=80gb
 #PBS -m ae
 #PBS -j oe
 
@@ -108,10 +108,9 @@
 # (against ~230 GB for run_condition_comparison.pbs). It fits mem=499gb; it does
 # NOT fit a smaller node, so do not reduce mem without also setting --n_times.
 #
-# NB --subset_cache is deliberately NOT passed here. At the full extent the
-# "subset" is the whole cache written back uncompressed, i.e. ~110 GB of disk per
-# condition for no saving. It pays off only for a channel/time subset — see the
-# commented exploration block below.
+# The memory and time figures in this header were measured on the old single
+# compressed float64 cache per condition. The per-subject float32 store holds half
+# the bytes and is read without decompression, so they are now upper bounds.
 #
 # NB --n_times is applied PER CONDITION (per segment), so the concatenated sample
 # axis is n_freqs × 2 × --n_times. --n_pca reduces the CHANNEL axis, so it must
@@ -183,12 +182,8 @@ python /mnt/scripts/run_iva_condition_tracks.py \
     "${COMMON_ARGS[@]}"
 
 # --- Exploration sweep -----------------------------------------------------
-# A channel/time subset instead of the full extent. This is where
-# --subset_cache earns its keep: the first run writes the trimmed tensor to
-# notebooks/03-wavelet-analysis/wavelet_cache/<experiment>/, every later run at
-# the SAME extent reads it back and never decompresses the ~50 GB source cache.
-# The cache is keyed by condition and extent, not by workflow, so the 03/04/05
-# notebooks and run_condition_comparison.pbs read the very same entries.
+# A channel/time subset instead of the full extent: only that slice of each
+# participant's memory-mapped wavelets is read.
 #
 # echo "=== subset sweep at $(date) ==="
 # for N_PCA in 10 20; do
@@ -197,7 +192,6 @@ python /mnt/scripts/run_iva_condition_tracks.py \
 #         --zscore_mode per_condition \
 #         --n_channels 32 \
 #         --n_times 3000 \
-#         --subset_cache \
 #         "${COMMON_ARGS[@]}"
 # done
 

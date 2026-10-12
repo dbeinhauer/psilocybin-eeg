@@ -1,0 +1,169 @@
+#!/bin/bash
+#PBS -N PSILO_IVA_CH_QUALITY_05
+#PBS -l walltime=1:00:00
+#PBS -l select=1:ncpus=8:mem=499gb:scratch_local=80gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-05 IVA — channel independent dimension + decomposition QUALITY
+# (ASSR only).
+#
+# Runs the SAME channel-as-independent IVA pipeline as run_channel.pbs
+# (K = S subjects, IVA mixing = channels, samples = the joint time × frequency
+# axis; per-subject PCA over channels → IVA-G) and produces ALL of its plots
+# — component ranking, channel-PCA scree, temporal/spectral ISC matrices +
+# clusters, LOO-ISC bars for four axes + by-axis summary, topomap mean/var of
+# the channel patterns (unit-norm per subject, as are the participant
+# topomaps below), the shared time × frequency source map, source
+# mean ± √variance along time/frequency, pair-space heatmaps, per-subject
+# mean loadings.
+#
+# In addition, with --quality it reproduces
+# notebooks/05-wavelet-iva-analysis/wavelet_iva_channel_quality.ipynb,
+# quantifying the decomposition quality against ONE REFERENCE PAIR — both views
+# from ONE channel-PCA of the trial-averaged, time-z-scored wavelet power, i.e.
+# the reduction of run_assr_wavelet_pca.py applied to the IVA's own input tensor:
+#   x — topomap correlation vs the group PC1 channel loading
+#   y — correlation of the component's onset-averaged (freq, time) map with the
+#       group PC1 score map, over the whole flattened map. Frequency is never
+#       collapsed, so a component with the right time course at the wrong
+#       frequency cannot score highly. Also scored over 1-10 Hz (evoked / onset
+#       transient) and 30-50 Hz (the band around the 40 Hz steady state), so a
+#       component matching the reference in one band only is not diluted by the
+#       frequencies it says nothing about.
+#   y — ONSET-LOCKED time correlation. The ASSR stimulation is continuous, so a
+#       fixed on/off indicator fails (a sustained response is flat under
+#       z-scoring). Instead each component's reduced time course (first PC over
+#       frequency, and the single 40 Hz row) is averaged around every stimulus
+#       onset and correlated (zero-lag Pearson) with a RIGID boxcar: 0 before
+#       onset, 1 for the 500 ms stimulus window after it, 0 afterwards. The
+#       window is the paradigm's, not fitted per component, so every component
+#       is scored against one and the same reference.
+#
+# The reference is deliberately in the SAME MODALITY as the decomposition. The
+# IVA decomposes wavelet power, so its channel patterns are power patterns; an
+# evoked VOLTAGE topography is a signed, phase-locked average whose polarity has
+# no counterpart in power, so it cannot say whether a component reproduces the
+# response. The earlier raw-PCA reference (and its scatter family) is therefore
+# gone — every score here is against the wavelet pair.
+#
+# Every score carries one shared per-component sign, so the one x may be read
+# against any y, and changing one axis at a time separates the spatial question
+# (which topography the pattern matches) from the temporal one (the paradigm's
+# window, the whole TF map, or one band of it). That gives five scatter pairs:
+#   wavelet PC1 topomap  x  boxcar-PCA / boxcar-40Hz / TF map / TF 1-10Hz /
+#                           TF 30-50Hz
+#
+# Every (subject, component) pair is scored per pairing (closeness to the ideal
+# (1,1) corner) and shown on combined + per-component scatterplots, plus the
+# reference figure and the onset-response / TF-map / topography diagnostics.
+#
+# The quality analysis makes sense only for the ASSR data (it depends on the
+# stimulus onsets), so this job runs the ASSR experiment exclusively. It is
+# silently skipped for experiments without stimulus onsets.
+#
+# Output (broadband):
+#   plots/05-wavelet-iva-analysis/Placebo_ASSR/
+#       broadband/iva_channel/pca_10/
+#           iva_*_top.png                              # standard IVA plots
+#           quality_reference_wavelet_*.png            # the reference pair
+#           quality_topomaps_*.png                     # group-mean topo per IC
+#           quality_tf_maps_wavelet_tf_*.png           # group-mean TF map per IC
+#           quality_onset_response_{pca,40hz}_*.png
+#           # every scatter, in its own subdirectory
+#           quality_scatters_*/
+#               quality_scatter_time_{pca,40hz}_*.png            # boxcar y
+#               quality_scatter_time_{pca,40hz}_per_component_*.png
+#               quality_scatter_wavelet_tf_*.png                 # TF-map y
+#               quality_scatter_wavelet_tf_per_component_*.png
+#               quality_scatter_tf_{1_10hz,30_50hz}_*.png        # band-limited TF
+#               quality_scatter_tf_{1_10hz,30_50hz}_per_component_*.png
+#           # per-participant breakdown, one figure per component (IVA order)
+#           quality_participant_topomaps_*/                # scalp patterns
+#           quality_participant_tf_maps_*/                 # onset-averaged TF maps
+#
+# Every figure that averages across participants (the topography, onset-response
+# and TF-map diagnostics, and the group-mean panel of the participant figures)
+# first puts each participant on a common scale, so one loud participant
+# cannot stand in for the group; the group-mean panels then get their own
+# annotated scale, an across-participant mean being weaker than the individual
+# maps by construction. Correlation scores are scale-invariant, so none of the
+# numbers change.
+#
+# NB: --n_pca reduces the CHANNEL axis here, so it must be <= the number of
+# channels (≈195 after preprocessing). It is deliberately small (10) — the
+# quality question is whether a handful of components reproduce the ASSR
+# response, and every per-component figure stays readable at that size. With
+# --n_top 10 covering all ten components there is no bottom group to contrast
+# against, hence --n_bottom 0 (which skips the '_bottom' figures entirely).
+# Reuses cached wavelet tensors from Stage-03 (run_wavelet_power.pbs).
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+
+WAVELET_DIR="/mnt/data/processed"
+
+COMMON_ARGS=(
+    --condition Placebo Psilocybin
+    --experiment assr
+    --n_pca 5
+    --n_top 5
+    --n_bottom 0
+    --random_state 42
+    --iva_opt_approach newton
+    --iva_max_iter 1024
+    --wavelet_data_dir "$WAVELET_DIR"
+    --reuse_wavelets
+    --quality
+    --n_jobs -1
+)
+
+echo "=== ASSR IVA-channel + quality at $(date) ==="
+python /mnt/scripts/run_wavelet_iva_channel.py \
+    "${COMMON_ARGS[@]}"
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch

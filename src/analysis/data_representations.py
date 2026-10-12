@@ -11,7 +11,7 @@ Adapter functions (``to_*``) convert between representations.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import List, Optional, Union
 
@@ -368,35 +368,6 @@ def to_wavelet_phase(
     )
 
 
-def to_wavelet_tfr(
-    ad: AnalysisData,
-    freqs: np.ndarray,
-    n_cycles: Optional[Union[np.ndarray, float]] = None,
-    output: str = "power",
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Full Morlet time-frequency decomposition (no averaging).
-
-    :param ad: Input data.
-    :param freqs: Frequencies of interest (Hz).
-    :param n_cycles: Number of wavelet cycles per frequency.
-    :param output: ``'power'``, ``'complex'``, or ``'phase'``.
-    :return: ``(tfr, freqs)`` where *tfr* has shape
-        ``(n_items, n_features, n_freqs, n_samples)``.
-    """
-    if n_cycles is None:
-        n_cycles = freqs / 2.0
-    tfr = tfr_array_morlet(
-        ad.data.astype(float),
-        sfreq=ad.sfreq,
-        freqs=freqs,
-        n_cycles=n_cycles,
-        output=output,
-        verbose=False,
-    )
-    return tfr, freqs
-
-
 def extract_ica_activations(
     raws: list,
     icas: list,
@@ -422,26 +393,62 @@ def extract_ica_activations(
     return np.array([s[:, :min_samples] for s in sources])
 
 
-def to_ica_activations(
-    raws: list,
-    icas: list,
-    sfreq: float = 250.0,
-    label: str = "ICA Activations",
+def subset(
+    data: AnalysisData,
+    *,
+    n_items: int | None = None,
+    n_features: int | None = None,
+    n_samples: int | None = None,
 ) -> AnalysisData:
-    """
-    Build an ``AnalysisData`` from ICA source activations.
+    """A leading slice of *data* along any of its three axes.
 
-    :param raws: List of ``mne.io.Raw`` objects (one per subject).
-    :param icas: List of ``mne.preprocessing.ICA`` objects.
-    :param sfreq: Target sampling frequency (Hz).
-    :param label: Human-readable label.
+    What makes a notebook run in seconds rather than as long as the job: every stage
+    subsets the same way, taking the first *n* of each axis rather than sampling, so a
+    rerun always sees the same rows.
+
+    ``info`` and ``feature_names`` are cut with the feature axis, so a topography drawn
+    from a subset still names the channels it actually holds, and a
+    ``metadata["participants"]`` list is cut with the item axis. ``metadata["subset_of"]``
+    records the shape before the *first* subset, so it still says what was cut after
+    repeated subsetting. Nothing is copied that is not sliced, and the input is never
+    modified.
+
+    :param data: The container to subset.
+    :param n_items: Keep this many items (subjects); ``None`` keeps all.
+    :param n_features: Keep this many features (channels); ``None`` keeps all.
+    :param n_samples: Keep this many samples (time points); ``None`` keeps all.
+    :return: A new :class:`AnalysisData`; the original when nothing was limited.
+    :raises ValueError: If any limit is not positive.
     """
-    data = extract_ica_activations(raws, icas, sfreq=sfreq)
-    n_components = data.shape[1]
-    return AnalysisData(
-        data=data,
-        sfreq=sfreq,
-        representation=DataRepresentation.ICA_ACTIVATIONS,
-        label=label,
-        feature_names=[f"IC{i}" for i in range(n_components)],
+    limits = {"n_items": n_items, "n_features": n_features, "n_samples": n_samples}
+    for name, value in limits.items():
+        if value is not None and value <= 0:
+            raise ValueError(f"{name} must be positive; got {value}.")
+    if all(value is None for value in limits.values()):
+        return data
+
+    items, features, samples = data.data.shape
+    keep_i = items if n_items is None else min(n_items, items)
+    keep_f = features if n_features is None else min(n_features, features)
+    keep_s = samples if n_samples is None else min(n_samples, samples)
+
+    subset_info = data.info
+    if subset_info is not None and keep_f < features:
+        subset_info = mne.pick_info(subset_info, list(range(keep_f)), verbose=False)
+    names = data.feature_names
+    if names is not None and keep_f < features:
+        names = list(names[:keep_f])
+    metadata = {
+        **data.metadata,
+        "subset_of": data.metadata.get("subset_of", data.data.shape),
+    }
+    if data.metadata.get("participants") is not None:
+        metadata["participants"] = list(data.metadata["participants"][:keep_i])
+
+    return replace(
+        data,
+        data=data.data[:keep_i, :keep_f, :keep_s],
+        feature_names=names,
+        info=subset_info,
+        metadata=metadata,
     )

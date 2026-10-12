@@ -17,68 +17,40 @@ Two representations are explored:
 - **Phase** — the instantaneous angle (−π, π] of the oscillation, capturing
   *timing* independently of amplitude.
 
-## Wavelet caches
+## Wavelet store
 
-Two caches back every wavelet workflow in the project, and they are not
-interchangeable:
+Every wavelet workflow reads one store per experiment, one directory per
+`<Condition>_<MusicType>` label and one float32 file per participant:
 
-| | Source-of-truth cache | Subset cache |
-|---|---|---|
-| Path | `data/processed/<experiment>/wavelets/<band>/` | `notebooks/03-wavelet-analysis/wavelet_cache/<experiment>/<band>/` |
-| Resolver | `resolve_wavelet_dir(None, experiment)` | `resolve_notebook_wavelet_cache_dir(experiment)` |
-| Extent | full cohort, all channels, whole aligned time axis | exactly the extent that was asked for |
-| Written by | the preprocessing / pre-alignment precompute | `compute_wavelet_datasets(..., subset_cache_dir=...)` |
-| Format | compressed (`savez_compressed`) | uncompressed, written atomically |
-| Size (ASSR broadband) | ~49 GB Placebo, ~52 GB Psilocybin | whatever the requested extent needs |
+```
+data/processed/<experiment>/wavelets/<Condition>_<MusicType>/
+    wavelet_power__<f0>_<f1>_<n>.json                 shared axes
+    <participant>__wavelet_power__<f0>_<f1>_<n>.npy   (channels, freqs, times)
+```
 
-The source-of-truth cache is the authority, but reading it means decompressing all of
-it — even to take a 32-channel, 3000-sample slice. The subset cache stores that slice
-instead, so the first run at a given extent pays the full cost and every run after it
-reads back only what it uses.
-
-**The subset cache lives here because this is the notebook that owns the Morlet
-transform, but nothing about it is stage-03-specific — it is meant to be shared.** Its
-entries are keyed by dataset label, representation, frequency grid, extent and the
-frequency-axis flags, *not* by the notebook that wrote them, so a subset stored by an
-04/05/06 run is picked up unchanged by an 03 run at the same extent, and vice versa.
-Since the Placebo and Psilocybin caches are the ones every workflow reads, filling
-them in once pays off across all of them.
-
-To opt a workflow in, pass the directory through:
+The files are memory-mapped, so a subset run — a few subjects, 32 channels, 3000 samples —
+reads only that slice; there is no separate subset cache. The layout and its reasons are
+in [`docs/analyses/03-wavelet-analysis/`](../../docs/analyses/03-wavelet-analysis/README.md).
 
 ```python
-from scripts.notebook_helpers import (
-    compute_wavelet_datasets,
-    resolve_notebook_wavelet_cache_dir,
-    resolve_wavelet_dir,
-)
+from scripts.notebook_helpers import compute_wavelet_datasets, resolve_wavelet_dir
 
-WAVELET_DIR = resolve_wavelet_dir(None, EXPERIMENT_NAME) / "broadband"
-WAVELET_SUBSET_CACHE_DIR = (
-    resolve_notebook_wavelet_cache_dir(EXPERIMENT_NAME) / "broadband"
-)
+WAVELET_DIR = resolve_wavelet_dir(None, EXPERIMENT_NAME)  # .../<experiment>/wavelets
 
 broadband_datasets = compute_wavelet_datasets(
-    datasets=datasets,
+    datasets=datasets,  # each dataset's own participants and extent are read
     analyzers=analyzers,
     ...,
     wavelet_dir=WAVELET_DIR,
-    subset_cache_dir=WAVELET_SUBSET_CACHE_DIR,  # first run writes, later runs read
+    reuse_wavelets=True,
 )
 ```
-
-`subset_cache_dir` defaults to `None` (cache disabled), so call-sites that do not pass
-it are unaffected. Pass `reuse_subset_cache=False` to recompute and overwrite an entry
-— the escape hatch if the source-of-truth cache was rebuilt under the same extent.
-`load_joined_condition_wavelets` and `load_paired_condition_wavelets` forward both
-arguments per condition.
 
 ## Notebooks
 
 | Notebook | Scope | Key analyses |
 |---|---|---|
 | `wavelet_power_exploration.ipynb` | Broadband + per-band | Spectral profile, time–frequency maps, band power time courses, intersubject variance, wavelet-domain LOO-ISC, topographic mapping, time–frequency ISC, sliding-window ISC, cross-frequency coupling, power–phase joint analysis |
-| `wavelet_phase_exploration.ipynb` | Broadband + per-band | Phase distribution check, ITPC spectrum, time–frequency ITPC map, per-band ITPC time course, phase-based LOO-ISC, ITPC vs ISC comparison, topographic phase-ISC mapping |
 
 ## HPC job scripts
 
@@ -188,7 +160,6 @@ indicate nested oscillatory dynamics driven by the stimulus.
 from bands where only one modality is synchronised, providing a more complete
 picture of inter-subject coherence.
 
-### Phase analyses (`wavelet_phase_exploration.ipynb`)
 
 Phase is a circular quantity in (−π, π], so standard linear statistics
 (mean, variance, Pearson *r*) are replaced by circular analogues.

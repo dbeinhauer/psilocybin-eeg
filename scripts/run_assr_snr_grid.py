@@ -78,7 +78,7 @@ stimulus-window grid in one pass, which is exactly what a job wants:
   single run covers e.g. 40 Hz and 35-45 Hz crossed with 0-500 ms and 200-500 ms.
 
 **Both decomposition variants.** ``--variant iva_channel_joined_tracks`` shares one
-filter per participant across the conditions; ``--variant iva_channel_joined`` has a
+filter per participant across the conditions; ``--variant iva_channel_joined_separate`` has a
 separate
 topography per recording, so every projection and polarity anchor is resolved per
 (participant, condition) through ``results.row``. Nothing else differs.
@@ -104,10 +104,10 @@ over a band-restricted decomposition never lands on top of the broadband one.
 Examples::
 
     # The job grid: both frequencies x both windows, every variant of signal.
-    python scripts/run_assr_snr_grid.py --experiment assr --variant iva_channel_joined \\
+    python scripts/run_assr_snr_grid.py --experiment assr --variant iva_channel_joined_separate \\
         --n_pca 5 --halfwidths 0 5 --stimulus_intervals 0:0.5 0.2:0.5
 
-    # A quick shape check without decompressing the whole cache.
+    # A quick shape check on the first 12 s.
     python scripts/run_assr_snr_grid.py --experiment assr --n_pca 5 --n_times 3000 \\
         --skip_plots
 
@@ -120,8 +120,6 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-import time
-from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib
@@ -135,6 +133,11 @@ import pandas as pd  # noqa: E402
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.analysis import assr_trials as at  # noqa: E402
+from src.analysis.assr_variants import (  # noqa: E402
+    ProjectedVariants as _Projected,
+    project_condition as _project_condition,
+    row_resolver as _row_resolver,
+)
 from src.analysis import iva_quality  # noqa: E402
 from src.definitions.constants import AssrEpoch, ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
@@ -144,14 +147,18 @@ from src.definitions.fields import (  # noqa: E402
     ExperimentNames,
     IvaVariants,
     MusicTypeVariants,
-    PreprocessedDataVariants,
     SpectrumTypeVariants,
 )
 from src.io.iva_store import load_iva_components  # noqa: E402
 from src.io.loading import (  # noqa: E402
     assr_electrode_mask,
-    read_wavelet_cache_header,
-    stream_wavelet_cache_subjects,
+    concatenated_dir as _concatenated_dir,
+)
+from src.io.wavelet_store import find_wavelet_set, wavelet_label_dir  # noqa: E402
+from src.visualization.assr_snr_plots import (  # noqa: E402
+    plot_cell as _plot_cell,
+    plot_courses as _plot_courses,
+    plot_snr as _plot_snr,
 )
 from src.visualization.assr_filter_plots import (  # noqa: E402
     plot_cohort_mean_topomaps,
@@ -234,9 +241,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     stored.add_argument("--experiment", default=ExperimentNames.ASSR.value)
     stored.add_argument(
         "--variant",
-        default=IvaVariants.CHANNEL_JOINED.value,
+        default=IvaVariants.CHANNEL_JOINED_SEPARATE.value,
         choices=[
-            IvaVariants.CHANNEL_JOINED.value,
+            IvaVariants.CHANNEL_JOINED_SEPARATE.value,
             IvaVariants.CHANNEL_JOINED_TRACKS.value,
         ],
         help="channel_joined = per-recording topography; _tracks = shared per participant.",
@@ -244,7 +251,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     stored.add_argument(
         "--store_condition",
         default=None,
-        help="Store condition; defaults per variant (Joined / JoinedTracks).",
+        help="Store condition; defaults per variant (JoinedSeparate / JoinedTracks).",
     )
     stored.add_argument("--music_type", default=MusicTypeVariants.ASSR.value)
     stored.add_argument("--band", default=None)
@@ -253,6 +260,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
     data = parser.add_argument_group("the wavelet cache and the cohort")
     data.add_argument("--wavelet_data_dir", type=Path, default=None)
+    data.add_argument(
+        "--concat_dir",
+        type=Path,
+        default=None,
+        help=(
+            "Processed-data root the concatenated arrays and their onset sidecars are "
+            "read from. Separate from --wavelet_data_dir, so a small wavelet strip can "
+            "be read without moving the onsets."
+        ),
+    )
     data.add_argument(
         "--coordinate_system", default=CoordinateSystems.HYDROGEL_257_NO_FIDUCIALS.value
     )
@@ -336,13 +353,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 
 # ---------------------------------------------------------------------------
-# Inputs (mirrored from run_assr_trial_stats.py — same cache/onset conventions)
+# Inputs (cache/onset conventions shared with the rest of the ASSR scripts)
 # ---------------------------------------------------------------------------
-
-
-def _concatenated_dir(experiment: ExperimentNames, root: Path | None) -> Path:
-    base = ProjectPaths.PROCESSED_DATA_DIR if root is None else Path(root)
-    return base / experiment.value / PreprocessedDataVariants.CONCATENATED.value
 
 
 def _load_onsets(concat_dir: Path, label: str) -> np.ndarray:
@@ -355,59 +367,20 @@ def _load_onsets(concat_dir: Path, label: str) -> np.ndarray:
     return np.load(path).astype(int)
 
 
-def _cache_participants(concat_dir: Path, label: str) -> list[str]:
-    path = concat_dir / f"{label}.metadata.csv"
-    if not path.exists():
-        raise FileNotFoundError(f"No concatenation metadata at {path}.")
-    frame = pd.read_csv(path, index_col=0)
-    index_column = "SingleDataMetadata.CONCATENATED_PERSON_INDEX"
-    id_column = "SingleDataMetadata.PARTICIPANT_ID"
-    missing = [c for c in (index_column, id_column) if c not in frame.columns]
-    if missing:
-        raise ValueError(f"{path.name} has no {missing} column(s).")
-    by_index = dict(zip(frame[index_column], frame[id_column].astype(str)))
-    return [
-        "".join(ch for ch in by_index[i] if ch.isdigit())[-3:].zfill(3)
-        for i in sorted(by_index)
-    ]
-
-
-def _wavelet_cache_path(
-    root: Path | None, experiment: ExperimentNames, label: str
-) -> Path:
-    base = ProjectPaths.PROCESSED_DATA_DIR if root is None else Path(root)
-    directory = (
-        base / experiment.value / "wavelets" / SpectrumTypeVariants.BROADBAND.value
-    )
-    matches = sorted(directory.glob(f"{label}__wavelet_power__*__freqdim1.npz"))
-    if not matches:
-        raise FileNotFoundError(
-            f"No wavelet cache for {label} in {directory}. Build it with "
-            "jobs/metacentrum/03-wavelet-analysis/store_assr_wavelets.pbs first."
-        )
-    return matches[-1]
-
-
-def _cache_frequency_grid(cache_paths: dict, conditions: list[str]) -> np.ndarray:
+def _cache_frequency_grid(wavelet_sets: dict, conditions: list[str]) -> np.ndarray:
     """The wavelet cache's own frequency axis, checked identical across conditions.
 
     Separate from the store's axis on purpose: a band-restricted store holds only its
     band's bins, while the cache is always the broadband one, so an index resolved on
-    one grid is meaningless on the other. Reading the header is cheap — it decompresses
-    nothing.
+    one grid is meaningless on the other.
 
-    :param cache_paths: Condition → cache path.
+    :param wavelet_sets: Condition → :class:`~src.io.wavelet_store.WaveletSet`.
     :param conditions: Conditions to read, in order.
     :return: The shared ``(F,)`` frequency grid in Hz.
     :raises ValueError: If the conditions' caches were built on different grids, which
         would make one bin index mean two frequencies.
     """
-    grids = {
-        condition: np.asarray(
-            read_wavelet_cache_header(cache_paths[condition]).freqs, dtype=float
-        )
-        for condition in conditions
-    }
+    grids = {condition: wavelet_sets[condition].freqs for condition in conditions}
     reference = grids[conditions[0]]
     for condition, grid in grids.items():
         if grid.shape != reference.shape or not np.allclose(grid, reference):
@@ -424,14 +397,7 @@ def _default_store_condition(variant: IvaVariants) -> ConditionVariants:
     """The store condition each variant was written under."""
     if variant == IvaVariants.CHANNEL_JOINED_TRACKS:
         return ConditionVariants.JOINED_TRACKS
-    return ConditionVariants.JOINED
-
-
-def _zscore_time(block: np.ndarray) -> np.ndarray:
-    """Z-score a ``(..., time)`` block along its last axis (per channel/frequency)."""
-    mean = block.mean(axis=-1, keepdims=True)
-    std = block.std(axis=-1, keepdims=True)
-    return (block - mean) / np.where(std == 0, 1.0, std)
+    return ConditionVariants.JOINED_SEPARATE
 
 
 # ---------------------------------------------------------------------------
@@ -439,467 +405,9 @@ def _zscore_time(block: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def _row_resolver(results, variant: IvaVariants):
-    """A ``(participant, condition) -> store row`` function for either variant.
-
-    The subject-axis join (``channel_joined``) has one row per recording, so a filter is
-    condition-specific and ``results.row(p, c)`` picks it. The time-axis join
-    (``channel_joined_tracks``) has one row per participant, shared by both conditions,
-    so the condition is ignored.
-    """
-    per_recording = variant == IvaVariants.CHANNEL_JOINED
-
-    def resolve(participant: str, condition: str) -> int:
-        if per_recording:
-            return results.row(participant, condition)
-        return results.row(participant)
-
-    return resolve, per_recording
-
-
 # ---------------------------------------------------------------------------
 # Projection — one streaming pass produces every signal variant's input
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class _Projected:
-    """One condition's projections, one array per group of source rows.
-
-    Kept as named arrays rather than one wide stack because the groups are read on
-    different cadences: the reference rows are shared by every variant, the learned rows
-    are what each variant swaps out, and ``roi_raw`` skips the normalisation the others
-    get. Every array is ``(participants, rows, kept freqs, times)``.
-    """
-
-    #: ``components + 2`` rows on the RAW cache: each recording's own IC filters, then
-    #: the full and PCA masks. The reference rows every variant borrows come from here.
-    prestim: np.ndarray
-    #: The two masks on the Z-SCORED cache.
-    zmask: np.ndarray
-    #: The mask's electrodes kept UNCOMBINED, so
-    #: :func:`~src.analysis.assr_trials.roi_channelwise_snr` can normalise each one
-    #: before they are averaged.
-    roi_raw: np.ndarray
-    #: ``components`` rows: the cohort-mean filter on the RAW cache — "prestim" with a
-    #: single thing changed, the filter.
-    mean_raw: np.ndarray
-    #: The cohort-mean filter on the IVA's own input (z-scored, then this recording's
-    #: PCA subspace), rebuilt here because no stored array is ``U_mean`` on that signal.
-    mean_stored_z: np.ndarray
-    #: Each recording's OWN filter, restricted to the anchor electrodes, on the z-scored
-    #: cache.
-    masked_z: np.ndarray
-    #: The cohort-mean filter under the same restriction.
-    mean_masked_z: np.ndarray
-
-
-def _project_condition(
-    cache_path: Path,
-    condition: str,
-    participants: list[str],
-    resolve,
-    filters: np.ndarray,
-    binary: np.ndarray,
-    pca_rows: np.ndarray,
-    freq_indices: np.ndarray,
-    cache_labels: list[str],
-    store_channels: list[str],
-    n_times: int | None,
-    roi_index: np.ndarray,
-    mean_filter: np.ndarray,
-    masked_filters: np.ndarray,
-    mean_masked_filter: np.ndarray,
-    projectors: np.ndarray,
-) -> _Projected:
-    """Stream one condition once; return every per-condition array the grid needs.
-
-    Everything is read off the **same** decompressed block, so the four operators the
-    ``mean_*`` / ``masked_*`` variants add cost one more tensordot each rather than
-    another pass over a ~50 GB cache. The z-scored copy of a block is built once and
-    shared by every operator that needs it, for the same reason.
-
-    The z-scored IC rows of ``stored_prestim`` are read straight from the store, so they
-    are not produced here.
-
-    :param mean_filter: ``(components, channels)`` cohort-mean filter, shared by every
-        recording and both conditions.
-    :param masked_filters: ``(rows, components, channels)`` per-recording filters with
-        every weight outside the anchor electrodes zeroed.
-    :param mean_masked_filter: ``(components, channels)`` the same restriction on the
-        cohort-mean filter.
-    :param projectors: ``(rows, channels, channels)`` PCA reconstruction projectors, so
-        the IVA's own input can be rebuilt as ``P^T P (z)`` in channel space.
-    :return: A :class:`_Projected`.
-    """
-    header = read_wavelet_cache_header(cache_path)
-    if header.channel_names != store_channels:
-        raise ValueError(
-            f"{cache_path.name}: channel axis does not match the stored run's; the "
-            "filters are indexed by the stored channels."
-        )
-    keep_times = header.n_times if n_times is None else min(n_times, header.n_times)
-    wanted = {name: row for row, name in enumerate(participants)}
-    n_comp = filters.shape[1]
-
-    def _empty(rows: int) -> np.ndarray:
-        return np.empty(
-            (len(participants), rows, freq_indices.size, keep_times), np.float32
-        )
-
-    prestim = _empty(n_comp + 2)
-    zmask = _empty(2)
-    roi_raw = _empty(roi_index.size)
-    mean_raw = _empty(n_comp)
-    mean_stored_z = _empty(n_comp)
-    masked_z = _empty(n_comp)
-    mean_masked_z = _empty(n_comp)
-    seen = np.zeros(len(participants), bool)
-
-    _logger.info(
-        f"[{condition}] streaming {cache_path.name} "
-        f"({cache_path.stat().st_size / 1e9:.1f} GB, {header.n_subjects} subjects, "
-        f"{freq_indices.size}/{header.n_freqs} bins kept)"
-    )
-    started = time.time()
-    for subject, block in stream_wavelet_cache_subjects(
-        cache_path, freq_indices=freq_indices, n_times=keep_times, header=header
-    ):
-        name = cache_labels[subject] if subject < len(cache_labels) else None
-        if name is None or name not in wanted:
-            continue
-        row = wanted[name]
-        store = resolve(name, condition)
-        # per-recording spatial operators for this (participant, condition)
-        full_row = binary[None, :]
-        pca_row = pca_rows[store][None, :]
-        stacked = np.concatenate(
-            [filters[store], full_row, pca_row], axis=0
-        )  # (K+2, C)
-        prestim[row] = at.project_channels(stacked, block)
-        # The cohort-mean filter on the RAW cache: "prestim" with the filter swapped and
-        # nothing else, so the difference between the two rows IS the topography.
-        mean_raw[row] = at.project_channels(mean_filter, block)
-        roi_raw[row] = block[roi_index]
-
-        # The z-scored copy is the expensive intermediate; build it once and hand it to
-        # every operator that reads the standardisation the decomposition was fitted on.
-        block_z = _zscore_time(block)
-        zmask[row] = at.project_channels(
-            np.concatenate([full_row, pca_row], axis=0), block_z
-        )
-        # The IVA's own input, rebuilt: z-scored, then this recording's PCA subspace.
-        # Composing the two channel operators first keeps the (C, F, T) intermediate
-        # from being materialised twice.
-        mean_stored_z[row] = at.project_channels(
-            mean_filter @ projectors[store], block_z
-        )
-        # The restricted operators read the z-scored wavelet and NOT raw power: the
-        # weights presume that scaling, and a weighted average of raw power is
-        # additionally weighted by each electrode's own power level — the very artefact
-        # roi_channelwise_snr exists to remove from the binary reference. And no PCA:
-        # P^T P mixes every channel back in, which would defeat "read only these
-        # electrodes" entirely.
-        masked_z[row] = at.project_channels(masked_filters[store], block_z)
-        mean_masked_z[row] = at.project_channels(mean_masked_filter, block_z)
-        seen[row] = True
-        _logger.info(
-            f"[{condition}]   {name} ({int(seen.sum())}/{len(participants)}, "
-            f"{time.time() - started:.0f}s)"
-        )
-    if not seen.all():
-        absent = [p for p, ok in zip(participants, seen) if not ok]
-        raise ValueError(
-            f"[{condition}] participants {absent} never appeared in the cache."
-        )
-    _logger.info(f"[{condition}] projected in {time.time() - started:.0f}s")
-    return _Projected(
-        prestim=prestim,
-        zmask=zmask,
-        roi_raw=roi_raw,
-        mean_raw=mean_raw,
-        mean_stored_z=mean_stored_z,
-        masked_z=masked_z,
-        mean_masked_z=mean_masked_z,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Figures
-# ---------------------------------------------------------------------------
-
-
-def _bootstrap_ci(values: np.ndarray, alpha: float, rng) -> tuple[float, float]:
-    finite = values[np.isfinite(values)]
-    if finite.size < 2:
-        return (np.nan, np.nan)
-    draws = np.median(
-        finite[rng.integers(0, finite.size, size=(10_000, finite.size))], axis=1
-    )
-    return tuple(np.percentile(draws, [100 * alpha / 2, 100 * (1 - alpha / 2)]))
-
-
-def _forest(ax, rows, alpha, xlabel, title, rng):
-    """A minimal forest: (label, per-participant diffs, table row) tuples."""
-    medians = [r[2]["median"] for r in rows]
-    cis = [_bootstrap_ci(r[1], alpha, rng) for r in rows]
-    edges = [b for ci in cis for b in ci] + medians
-    span = (np.nanmax(edges) - np.nanmin(edges)) or 1.0
-    lo, hi = np.nanmin(edges) - 0.18 * span, np.nanmax(edges) + 0.22 * span
-    for i, (label, diffs, row) in enumerate(rows):
-        y = len(rows) - 1 - i
-        sig = row["p"] <= alpha
-        colour = "#1B5E20" if sig else "0.45"
-        low, high = cis[i]
-        ax.plot(
-            [low, high], [y, y], color=colour, lw=2.3, solid_capstyle="round", zorder=3
-        )
-        ax.scatter(
-            [row["median"]], [y], s=80, color=colour, edgecolor="white", zorder=4
-        )
-        ax.text(
-            0.99,
-            y,
-            f"p={row['p']:.3f}",
-            transform=ax.get_yaxis_transform(),
-            va="center",
-            ha="right",
-            fontsize=8.5,
-            family="monospace",
-            fontweight="bold" if sig else "normal",
-            color=colour,
-        )
-    ax.set_xlim(lo, hi)
-    ax.axvline(0.0, color="0.3", lw=1.2, zorder=1)
-    ax.set_yticks(range(len(rows)))
-    ax.set_yticklabels([r[0] for r in reversed(rows)])
-    ax.set_xlabel(xlabel)
-    ax.set_title(title, loc="left", fontsize=11)
-
-
-def _plot_courses(
-    course, times, window_interval, contrast, labels, conditions, alpha, title, path
-):
-    """Per-source epoch trial course, both conditions overlaid.
-
-    The line is the mean across participants of each participant's median-over-trials
-    course; the band is +/- SEM ACROSS PARTICIPANTS (never across trials, which are
-    correlated within a participant). The paradigm's stimulus interval is shaded grey and
-    the cell's test window gold, and each panel carries its 4b p-value.
-    """
-    by_source = contrast.set_index("source")
-    n_src = len(labels)
-    ncols = min(4, n_src)
-    nrows = int(np.ceil(n_src / ncols))
-    fig, axes = plt.subplots(
-        nrows,
-        ncols,
-        figsize=(5.1 * ncols, 3.6 * nrows),
-        sharex=True,
-        sharey=True,
-        squeeze=False,
-    )
-    axflat = axes.flat
-    for s, source in enumerate(labels):
-        ax = axflat[s]
-        ax.axvspan(
-            0.0, AssrEpoch.STIMULUS_DURATION_S, color="0.55", alpha=0.10, lw=0, zorder=0
-        )
-        ax.axvspan(
-            window_interval[0],
-            window_interval[1],
-            color="#B8860B",
-            alpha=0.13,
-            lw=0,
-            zorder=0,
-        )
-        ax.axhline(0.0, color="0.45", lw=0.8, zorder=1)
-        ax.axvline(0.0, color="0.35", lw=0.9, ls="--", zorder=1)
-        for cond in conditions:
-            vals = course[cond][:, s]  # (P, W)
-            centre = np.nanmean(vals, axis=0)
-            n = np.sum(~np.isnan(vals), axis=0)
-            half = np.nanstd(vals, axis=0, ddof=1) / np.sqrt(np.maximum(n, 1))
-            colour = _CONDITION_COLORS.get(cond, "0.3")
-            ax.fill_between(
-                times,
-                centre - half,
-                centre + half,
-                color=colour,
-                alpha=0.18,
-                lw=0,
-                zorder=2,
-            )
-            ax.plot(times, centre, color=colour, lw=1.8, zorder=3, label=cond)
-        row = by_source.loc[source]
-        is_ref = source in _MASK_LABELS
-        ax.set_title(
-            f"{source}{'  (reference)' if is_ref else ''}",
-            loc="left",
-            fontsize=11,
-            fontweight="bold" if is_ref else "normal",
-        )
-        ax.text(
-            0.985,
-            0.955,
-            f"{conditions[0]} > {conditions[1]}\np = {row['p']:.3f}   {row['same sign']}",
-            transform=ax.transAxes,
-            ha="right",
-            va="top",
-            fontsize=8.5,
-            family="monospace",
-            color="0.25" if row["p"] > alpha else "black",
-            bbox=dict(
-                boxstyle="round,pad=0.3",
-                facecolor="white",
-                edgecolor="0.75" if row["p"] > alpha else "black",
-                alpha=0.85,
-            ),
-        )
-        if s + ncols >= n_src:
-            ax.set_xlabel("Time from onset (s)")
-        if s % ncols == 0:
-            ax.set_ylabel("response (a.u.)")
-    for j in range(n_src, nrows * ncols):
-        axflat[j].axis("off")
-    axflat[0].legend(loc="lower right", frameon=True, fontsize=9)
-    fig.suptitle(title, y=1.0, fontsize=12.5)
-    fig.tight_layout()
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-
-
-def _plot_cell(cell_tables, value, conditions, labels, ic_labels, alpha, title, path):
-    """The p-value summary (contrast + one versus panel per reference) for one grid cell."""
-    rng = np.random.default_rng(42)
-    contrast = cell_tables["contrast"].set_index("source")
-    fig, axes = plt.subplots(
-        1, 1 + len(_MASK_LABELS), figsize=(7.6 + 5.6 * len(_MASK_LABELS), 5.0)
-    )
-    rows = [
-        (
-            src,
-            at.condition_contrast(value, conditions, labels.index(src)),
-            contrast.loc[src],
-        )
-        for src in labels
-    ]
-    _forest(
-        axes[0],
-        rows,
-        alpha,
-        f"{conditions[0]} - {conditions[1]}",
-        f"Is {conditions[1]} lower than {conditions[0]}?",
-        rng,
-    )
-    for ax, mask in zip(axes[1:], _MASK_LABELS):
-        table = cell_tables[f"discrimination:{mask}"].set_index("source")
-        ref = labels.index(mask)
-        rows = [
-            (
-                src,
-                at.discrimination_gain(value, conditions, labels.index(src), ref),
-                table.loc[src],
-            )
-            for src in ic_labels
-        ]
-        _forest(
-            ax,
-            rows,
-            alpha,
-            f"(IC - {mask}) contrast",
-            f"Better than {mask}?\ntwo-sided; 0 = as good",
-            rng,
-        )
-    fig.suptitle(title, y=1.02, fontsize=12.5)
-    fig.tight_layout()
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-
-
-def _plot_snr(cell_tables, value, conditions, ic_labels, alpha, title, path):
-    """SNR-by-condition: one panel per reference, both conditions overlaid.
-
-    Source columns of ``value[cond]`` are the IC rows first, then the two masks, so an
-    IC row *i* is column *i* and a mask is ``len(ic_labels) + its offset``.
-    """
-    rng = np.random.default_rng(42)
-    offsets = np.linspace(0.2, -0.2, len(conditions))
-    n_ic = len(ic_labels)
-    fig, axes = plt.subplots(
-        1,
-        len(_MASK_LABELS),
-        figsize=(6.6 * len(_MASK_LABELS), 0.8 + 0.7 * n_ic),
-        squeeze=False,
-    )
-    for ax, mask in zip(axes[0], _MASK_LABELS):
-        ref_col = n_ic + _MASK_LABELS.index(mask)
-        drawn, edges = [], []
-        for ci, cond in enumerate(conditions):
-            table = cell_tables[f"snr:{mask}:{cond}"].set_index("source")
-            m = value[cond]
-            for i, src in enumerate(ic_labels):
-                interval = _bootstrap_ci(m[:, i] - m[:, ref_col], alpha, rng)
-                edges += list(interval)
-                drawn.append((ci, i, interval, table.loc[src]))
-        span = (np.nanmax(edges) - np.nanmin(edges)) or 1.0
-        lo, hi = np.nanmin(edges) - 0.18 * span, np.nanmax(edges) + 0.18 * span
-        for ci, i, (low, high), row in drawn:
-            y = n_ic - 1 - i + offsets[ci]
-            colour = _CONDITION_COLORS[conditions[ci]]
-            sig = row["p"] <= alpha
-            ax.plot(
-                [low, high],
-                [y, y],
-                color=colour,
-                lw=2.1,
-                solid_capstyle="round",
-                alpha=0.9,
-                zorder=3,
-            )
-            ax.scatter(
-                [row["median"]],
-                [y],
-                s=64,
-                marker="o",
-                color=colour if sig else "white",
-                edgecolor=colour,
-                linewidth=1.5,
-                zorder=4,
-            )
-            ax.text(
-                0.985,
-                y,
-                f"p={row['p']:.3f}",
-                transform=ax.get_yaxis_transform(),
-                va="center",
-                ha="right",
-                fontsize=8,
-                family="monospace",
-                fontweight="bold" if sig else "normal",
-                color=colour,
-            )
-        ax.set_xlim(lo, hi)
-        ax.axvline(0.0, color="0.3", lw=1.3, zorder=1)
-        ax.set_yticks(range(n_ic))
-        ax.set_yticklabels(list(reversed(ic_labels)))
-        ax.set_xlabel(f"IC SNR - {mask} SNR")
-        ax.set_title(f"vs {mask}", loc="left", fontsize=11)
-    handles = [
-        plt.Line2D([0], [0], marker="o", color=_CONDITION_COLORS[c], lw=0, label=c)
-        for c in conditions
-    ]
-    fig.legend(
-        handles=handles,
-        loc="lower center",
-        ncol=len(conditions),
-        fontsize=9,
-        bbox_to_anchor=(0.5, -0.03),
-    )
-    fig.suptitle(title, y=1.03, fontsize=12.5)
-    fig.tight_layout()
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
@@ -957,15 +465,15 @@ def run(args: argparse.Namespace) -> None:
     masked_share = at.mask_weight_share(filters, electrode_mask)
 
     # ---- 2. onsets, caches, paired cohort --------------------------------
-    concat_dir = _concatenated_dir(experiment, args.wavelet_data_dir)
-    onsets, cache_labels, cache_paths = {}, {}, {}
+    concat_dir = _concatenated_dir(experiment, args.concat_dir)
+    onsets, wavelet_sets, cached = {}, {}, {}
     for condition in conditions:
         label = f"{condition}_{music_type.value}"
         onsets[condition] = _load_onsets(concat_dir, label)
-        cache_labels[condition] = _cache_participants(concat_dir, label)
-        cache_paths[condition] = _wavelet_cache_path(
-            args.wavelet_data_dir, experiment, label
+        wavelet_sets[condition] = find_wavelet_set(
+            wavelet_label_dir(args.wavelet_data_dir, experiment, label)
         )
+        cached[condition] = set(wavelet_sets[condition].participants)
 
     # ---- 3. frequency selections, resolved on BOTH grids -----------------
     # The store and the cache do NOT share a frequency axis, and a bin index only means
@@ -977,7 +485,7 @@ def run(args: argparse.Namespace) -> None:
     # any band-restricted run, while leaving broadband runs correct because there the
     # two grids coincide. Each side now gets the selection resolved on its OWN grid, so
     # both read the same HERTZ.
-    cache_freqs = _cache_frequency_grid(cache_paths, conditions)
+    cache_freqs = _cache_frequency_grid(wavelet_sets, conditions)
     store_selections, cache_selections = {}, {}
     for halfwidth in args.halfwidths:
         name = at.selection_label(args.center_freq, halfwidth)
@@ -1007,7 +515,7 @@ def run(args: argparse.Namespace) -> None:
                 "different parts of it. Narrow --halfwidths, or use a store whose band "
                 "contains the whole window."
             )
-    # The union is over CACHE bins, because it is what the streaming reader indexes.
+    # The union is over CACHE bins, because it is what the wavelet reader indexes.
     union = np.unique(np.concatenate(list(cache_selections.values())))
     union_position = {int(b): i for i, b in enumerate(union)}
 
@@ -1016,7 +524,7 @@ def run(args: argparse.Namespace) -> None:
         p
         for p in store_participants
         if all(resolve_ok(results, p, c, per_recording) for c in conditions)
-        and all(p in cache_labels[c] for c in conditions)
+        and all(p in cached[c] for c in conditions)
     ]
     if not participants:
         raise ValueError(
@@ -1078,7 +586,7 @@ def run(args: argparse.Namespace) -> None:
     projected: dict[str, _Projected] = {}
     for condition in conditions:
         projected[condition] = _project_condition(
-            cache_paths[condition],
+            wavelet_sets[condition],
             condition,
             participants,
             resolve,
@@ -1086,7 +594,6 @@ def run(args: argparse.Namespace) -> None:
             binary,
             pca_rows,
             union,
-            cache_labels[condition],
             store_channels,
             args.n_times,
             roi_index,
@@ -1214,13 +721,13 @@ def run(args: argparse.Namespace) -> None:
         if args.band is None
         else SpectrumTypeVariants.BANDS.value
     )
-    plots_dir = (
-        (Path(args.save_dir) if args.save_dir else ProjectPaths.PLOTS_PATH)
-        / _STAGE_DIR
-        / f"{store_condition.value}_{music_type.value}"
-        / spectrum
-        / _ANALYSIS_DIR
-        / f"pca_{args.n_pca}"
+    plots_dir = ProjectPaths.analysis_plots_dir(
+        _STAGE_DIR,
+        f"{store_condition.value}_{music_type.value}",
+        spectrum=spectrum,
+        analysis_type=_ANALYSIS_DIR,
+        n_pca=args.n_pca,
+        root=args.save_dir,
     )
     # Band as the first token of every filename, per the canonical plot layout.
     plot_prefix = "" if args.band is None else f"{args.band}_"

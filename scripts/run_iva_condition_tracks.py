@@ -45,11 +45,7 @@ amplitude. Pass ``--zscore_mode joint`` to keep the amplitude contrast.
 **Nothing upstream changes and no new cache is written.** Each condition keeps
 its own alignment, used only within that condition, so the two tracks need not
 share a time base and need not even have the same length. Only participants
-recorded under **both** conditions are kept, so the design is balanced. Pass
-``--subset_cache`` to additionally keep a per-extent copy of each condition's
-trimmed tensor under
-``notebooks/03-wavelet-analysis/wavelet_cache/<experiment>/``, shared with every
-other wavelet workflow.
+recorded under **both** conditions are kept, so the design is balanced.
 
 Sign handling, in order:
 
@@ -103,12 +99,12 @@ Examples::
 
     # ASSR, all matched participants, ten components
     python scripts/run_iva_condition_tracks.py \\
-        --experiment assr --n_pca 10 --reuse_wavelets --subset_cache
+        --experiment assr --n_pca 10 --reuse_wavelets
 
-    # Fast exploration on a channel/time subset, cached for the next run
+    # Fast exploration on a channel/time subset
     python scripts/run_iva_condition_tracks.py \\
         --experiment assr --n_pca 10 --n_channels 32 --n_times 3000 \\
-        --n_pairs 5 --reuse_wavelets --subset_cache
+        --n_pairs 5 --reuse_wavelets
 
 Pass ``--store_components`` to additionally keep the recovered components under
 ``data/processed/<experiment>/iva_results/JoinedTracks/``. They go in **unsplit**, on
@@ -143,7 +139,6 @@ from scripts.analysis_common import (  # noqa: E402
 )
 from scripts.notebook_helpers import (  # noqa: E402
     load_paired_condition_wavelets,
-    resolve_notebook_wavelet_cache_dir,
 )
 from src.analysis import iva_quality  # noqa: E402
 from src.analysis.condition_tracks import ZSCORE_MODES  # noqa: E402
@@ -340,25 +335,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--reuse_wavelets",
         action="store_true",
-        help="Reuse the cached per-condition transforms when available.",
-    )
-    parser.add_argument(
-        "--subset_cache",
-        action="store_true",
-        help=(
-            "Keep a per-extent copy of each condition's trimmed wavelet tensor under "
-            "notebooks/03-wavelet-analysis/wavelet_cache/<experiment>/, so later runs "
-            "at the same extent skip decompressing the source cache. Shared with every "
-            "other wavelet workflow."
-        ),
-    )
-    parser.add_argument(
-        "--no_reuse_subset_cache",
-        action="store_true",
-        help=(
-            "With --subset_cache, recompute from the source cache and overwrite the "
-            "subset entry instead of reading it."
-        ),
+        help="Reuse the stored per-condition transforms when available.",
     )
     band_group = parser.add_mutually_exclusive_group()
     band_group.add_argument(
@@ -551,8 +528,6 @@ def run_condition_tracks(
     freqs_full: np.ndarray,
     wavelet_dir: Path,
     reuse_wavelets: bool,
-    subset_cache_dir: Path | None,
-    reuse_subset_cache: bool,
     zscore_mode: str,
     n_pca: int,
     components: list[int] | None,
@@ -583,8 +558,6 @@ def run_condition_tracks(
     :param freqs_full: Morlet frequency grid the caches were written with.
     :param wavelet_dir: Per-condition wavelet cache directory.
     :param reuse_wavelets: Reuse the cached transforms.
-    :param subset_cache_dir: Notebook-level subset cache, or ``None`` to disable.
-    :param reuse_subset_cache: Read an existing subset cache entry when present.
     :param zscore_mode: One of :data:`~src.analysis.condition_tracks.ZSCORE_MODES`.
     :param n_pca: Per-participant channel-PCA dimension (= number of components).
     :param components: 0-based component indices to draw, or ``None`` for all.
@@ -613,15 +586,13 @@ def run_condition_tracks(
         music_type,
         exclusion_categories,
         freqs_full,
-        wavelet_dir=wavelet_dir / SpectrumTypeVariants.BROADBAND.value,
+        wavelet_dir=wavelet_dir,
         experiment_name=experiment_name,
         conditions=conditions,
         zscore_mode=zscore_mode,
         n_channels=n_channels,
         n_times=n_times,
         reuse_wavelets=reuse_wavelets,
-        subset_cache_dir=subset_cache_dir,
-        reuse_subset_cache=reuse_subset_cache,
         n_jobs=n_jobs,
     )
 
@@ -819,7 +790,14 @@ def run_condition_tracks(
         if band_name is None
         else SpectrumTypeVariants.BANDS.value
     )
-    out_dir = save_root / _STAGE_DIR / label / spectrum / _ANALYSIS_DIR / f"pca_{n_pca}"
+    out_dir = ProjectPaths.analysis_plots_dir(
+        _STAGE_DIR,
+        label,
+        spectrum=spectrum,
+        analysis_type=_ANALYSIS_DIR,
+        n_pca=n_pca,
+        root=save_root,
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
     participants_dir = out_dir / "participants"
     prefix = "" if band_name is None else f"{band_name}_"
@@ -947,18 +925,14 @@ def run_condition_tracks(
 # ---------------------------------------------------------------------------
 
 
-def main(argv: list[str] | None = None) -> None:
-    """Parse arguments and run the time-concatenated join for every music type.
+def run(args: argparse.Namespace) -> None:
+    """Run the analysis for an already-parsed argument namespace.
 
-    :param argv: Command-line arguments; ``None`` reads ``sys.argv``.
+    Split out of :func:`main` so a notebook can drive the same code path the CLI and the
+    PBS job take, without going through ``sys.argv``.
+
+    :param args: Parsed arguments, as :func:`_build_arg_parser` produces.
     """
-    args = _build_arg_parser().parse_args(argv)
-
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-
     experiment_name = ExperimentNames(args.experiment)
     if args.music_type is not None:
         music_types = [MusicTypeVariants(mt) for mt in args.music_type]
@@ -991,12 +965,6 @@ def main(argv: list[str] | None = None) -> None:
             else ProjectPaths.PROCESSED_DATA_DIR
         )
     )
-    subset_cache_dir = (
-        resolve_notebook_wavelet_cache_dir(experiment_name)
-        / SpectrumTypeVariants.BROADBAND.value
-        if args.subset_cache
-        else None
-    )
     freqs_full = np.linspace(
         args.wavelet_freq_min, args.wavelet_freq_max, args.wavelet_n_freqs
     )
@@ -1016,8 +984,7 @@ def main(argv: list[str] | None = None) -> None:
         f"band={band_token(band) or SpectrumTypeVariants.BROADBAND.value}, "
         f"iva_opt={args.iva_opt_approach}"
     )
-    _logger.info(f"Wavelet source cache : {wavelet_dir}")
-    _logger.info(f"Wavelet subset cache : {subset_cache_dir or 'disabled'}")
+    _logger.info(f"Wavelet store : {wavelet_dir}")
 
     for music_type in music_types:
         _logger.info(f"=== {music_type.value} ===")
@@ -1029,8 +996,6 @@ def main(argv: list[str] | None = None) -> None:
             freqs_full=freqs_full,
             wavelet_dir=wavelet_dir,
             reuse_wavelets=args.reuse_wavelets,
-            subset_cache_dir=subset_cache_dir,
-            reuse_subset_cache=not args.no_reuse_subset_cache,
             zscore_mode=args.zscore_mode,
             n_pca=args.n_pca,
             components=components,
@@ -1052,6 +1017,21 @@ def main(argv: list[str] | None = None) -> None:
             coordinate_system=CoordinateSystems(args.coordinate_system),
             lenient_mask=args.lenient_mask,
         )
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Parse arguments and run the time-concatenated join for every music type.
+
+    :param argv: Command-line arguments; ``None`` reads ``sys.argv``.
+    """
+    args = _build_arg_parser().parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+    run(args)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 Placebo/Psilocybin comparison figures for a subject-axis-pooled IVA decomposition.
 
 These are the read-out of a
-:attr:`~src.definitions.fields.ConditionVariants.JOINED` run: one aligned set of IVA
+:attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE` run: one aligned set of IVA
 components, each recording carrying its own channel topography and time-frequency map,
 with the subject axis holding every participant once per condition. The question the
 figures answer is "does this component look different under Psilocybin", so every one of

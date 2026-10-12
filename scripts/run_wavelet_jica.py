@@ -3,7 +3,7 @@ CLI script reproducing the stage-07 joint-ICA (jICA) notebooks headlessly.
 
 Runs both halves of ``notebooks/07-ica-condition-comparison/`` in one pass:
 
-1. **The decomposition** (``wavelet_ica_channel_joined.ipynb`` /
+1. **The decomposition** (``wavelet_ica_channel_joined_separate.ipynb`` /
    ``wavelet_ica_channel_joined_tracks.ipynb``) — the component time-frequency maps,
    the per-recording channel topographies and the per-recording loading.
 2. **The 40 Hz read-out** (``ica_component_analysis.ipynb``) — the recovered filters
@@ -213,7 +213,6 @@ from scripts.analysis_common import (  # noqa: E402
 from scripts.notebook_helpers import (  # noqa: E402
     load_joined_condition_wavelets,
     load_paired_condition_wavelets,
-    resolve_notebook_wavelet_cache_dir,
 )
 from src.analysis import assr_trials as at  # noqa: E402
 from src.analysis import iva_quality  # noqa: E402
@@ -296,7 +295,10 @@ _CONDITION_COLORS = {
 
 #: How the two joins map onto their plot subdirectory and product label.
 _JOIN_CHOICES = {
-    "joined": (ConditionVariants.JOINED, JicaVariants.CHANNEL_JOINED),
+    "joined_separate": (
+        ConditionVariants.JOINED_SEPARATE,
+        JicaVariants.CHANNEL_JOINED_SEPARATE,
+    ),
     "joined_tracks": (
         ConditionVariants.JOINED_TRACKS,
         JicaVariants.CHANNEL_JOINED_TRACKS,
@@ -448,7 +450,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--float64",
         dest="float32",
         action="store_false",
-        help="Keep the cache's own dtype instead of casting to float32.",
+        help="Keep the loaded dtype instead of casting to float32.",
     )
     add_wavelet_grid_args(parser)
     parser.add_argument(
@@ -456,31 +458,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help=(
-            "Base data directory holding the per-condition wavelet caches. The "
-            "'<experiment>/wavelets/broadband' suffix is appended automatically."
+            "Base data directory holding the per-condition wavelet stores. The "
+            "'<experiment>/wavelets' suffix is appended automatically."
         ),
     )
     parser.add_argument(
         "--reuse_wavelets",
         action="store_true",
-        help="Reuse the cached per-condition transforms when available.",
-    )
-    parser.add_argument(
-        "--subset_cache",
-        action="store_true",
-        help=(
-            "Keep a per-extent copy of each condition's trimmed wavelet tensor under "
-            "notebooks/03-wavelet-analysis/wavelet_cache/<experiment>/, shared with "
-            "every other wavelet workflow. Worth it only for a channel/time subset."
-        ),
-    )
-    parser.add_argument(
-        "--no_reuse_subset_cache",
-        action="store_true",
-        help=(
-            "With --subset_cache, recompute from the source cache and overwrite the "
-            "subset entry instead of reading it."
-        ),
+        help="Reuse the stored per-condition transforms when available.",
     )
 
     # ---- the 40 Hz read-out ------------------------------------------------
@@ -751,8 +736,6 @@ def _load_cohort(
     freqs: np.ndarray,
     wavelet_dir: Path,
     reuse_wavelets: bool,
-    subset_cache_dir: Path | None,
-    reuse_subset_cache: bool,
     n_pairs: int | None,
     n_channels: int | None,
     n_times: int | None,
@@ -779,11 +762,9 @@ def _load_cohort(
         n_channels=n_channels,
         n_times=n_times,
         reuse_wavelets=reuse_wavelets,
-        subset_cache_dir=subset_cache_dir,
-        reuse_subset_cache=reuse_subset_cache,
         n_jobs=n_jobs,
     )
-    if join is ConditionVariants.JOINED:
+    if join is ConditionVariants.JOINED_SEPARATE:
         pooled, analyzers = load_joined_condition_wavelets(
             music_type, exclusion_categories, freqs, **common
         )
@@ -889,7 +870,7 @@ def _write_decomposition_plots(
     * ``JOINED_TRACKS`` — the sample axis spans both tracks, so the TF maps split
       into a genuine per-condition contrast with a difference row, while the
       topography and the loading are **shared** and get a single row.
-    * ``JOINED`` — the sample axis is common to both conditions, so the TF maps get a
+    * ``JOINED_SEPARATE`` — the sample axis is common to both conditions, so the TF maps get a
       single shared row while the topographies and loadings carry the contrast.
 
     Drawing a shared quantity as a two-row comparison would produce two identical rows
@@ -1798,7 +1779,6 @@ def run_jica(
     exclusion_categories: list[ExclusionCategories],
     freqs: np.ndarray,
     wavelet_dir: Path,
-    subset_cache_dir: Path | None,
     save_root: Path,
     results_root: Path,
 ) -> list[dict]:
@@ -1809,11 +1789,9 @@ def run_jica(
     :param experiment_name: Experiment being analysed.
     :param conditions: Conditions to join, in block/segment order.
     :param exclusion_categories: Exclusion categories applied to both conditions.
-    :param freqs: Morlet frequency grid the caches were written with.
-    :param wavelet_dir: Per-condition wavelet cache directory, band subdirectory
-        included (``data/processed/<experiment>/wavelets/broadband``). A path without
-        it misses the stage-03 caches and silently recomputes them.
-    :param subset_cache_dir: Notebook-level subset cache, or ``None`` to disable.
+    :param freqs: Morlet frequency grid the wavelets were stored with.
+    :param wavelet_dir: The experiment's wavelet store root
+        (``data/processed/<experiment>/wavelets``).
     :param save_root: Base ``plots/`` directory.
     :param results_root: Directory the test CSV goes in.
     :return: One record per test, empty when the read-out was skipped.
@@ -1829,8 +1807,6 @@ def run_jica(
         freqs=freqs,
         wavelet_dir=wavelet_dir,
         reuse_wavelets=args.reuse_wavelets,
-        subset_cache_dir=subset_cache_dir,
-        reuse_subset_cache=not args.no_reuse_subset_cache,
         n_pairs=args.n_pairs,
         n_channels=args.n_channels,
         n_times=args.n_times,
@@ -1885,7 +1861,9 @@ def run_jica(
     # label carries the wavelet representation suffix and would end up in a path.
     product = f"{join.value}_{music_type.value}"
     spectrum = SpectrumTypeVariants.BROADBAND.value
-    product_dir = save_root / _STAGE_DIR / product / spectrum
+    product_dir = ProjectPaths.analysis_plots_dir(
+        _STAGE_DIR, product, spectrum=spectrum, root=save_root
+    )
     if not args.skip_decomposition_plots:
         _write_decomposition_plots(
             result,
@@ -1930,18 +1908,14 @@ def run_jica(
 # ---------------------------------------------------------------------------
 
 
-def main(argv: list[str] | None = None) -> None:
-    """Parse arguments and run the selected join for every music type.
+def run(args: argparse.Namespace) -> None:
+    """Run the analysis for an already-parsed argument namespace.
 
-    :param argv: Command-line arguments; ``None`` reads ``sys.argv``.
+    Split out of :func:`main` so a notebook can drive the same code path the CLI and the
+    PBS job take, without going through ``sys.argv``.
+
+    :param args: Parsed arguments, as :func:`_build_arg_parser` produces.
     """
-    args = _build_arg_parser().parse_args(argv)
-
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-
     experiment_name = ExperimentNames(args.experiment)
     if args.music_type is not None:
         music_types = [MusicTypeVariants(mt) for mt in args.music_type]
@@ -1986,22 +1960,7 @@ def main(argv: list[str] | None = None) -> None:
         if args.results_dir is not None
         else ProjectPaths.PROJECT_ROOT / "results" / experiment_name.value
     )
-    # The BAND SUBDIRECTORY is part of the path, not an optional decoration: the
-    # per-condition caches stage-03 writes live in `<experiment>/wavelets/broadband/`,
-    # and a path one level above them is simply a cache MISS — on which the loader
-    # recomputes the whole transform (tens of GB and ~40 min per condition) from the
-    # SPLICED time-domain signal, which carries edge artefacts at every splice point.
-    # Every other wavelet script and every stage-06/07 notebook appends it the same way.
-    wavelet_dir = (
-        resolve_wavelet_dir(args.wavelet_data_dir, experiment_name)
-        / SpectrumTypeVariants.BROADBAND.value
-    )
-    subset_cache_dir = (
-        resolve_notebook_wavelet_cache_dir(experiment_name)
-        / SpectrumTypeVariants.BROADBAND.value
-        if args.subset_cache
-        else None
-    )
+    wavelet_dir = resolve_wavelet_dir(args.wavelet_data_dir, experiment_name)
     freqs = np.linspace(
         args.wavelet_freq_min, args.wavelet_freq_max, args.wavelet_n_freqs
     )
@@ -2012,8 +1971,7 @@ def main(argv: list[str] | None = None) -> None:
         f"music_types={[mt.value for mt in music_types]}, n_ica={args.n_ica}, "
         f"ica={args.ica_algorithm}/{args.ica_fun}"
     )
-    _logger.info(f"Wavelet source cache : {wavelet_dir}")
-    _logger.info(f"Wavelet subset cache : {subset_cache_dir or 'disabled'}")
+    _logger.info(f"Wavelet store : {wavelet_dir}")
     if args.n_channels is not None and not args.skip_analysis:
         _logger.warning(
             f"--n_channels {args.n_channels} with the read-out enabled: the "
@@ -2031,10 +1989,24 @@ def main(argv: list[str] | None = None) -> None:
             exclusion_categories=exclusion_categories,
             freqs=freqs,
             wavelet_dir=wavelet_dir,
-            subset_cache_dir=subset_cache_dir,
             save_root=save_root,
             results_root=results_root,
         )
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Parse arguments and run the selected join for every music type.
+
+    :param argv: Command-line arguments; ``None`` reads ``sys.argv``.
+    """
+    args = _build_arg_parser().parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+    run(args)
 
 
 if __name__ == "__main__":

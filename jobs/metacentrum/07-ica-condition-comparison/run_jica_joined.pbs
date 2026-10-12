@@ -6,7 +6,7 @@
 #PBS -j oe
 
 # ---------------------------------------------------------------------------
-# Stage-07 joint ICA (jICA) — the RECORDING-axis join (JOINED).
+# Stage-07 joint ICA (jICA) — the RECORDING-axis join (JOINED_SEPARATE).
 #
 # The companion of run_jica_tracks.pbs: identical pipeline, identical
 # participants, the recordings tied together along a different axis. Read that
@@ -36,7 +36,7 @@
 # So the two jobs are complements, not alternatives: between them they cover both
 # sides of the decomposition, and neither covers both alone.
 #
-#   this job (JOINED)             run_jica_tracks.pbs (JOINED_TRACKS)
+#   this job (JOINED_SEPARATE)             run_jica_tracks.pbs (JOINED_TRACKS)
 #   ---------------------------   ------------------------------------
 #   blocks: 2P (per recording)    blocks: P (per participant)
 #   TF maps: SHARED, one row      TF maps: split per condition + difference
@@ -79,9 +79,12 @@
 # As there, the dominant peak is the wavelet cache read (~110 GB per condition,
 # decompressed in full before it is trimmed), which is what mem=499gb is for — and it
 # is also the dominant TIME cost: ~40 minutes per condition, measured. Everything
-# after it is minutes. See run_jica_tracks.pbs for the full timeline and for the
-# --subset_cache trade if you plan to re-run. Stage-03 (store_assr_wavelets.pbs) must
-# have produced those caches first.
+# after it is minutes. See run_jica_tracks.pbs for the full timeline. Stage-03
+# (store_assr_wavelets.pbs) must have produced the wavelet store first.
+#
+# The memory and time figures in this header were measured on the old single
+# compressed float64 cache per condition. The per-subject float32 store holds half
+# the bytes and is read without decompression, so they are now upper bounds.
 #
 # --------------------------------------------------------------------------
 # Plots:
@@ -108,8 +111,8 @@
 # that row.
 #
 # Output:
-#   plots/07-ica-condition-comparison/Joined_ASSR/broadband/
-#       ica_channel_joined/ica_<N>/*.png
+#   plots/07-ica-condition-comparison/JoinedSeparate_ASSR/broadband/
+#       ica_channel_joined_separate/ica_<N>/*.png
 #       ica_component_analysis/ica_<N>/*.png
 #   results/assr/jica_tests__joined__ASSR__ica<N>.csv
 #
@@ -158,7 +161,7 @@ WAVELET_DIR="/mnt/data/processed"
 # array cannot be overridden by prefixing it — it has to be left out.
 COMMON_ARGS=(
     --experiment assr
-    --join joined
+    --join joined_separate
     --conditions Placebo Psilocybin
     --random_state 42
     --ica_algorithm parallel
@@ -174,7 +177,7 @@ COMMON_ARGS=(
 # trials wholesale.
 echo "=== jICA recording-axis join, FULL extent, 5 components at $(date) ==="
 python /mnt/scripts/run_wavelet_jica.py \
-    --n_ica 5 \
+    --n_ica 10 \
     "${COMMON_ARGS[@]}"
 
 # --- Component-count sweep -------------------------------------------------

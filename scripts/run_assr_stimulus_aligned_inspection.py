@@ -20,12 +20,12 @@ Inputs (produced by stimulus alignment + the wavelet store jobs)::
     data/processed/<exp>/concatenated/<Condition>_ASSR.npy
     data/processed/<exp>/concatenated/<Condition>_ASSR.stimulus_onsets.npy
     data/processed/<exp>/concatenated/<Condition>_ASSR.metadata.csv
-    data/processed/<exp>/wavelets/broadband/<Condition>_ASSR__wavelet_power__*__freqdim1.npz
+    data/processed/<exp>/wavelets/<Condition>_ASSR/<participant>__wavelet_power__*.npy
 
-The wavelet cache is ~tens of GB and ``savez_compressed`` stores it as a single
-deflate stream, so it is read **lazily** in one sequential pass: every channel
-block is decompressed once and immediately reduced (channel-mean TF map + a signed
-per-channel z-scored-power topomap value), keeping peak memory at one block.
+The wavelets are tens of GB, so they are read **lazily**, one memory-mapped
+participant at a time: every channel block is read once and immediately reduced
+(channel-mean TF map + a signed per-channel z-scored-power topomap value), keeping
+peak memory at one block.
 
 Output plots::
 
@@ -34,7 +34,6 @@ Output plots::
 
 import argparse
 import sys
-import zipfile
 from pathlib import Path
 
 import matplotlib
@@ -44,7 +43,6 @@ matplotlib.use("Agg")  # headless: no interactive display on the cluster
 import matplotlib.pyplot as plt  # noqa: E402
 import mne  # noqa: E402
 import numpy as np  # noqa: E402
-import numpy.lib.format as npformat  # noqa: E402
 import pandas as pd  # noqa: E402
 from scipy.stats import zscore  # noqa: E402
 
@@ -57,6 +55,11 @@ from src.definitions.fields import (  # noqa: E402
     ExperimentNames,
     MusicTypeVariants,
     PreprocessedDataVariants,
+)
+from src.io.wavelet_store import (  # noqa: E402
+    WaveletSet,
+    find_wavelet_set,
+    wavelet_label_dir,
 )
 from src.preprocessing.pipeline import DatasetHandler  # noqa: E402
 
@@ -104,22 +107,19 @@ def epoch_average(
 
 
 def stream_wavelet_reduce(
-    npz_path: Path,
-    n_channels: int,
-    n_freqs: int,
+    wavelet_set: WaveletSet,
+    participants: list[str],
     onsets: np.ndarray,
     pre: int,
     post: int,
     topo_freq_mask: np.ndarray,
     topo_post_mask: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, int]:
-    """Stream the whole wavelet-power cache once, reducing every channel block.
+    """Read every participant's wavelet power once, reducing every channel block.
 
-    ``savez_compressed`` writes ``data.npy`` (shape ``(n_subj, n_channels*n_freqs,
-    n_times)``) as one sequential deflate stream, so it cannot be sliced randomly.
-    This reader decompresses one ``(n_freqs, n_times)`` channel block at a time and
-    immediately reduces it, so peak memory is a single block (~tens of MB) rather
-    than the full multi-GB tensor.
+    Each subject's memory-mapped wavelets are read one ``(n_freqs, n_times)`` channel
+    block at a time and immediately reduced, so peak memory is a single block
+    (~tens of MB) rather than the full multi-GB tensor.
 
     For each subject it accumulates two reductions, both built from the power
     **z-scored per frequency against the whole recording** (``zscore(block,
@@ -133,9 +133,8 @@ def stream_wavelet_reduce(
       mean-collapsed over ``topo_freq_mask`` and ``topo_post_mask`` (signed).
 
     Args:
-        npz_path: Path to the ``*__wavelet_power__*__freqdim1.npz`` cache.
-        n_channels: Number of EEG channels in the cache.
-        n_freqs: Number of wavelet frequencies in the cache.
+        wavelet_set: The condition's stored wavelets.
+        participants: Participants to read, in the subject order of the outputs.
         onsets: Stimulus onset sample indices.
         pre: Samples before each onset.
         post: Samples after each onset.
@@ -148,66 +147,27 @@ def stream_wavelet_reduce(
         ``n_times`` is the wavelet time length.
     """
     win = pre + post
-    with zipfile.ZipFile(npz_path) as zf:
-        with zf.open("data.npy") as fh:
-            version = npformat.read_magic(fh)
-            if version == (1, 0):
-                shape, _, dtype = npformat.read_array_header_1_0(fh)
-            else:
-                shape, _, dtype = npformat.read_array_header_2_0(fh)
-            n_subj, n_feat_flat, n_times = shape
-            if n_feat_flat != n_channels * n_freqs:
-                raise ValueError(
-                    f"feature axis {n_feat_flat} != n_channels*n_freqs "
-                    f"{n_channels * n_freqs}"
-                )
-
-            block_bytes = n_freqs * n_times * dtype.itemsize
-            power_maps = np.zeros((n_subj, n_freqs, win), dtype=np.float64)
-            topo = np.full((n_subj, n_channels), np.nan, dtype=np.float64)
-            for subj in range(n_subj):
-                tf_sum = np.zeros((n_freqs, win), dtype=np.float64)
-                for chan in range(n_channels):
-                    buf = fh.read(block_bytes)
-                    block = np.frombuffer(
-                        buf, dtype=dtype, count=n_freqs * n_times
-                    ).reshape(n_freqs, n_times)
-                    # Z-score each frequency against the whole recording, then
-                    # epoch-average: the per-channel stimulus-locked TF map in
-                    # units of SD relative to the recording baseline.
-                    ev_z, _ = epoch_average(zscore(block, axis=1), onsets, pre, post)
-                    tf_sum += ev_z  # channel-mean TF map
-                    # Topomap scalar: collapse the same z-scored map over freq/time.
-                    topo[subj, chan] = ev_z[topo_freq_mask][:, topo_post_mask].mean()
-                power_maps[subj] = tf_sum / n_channels
-                print(f"  reduced subject {subj + 1}/{n_subj}", flush=True)
+    n_subj = len(participants)
+    n_channels, n_freqs = wavelet_set.n_channels, wavelet_set.n_freqs
+    power_maps = np.zeros((n_subj, n_freqs, win), dtype=np.float64)
+    topo = np.full((n_subj, n_channels), np.nan, dtype=np.float64)
+    n_times = 0
+    for subj, participant in enumerate(participants):
+        subject = wavelet_set.open(participant)
+        n_times = subject.shape[-1]
+        tf_sum = np.zeros((n_freqs, win), dtype=np.float64)
+        for chan in range(n_channels):
+            block = np.asarray(subject[chan], dtype=np.float64)
+            # Z-score each frequency against the whole recording, then epoch-average:
+            # the per-channel stimulus-locked TF map in units of SD relative to the
+            # recording baseline.
+            ev_z, _ = epoch_average(zscore(block, axis=1), onsets, pre, post)
+            tf_sum += ev_z  # channel-mean TF map
+            # Topomap scalar: collapse the same z-scored map over freq/time.
+            topo[subj, chan] = ev_z[topo_freq_mask][:, topo_post_mask].mean()
+        power_maps[subj] = tf_sum / n_channels
+        print(f"  reduced subject {subj + 1}/{n_subj} ({participant})", flush=True)
     return power_maps, topo, n_times
-
-
-# --------------------------------------------------------------------------- #
-#  IO helpers                                                                 #
-# --------------------------------------------------------------------------- #
-def read_wavelet_metadata(npz_path: Path) -> tuple[np.ndarray, list[str], int]:
-    """Read the small metadata members and channel names from a wavelet cache.
-
-    Args:
-        npz_path: Path to the wavelet-power ``.npz`` cache.
-
-    Returns:
-        Tuple ``(freqs, channel_names, n_freqs)``. ``channel_names`` is recovered
-        from ``feature_names`` (layout ``channel * n_freqs + freq``).
-    """
-    with zipfile.ZipFile(npz_path) as zf:
-        with zf.open("freqs.npy") as fh:
-            freqs = npformat.read_array(fh, allow_pickle=True)
-        with zf.open("feature_names.npy") as fh:
-            feature_names = npformat.read_array(fh, allow_pickle=True)
-    n_freqs = len(freqs)
-    channel_names = [
-        str(feature_names[i * n_freqs]).split("@")[0]
-        for i in range(len(feature_names) // n_freqs)
-    ]
-    return np.asarray(freqs, dtype=float), channel_names, n_freqs
 
 
 def grid_shape(n_panels: int, max_cols: int = 5) -> tuple[int, int]:
@@ -527,32 +487,34 @@ def run_inspection(args: argparse.Namespace) -> None:
     raw_path = concat_dir / f"{label}.npy"
     onsets_path = concat_dir / f"{label}{ProjectPaths.STIMULUS_ONSETS_SUFFIX}"
     meta_path = concat_dir / f"{label}.metadata.csv"
-    wavelet_dir = processed_dir / "wavelets" / "broadband"
-    wavelet_matches = sorted(
-        wavelet_dir.glob(f"{label}__wavelet_power__*__freqdim1.npz")
-    )
+    try:
+        wavelet_set = find_wavelet_set(wavelet_label_dir(None, experiment, label))
+    except FileNotFoundError:
+        wavelet_set = None
 
     # The Psilocybin (or any) condition may not have been generated yet — skip
     # cleanly instead of failing the whole job.
     missing = [p for p in (raw_path, onsets_path, meta_path) if not p.exists()]
-    if missing or not wavelet_matches:
+    if missing or wavelet_set is None:
         print(
             f"[SKIP] {label}: missing inputs "
-            f"({[p.name for p in missing] + ([] if wavelet_matches else ['wavelet npz'])}).",
+            f"({[p.name for p in missing] + ([] if wavelet_set else ['wavelets'])}).",
             flush=True,
         )
         return
-    wavelet_path = wavelet_matches[0]
 
     save_root = Path(args.save_dir) if args.save_dir else ProjectPaths.PLOTS_PATH
-    plots_dir = (
-        save_root / "00-preprocessing" / "assr_stimulus_aligned_inspection" / label
+    plots_dir = ProjectPaths.analysis_plots_dir(
+        "00-preprocessing",
+        label,
+        analysis_type="assr_stimulus_aligned_inspection",
+        root=save_root,
     )
     plots_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"=== {label} ===", flush=True)
     print(f"raw     : {raw_path}", flush=True)
-    print(f"wavelet : {wavelet_path}", flush=True)
+    print(f"wavelet : {wavelet_set.directory}", flush=True)
     print(f"plots   : {plots_dir}", flush=True)
 
     # ---- Load shared inputs -------------------------------------------------
@@ -561,7 +523,8 @@ def run_inspection(args: argparse.Namespace) -> None:
     meta = pd.read_csv(meta_path, index_col=0)
     n_subj, n_channels, n_times_raw = raw_mm.shape
 
-    freqs, channel_names, n_freqs = read_wavelet_metadata(wavelet_path)
+    freqs, channel_names = wavelet_set.freqs, wavelet_set.channel_names
+    n_freqs = wavelet_set.n_freqs
     if len(channel_names) != n_channels:
         raise ValueError(
             f"wavelet channel count {len(channel_names)} != raw n_channels {n_channels}"
@@ -570,6 +533,8 @@ def run_inspection(args: argparse.Namespace) -> None:
     # Subject index -> participant label (ordered by concatenated person index).
     idx_to_pid = dict(zip(meta[_PIDX_COL], meta[_PID_COL].astype(str).str.zfill(3)))
     labels = {s: f"PSI{idx_to_pid.get(s, '???')}" for s in range(n_subj)}
+    # The wavelets are read in the raw array's subject order, so index s is one person.
+    participants = [idx_to_pid[s] for s in range(n_subj)]
 
     sfreq = args.sfreq
     pre = int(round(-args.epoch_tmin * sfreq))
@@ -615,12 +580,11 @@ def run_inspection(args: argparse.Namespace) -> None:
         evoked_curves, group_evoked, epoch_times, labels, title_suffix, plots_dir
     )
 
-    # ---- Wavelet: single streaming pass over the whole cache ----------------
-    print(f"Streaming wavelet cache ({wavelet_path.name}) ...", flush=True)
+    # ---- Wavelet: one pass over every participant ----------------------------
+    print(f"Reading wavelets of {len(participants)} participant(s) ...", flush=True)
     power_maps, topo, n_times_wav = stream_wavelet_reduce(
-        wavelet_path,
-        n_channels,
-        n_freqs,
+        wavelet_set,
+        participants,
         onsets,
         pre,
         post,
@@ -674,7 +638,7 @@ def run_inspection(args: argparse.Namespace) -> None:
     print(f"[DONE] {label}: plots written to {plots_dir}", flush=True)
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _build_arg_parser() -> argparse.ArgumentParser:
     """Build the command-line argument parser."""
     parser = argparse.ArgumentParser(
         description=(
@@ -751,5 +715,13 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def main(argv: list[str] | None = None) -> None:
+    """Parse arguments and run.
+
+    :param argv: Command-line arguments; ``None`` reads ``sys.argv``.
+    """
+    run_inspection(_build_arg_parser().parse_args(argv))
+
+
 if __name__ == "__main__":
-    run_inspection(build_parser().parse_args())
+    main()

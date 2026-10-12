@@ -50,7 +50,7 @@
 #   data/processed/assr/concatenated/<Condition>_ASSR.npy
 #   data/processed/assr/concatenated/<Condition>_ASSR.stimulus_onsets.npy
 #   data/processed/assr/concatenated/<Condition>_ASSR.metadata.csv
-#   data/processed/assr/wavelets/broadband/<Condition>_ASSR__wavelet_power__*.npz
+#   data/processed/assr/wavelets/<Condition>_ASSR/<participant>__wavelet_power__*.npy
 # A condition whose inputs are absent (e.g. Psilocybin not yet generated) is
 # skipped cleanly rather than failing the job.
 #

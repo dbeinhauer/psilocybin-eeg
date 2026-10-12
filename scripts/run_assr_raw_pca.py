@@ -51,12 +51,11 @@ Inputs (produced by stimulus alignment + the wavelet store jobs)::
     data/processed/<exp>/concatenated/<Condition>_ASSR.npy
     data/processed/<exp>/concatenated/<Condition>_ASSR.stimulus_onsets.npy
     data/processed/<exp>/concatenated/<Condition>_ASSR.metadata.csv
-    data/processed/<exp>/wavelets/broadband/<Condition>_ASSR__wavelet_power__*.npz
+    data/processed/<exp>/wavelets/<Condition>_ASSR/wavelet_power__*.json
 
 The concatenated raw array (~1 GB) is memory-mapped, so only the accessed subjects
-land in memory. The wavelet cache is opened only to read its small channel-name
-member (the canonical concatenated channel order) — the huge data stream is never
-touched.
+land in memory. Of the wavelet store only the small metadata file is read, for the
+canonical concatenated channel order — no wavelet array is touched.
 
 Output plots::
 
@@ -68,7 +67,6 @@ The unreduced reference figures share that directory under the
 
 import argparse
 import sys
-import zipfile
 from pathlib import Path
 
 import matplotlib
@@ -78,7 +76,6 @@ matplotlib.use("Agg")  # headless: no interactive display on the cluster
 import matplotlib.pyplot as plt  # noqa: E402
 import mne  # noqa: E402
 import numpy as np  # noqa: E402
-import numpy.lib.format as npformat  # noqa: E402
 import pandas as pd  # noqa: E402
 from scipy.stats import zscore  # noqa: E402
 from sklearn.decomposition import PCA  # noqa: E402
@@ -98,6 +95,7 @@ from src.definitions.fields import (  # noqa: E402
     MusicTypeVariants,
     PreprocessedDataVariants,
 )
+from src.io.wavelet_store import find_wavelet_set, wavelet_label_dir  # noqa: E402
 from src.preprocessing.pipeline import DatasetHandler  # noqa: E402
 
 mne.set_log_level("ERROR")
@@ -323,33 +321,6 @@ def component_comparison(
             f"n_SNR>{snr_threshold:.0f}": (subject_snr > snr_threshold).sum(axis=1),
         }
     ).set_index("component")
-
-
-# --------------------------------------------------------------------------- #
-#  IO helpers                                                                 #
-# --------------------------------------------------------------------------- #
-def read_channel_names(npz_path: Path) -> list[str]:
-    """Recover the canonical concatenated channel order from a wavelet cache.
-
-    Only the small ``freqs``/``feature_names`` members are decompressed; the huge
-    ``data`` stream is never touched.
-
-    Args:
-        npz_path: Path to the wavelet-power ``.npz`` cache.
-
-    Returns:
-        Channel names, parsed from ``feature_names`` (layout ``channel * n_freqs``).
-    """
-    with zipfile.ZipFile(npz_path) as zf:
-        with zf.open("freqs.npy") as fh:
-            freqs = npformat.read_array(fh, allow_pickle=True)
-        with zf.open("feature_names.npy") as fh:
-            feature_names = npformat.read_array(fh, allow_pickle=True)
-    n_freqs = len(freqs)
-    return [
-        str(feature_names[i * n_freqs]).split("@")[0]
-        for i in range(len(feature_names) // n_freqs)
-    ]
 
 
 def grid_shape(n_panels: int, max_cols: int = 5) -> tuple[int, int]:
@@ -813,7 +784,7 @@ def plot_unreduced_summary_topomaps(
 # --------------------------------------------------------------------------- #
 #  Orchestration                                                              #
 # --------------------------------------------------------------------------- #
-def run_pca(args: argparse.Namespace) -> None:
+def run(args: argparse.Namespace) -> None:
     """Run the full raw channel-PCA reduction for one condition, writing plots."""
     experiment = ExperimentNames(args.experiment)
     condition = ConditionVariants(args.condition)
@@ -825,15 +796,15 @@ def run_pca(args: argparse.Namespace) -> None:
     raw_path = concat_dir / f"{label}.npy"
     onsets_path = concat_dir / f"{label}{ProjectPaths.STIMULUS_ONSETS_SUFFIX}"
     meta_path = concat_dir / f"{label}.metadata.csv"
-    wavelet_dir = processed_dir / "wavelets" / "broadband"
-    wavelet_matches = sorted(
-        wavelet_dir.glob(f"{label}__wavelet_power__*__freqdim1.npz")
-    )
+    try:
+        wavelet_set = find_wavelet_set(wavelet_label_dir(None, experiment, label))
+    except FileNotFoundError:
+        wavelet_set = None
 
     # A condition may not have been generated yet — skip cleanly instead of failing.
     missing = [p for p in (raw_path, onsets_path, meta_path) if not p.exists()]
-    if missing or not wavelet_matches:
-        extra = [] if wavelet_matches else ["wavelet npz (channel names)"]
+    if missing or wavelet_set is None:
+        extra = [] if wavelet_set else ["wavelets (channel names)"]
         print(
             f"[SKIP] {label}: missing inputs ({[p.name for p in missing] + extra}).",
             flush=True,
@@ -841,7 +812,9 @@ def run_pca(args: argparse.Namespace) -> None:
         return
 
     save_root = Path(args.save_dir) if args.save_dir else ProjectPaths.PLOTS_PATH
-    plots_dir = save_root / "00-preprocessing" / "assr_raw_pca" / label
+    plots_dir = ProjectPaths.analysis_plots_dir(
+        "00-preprocessing", label, analysis_type="assr_raw_pca", root=save_root
+    )
     plots_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"=== {label} ===", flush=True)
@@ -853,7 +826,7 @@ def run_pca(args: argparse.Namespace) -> None:
     onsets = np.load(onsets_path)
     meta = pd.read_csv(meta_path, index_col=0)
     gaps = np.diff(onsets)
-    channel_names = read_channel_names(wavelet_matches[0])
+    channel_names = wavelet_set.channel_names
     n_subj, n_channels, n_times_raw = raw_mm.shape
     if len(channel_names) != n_channels:
         raise ValueError(
@@ -1157,7 +1130,7 @@ def run_pca(args: argparse.Namespace) -> None:
     print(f"[DONE] {label}: plots written to {plots_dir}", flush=True)
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _build_arg_parser() -> argparse.ArgumentParser:
     """Build the command-line argument parser."""
     parser = argparse.ArgumentParser(
         description=(
@@ -1257,5 +1230,13 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def main(argv: list[str] | None = None) -> None:
+    """Parse arguments and run.
+
+    :param argv: Command-line arguments; ``None`` reads ``sys.argv``.
+    """
+    run(_build_arg_parser().parse_args(argv))
+
+
 if __name__ == "__main__":
-    run_pca(build_parser().parse_args())
+    main()

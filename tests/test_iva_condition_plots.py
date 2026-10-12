@@ -36,7 +36,7 @@ N_TIMES = 20
 CONDITIONS = ["Placebo", "Psilocybin"]
 # Deliberately out of numeric order, so the column sorting has something to do.
 PARTICIPANTS = ["021", "003", "011"]
-LABEL = "Joined_ASSR"
+LABEL = "JoinedSeparate_ASSR"
 
 
 @pytest.fixture(autouse=True)
@@ -447,7 +447,7 @@ class TestConditionMeanFigures:
                 patterns,
                 subject_participants,
                 subject_conditions,
-                ["Placebo", "Joined"],
+                ["Placebo", "JoinedSeparate"],
                 info,
                 N_CHANNELS,
                 comp_indices,

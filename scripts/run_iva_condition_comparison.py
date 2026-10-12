@@ -1,8 +1,8 @@
 """
 CLI script reproducing
-``notebooks/06-iva-condition-comparison/wavelet_iva_channel_joined.ipynb``:
+``notebooks/06-iva-condition-comparison/wavelet_iva_channel_joined_separate.ipynb``:
 the channel-as-independent IVA-G decomposition of wavelet power run on the
-**joined** condition (:attr:`~src.definitions.fields.ConditionVariants.JOINED`),
+**joined** condition (:attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE`),
 with Placebo and Psilocybin pooled on the **subject** axis, followed by the
 Placebo/Psilocybin comparison of the recovered components.
 
@@ -20,18 +20,13 @@ one aligned set describes the whole pooled cohort — while the channel
 topographies ``(C,)`` stay per recording, which is what makes a per-condition
 contrast of the patterns meaningful.
 
-**No new wavelet cache is written.** The pooled tensor is assembled in memory
-from the existing per-condition caches by
+**No new wavelets are written.** The pooled tensor is assembled in memory
+from the existing per-condition stores by
 :func:`~scripts.notebook_helpers.load_joined_condition_wavelets`, which is
 possible because the alignment was fitted over every recording of both
-conditions, so they already share one time base. Asking for a ``Joined_*``
-label directly would instead write a second, redundant copy of the cache.
-
-Pass ``--subset_cache`` to additionally keep a **per-extent** copy of each
-condition's trimmed tensor under
-``notebooks/03-wavelet-analysis/wavelet_cache/<experiment>/``: the first run at
-a given extent writes it, every later run reads it back and never decompresses
-the multi-GB source cache. Worth it here, since a joined load reads two of them.
+conditions, so they already share one time base. Asking for a ``JoinedSeparate_*``
+label directly would instead fail: the per-subject store holds one file per
+participant, and a pooled cohort names every participant twice.
 
 Sign handling, in the order it happens:
 
@@ -69,13 +64,13 @@ Figures, in three views (see
 
 Output (canonical per-condition layout)::
 
-    plots/06-iva-condition-comparison/Joined_<MusicType>/
-        broadband/iva_channel_joined/pca_<n_pca>/     # default (no --band)
+    plots/06-iva-condition-comparison/JoinedSeparate_<MusicType>/
+        broadband/iva_channel_joined_separate/pca_<n_pca>/     # default (no --band)
             condition_mean_topomaps.png
             condition_mean_tf_maps.png
             condition_mean_tf_maps_onset.png
             participants/*.png
-        bands/iva_channel_joined/pca_<n_pca>/          # --band / --band_range
+        bands/iva_channel_joined_separate/pca_<n_pca>/          # --band / --band_range
             <band>_condition_mean_topomaps.png
             ...
 
@@ -86,12 +81,12 @@ Examples::
 
     # ASSR, all matched participants, ten components
     python scripts/run_iva_condition_comparison.py \\
-        --experiment assr --n_pca 10 --reuse_wavelets --subset_cache
+        --experiment assr --n_pca 10 --reuse_wavelets
 
-    # Fast exploration on a channel/time subset, cached for the next run
+    # Fast exploration on a channel/time subset
     python scripts/run_iva_condition_comparison.py \\
         --experiment assr --n_pca 10 --n_channels 32 --n_times 3000 \\
-        --n_pairs 5 --reuse_wavelets --subset_cache
+        --n_pairs 5 --reuse_wavelets
 
 Pass ``--store_components`` to additionally keep the recovered components under
 ``data/processed/<experiment>/iva_results/<Condition>/``: the sign-aligned TF maps
@@ -123,7 +118,6 @@ from scripts.analysis_common import (  # noqa: E402
 )
 from scripts.notebook_helpers import (  # noqa: E402
     load_joined_condition_wavelets,
-    resolve_notebook_wavelet_cache_dir,
 )
 from src.analysis import iva_quality  # noqa: E402
 from src.analysis.iva_condition_comparison import (  # noqa: E402
@@ -162,7 +156,7 @@ _logger = logging.getLogger(__name__)
 _STAGE_DIR = "06-iva-condition-comparison"
 
 #: Analysis-type subdirectory, naming the independent (mixing) axis and the join.
-_ANALYSIS_DIR = IvaVariants.CHANNEL_JOINED.value
+_ANALYSIS_DIR = IvaVariants.CHANNEL_JOINED_SEPARATE.value
 
 #: What the final sign alignment was, printed on every figure.
 _ALIGNMENT_NOTE = "corr(topography, ASSR electrode mask), per (recording, component)"
@@ -190,7 +184,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "Run the channel-as-independent IVA decomposition on the joined "
             "condition (Placebo + Psilocybin pooled on the subject axis) and draw "
             "the per-component condition comparison. Reproduces "
-            "wavelet_iva_channel_joined.ipynb."
+            "wavelet_iva_channel_joined_separate.ipynb."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -305,26 +299,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--reuse_wavelets",
         action="store_true",
-        help="Reuse the cached per-condition transforms when available.",
-    )
-    parser.add_argument(
-        "--subset_cache",
-        action="store_true",
-        help=(
-            "Keep a per-extent copy of each condition's trimmed wavelet tensor "
-            "under notebooks/03-wavelet-analysis/wavelet_cache/<experiment>/, so "
-            "later runs at the same extent skip decompressing the source cache. "
-            "Shared with every other wavelet workflow."
-        ),
-    )
-    parser.add_argument(
-        "--no_reuse_subset_cache",
-        action="store_true",
-        help=(
-            "With --subset_cache, recompute from the source cache and overwrite "
-            "the subset entry instead of reading it — the escape hatch for a stale "
-            "cache."
-        ),
+        help="Reuse the stored per-condition transforms when available.",
     )
     band_group = parser.add_mutually_exclusive_group()
     band_group.add_argument(
@@ -489,8 +464,6 @@ def run_condition_comparison(
     freqs_full: np.ndarray,
     wavelet_dir: Path,
     reuse_wavelets: bool,
-    subset_cache_dir: Path | None,
-    reuse_subset_cache: bool,
     n_pca: int,
     components: list[int] | None,
     n_pairs: int | None,
@@ -521,8 +494,6 @@ def run_condition_comparison(
     :param wavelet_dir: Per-condition wavelet cache directory (band subdirectory
         appended here).
     :param reuse_wavelets: Reuse the cached transforms.
-    :param subset_cache_dir: Notebook-level subset cache, or ``None`` to disable.
-    :param reuse_subset_cache: Read an existing subset cache entry when present.
     :param n_pca: Per-recording channel-PCA dimension (= number of components).
     :param components: 0-based component indices to draw, or ``None`` for all.
     :param n_pairs: Keep only the first N matched participants, or ``None`` for all.
@@ -549,14 +520,12 @@ def run_condition_comparison(
         music_type,
         exclusion_categories,
         freqs_full,
-        wavelet_dir=wavelet_dir / SpectrumTypeVariants.BROADBAND.value,
+        wavelet_dir=wavelet_dir,
         experiment_name=experiment_name,
         conditions=conditions,
         n_channels=n_channels,
         n_times=n_times,
         reuse_wavelets=reuse_wavelets,
-        subset_cache_dir=subset_cache_dir,
-        reuse_subset_cache=reuse_subset_cache,
         n_jobs=n_jobs,
     )
 
@@ -565,13 +534,13 @@ def run_condition_comparison(
         pooled = pooled.select_participants(keep)
         _logger.info(f"Restricted to {len(keep)} participant(s): {keep}")
 
-    # The canonical JOINED product name, as in run_iva_condition_tracks.py.
+    # The canonical JOINED_SEPARATE product name, as in run_iva_condition_tracks.py.
     # Deliberately NOT pooled.data.label: that is a *data* label, and the wavelet
-    # transform appends the representation to it ("Joined_ASSR (wavelet power
+    # transform appends the representation to it ("JoinedSeparate_ASSR (wavelet power
     # 1-50 Hz)"). Using it here would put spaces, parentheses and a frequency range
     # into the plot directory and into every figure filename, and would disagree
     # with the component store, which names the condition from the enum.
-    label = f"{ConditionVariants.JOINED.value}_{music_type.value}"
+    label = f"{ConditionVariants.JOINED_SEPARATE.value}_{music_type.value}"
     sfreq = pooled.data.sfreq
     # One canonical name for the restriction, used by the store, the plot
     # directory and every figure filename. A named band keeps its name so
@@ -675,8 +644,8 @@ def run_condition_comparison(
             )
         save_iva_components(
             experiment=experiment_name,
-            condition=ConditionVariants.JOINED,
-            variant=IvaVariants.CHANNEL_JOINED,
+            condition=ConditionVariants.JOINED_SEPARATE,
+            variant=IvaVariants.CHANNEL_JOINED_SEPARATE,
             music_type=music_type,
             band=band_name,
             n_pca=n_pca,
@@ -716,7 +685,14 @@ def run_condition_comparison(
         if band_name is None
         else SpectrumTypeVariants.BANDS.value
     )
-    out_dir = save_root / _STAGE_DIR / label / spectrum / _ANALYSIS_DIR / f"pca_{n_pca}"
+    out_dir = ProjectPaths.analysis_plots_dir(
+        _STAGE_DIR,
+        label,
+        spectrum=spectrum,
+        analysis_type=_ANALYSIS_DIR,
+        n_pca=n_pca,
+        root=save_root,
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
     participants_dir = out_dir / "participants"
     prefix = "" if band_name is None else f"{band_name}_"
@@ -849,21 +825,14 @@ def run_condition_comparison(
 # ---------------------------------------------------------------------------
 
 
-def main(argv: list[str] | None = None) -> None:
-    """Parse arguments and run the joined comparison for every music type.
+def run(args: argparse.Namespace) -> None:
+    """Run the analysis for an already-parsed argument namespace.
 
-    Each music type is a separate joined run: the pooled cohort and the
-    decomposition are per music type, so nothing is shared between them.
+    Split out of :func:`main` so a notebook can drive the same code path the CLI and the
+    PBS job take, without going through ``sys.argv``.
 
-    :param argv: Command-line arguments; ``None`` reads ``sys.argv``.
+    :param args: Parsed arguments, as :func:`_build_arg_parser` produces.
     """
-    args = _build_arg_parser().parse_args(argv)
-
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-
     experiment_name = ExperimentNames(args.experiment)
     if args.music_type is not None:
         music_types = [MusicTypeVariants(mt) for mt in args.music_type]
@@ -896,12 +865,6 @@ def main(argv: list[str] | None = None) -> None:
             else ProjectPaths.PROCESSED_DATA_DIR
         )
     )
-    subset_cache_dir = (
-        resolve_notebook_wavelet_cache_dir(experiment_name)
-        / SpectrumTypeVariants.BROADBAND.value
-        if args.subset_cache
-        else None
-    )
     freqs_full = np.linspace(
         args.wavelet_freq_min, args.wavelet_freq_max, args.wavelet_n_freqs
     )
@@ -920,8 +883,7 @@ def main(argv: list[str] | None = None) -> None:
         f"band={band_token(band) or SpectrumTypeVariants.BROADBAND.value}, "
         f"iva_opt={args.iva_opt_approach}"
     )
-    _logger.info(f"Wavelet source cache : {wavelet_dir}")
-    _logger.info(f"Wavelet subset cache : {subset_cache_dir or 'disabled'}")
+    _logger.info(f"Wavelet store : {wavelet_dir}")
 
     for music_type in music_types:
         _logger.info(f"=== {music_type.value} ===")
@@ -933,8 +895,6 @@ def main(argv: list[str] | None = None) -> None:
             freqs_full=freqs_full,
             wavelet_dir=wavelet_dir,
             reuse_wavelets=args.reuse_wavelets,
-            subset_cache_dir=subset_cache_dir,
-            reuse_subset_cache=not args.no_reuse_subset_cache,
             n_pca=args.n_pca,
             components=components,
             n_pairs=args.n_pairs,
@@ -955,6 +915,24 @@ def main(argv: list[str] | None = None) -> None:
             coordinate_system=CoordinateSystems(args.coordinate_system),
             lenient_mask=args.lenient_mask,
         )
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Parse arguments and run the joined comparison for every music type.
+
+    Each music type is a separate joined run: the pooled cohort and the
+    decomposition are per music type, so nothing is shared between them.
+
+    :param argv: Command-line arguments; ``None`` reads ``sys.argv``.
+    """
+    args = _build_arg_parser().parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+    run(args)
 
 
 if __name__ == "__main__":

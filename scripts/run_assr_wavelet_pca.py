@@ -58,15 +58,15 @@ Inputs (produced by stimulus alignment + the wavelet store jobs)::
 
     data/processed/<exp>/concatenated/<Condition>_ASSR.stimulus_onsets.npy
     data/processed/<exp>/concatenated/<Condition>_ASSR.metadata.csv
-    data/processed/<exp>/wavelets/broadband/<Condition>_ASSR__wavelet_power__*__freqdim1.npz
+    data/processed/<exp>/wavelets/<Condition>_ASSR/<participant>__wavelet_power__*.npy
 
 One ``RAW_CROPPED`` recording header is also opened (``preload=False``, no sample
 data) for the topomap electrode positions.
 
-The wavelet cache is ~tens of GB and ``savez_compressed`` stores it as a single
-deflate stream, so it is read **lazily** in one sequential pass: every channel
-block is decompressed once and immediately reduced to its ``(n_freqs, win)``
-trial average, keeping peak memory to a single subject's channel stack.
+The wavelets are tens of GB, so they are read **lazily**, one memory-mapped
+participant at a time: every channel block is read once and immediately reduced to
+its ``(n_freqs, win)`` trial average, keeping peak memory to a single subject's
+channel stack.
 
 Output plots::
 
@@ -78,7 +78,6 @@ The unreduced reference figures share that directory under the
 
 import argparse
 import sys
-import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -89,7 +88,6 @@ matplotlib.use("Agg")  # headless: no interactive display on the cluster
 import matplotlib.pyplot as plt  # noqa: E402
 import mne  # noqa: E402
 import numpy as np  # noqa: E402
-import numpy.lib.format as npformat  # noqa: E402
 import pandas as pd  # noqa: E402
 from scipy.stats import zscore  # noqa: E402
 from sklearn.decomposition import PCA  # noqa: E402
@@ -109,6 +107,11 @@ from src.definitions.fields import (  # noqa: E402
     ExperimentNames,
     MusicTypeVariants,
     PreprocessedDataVariants,
+)
+from src.io.wavelet_store import (  # noqa: E402
+    WaveletSet,
+    find_wavelet_set,
+    wavelet_label_dir,
 )
 from src.preprocessing.pipeline import DatasetHandler  # noqa: E402
 
@@ -405,9 +408,8 @@ def component_comparison(
 
 
 def stream_wavelet_pca(
-    npz_path: Path,
-    n_channels: int,
-    n_freqs: int,
+    wavelet_set: WaveletSet,
+    participants: list[str],
     onsets: np.ndarray,
     pre: int,
     post: int,
@@ -418,25 +420,22 @@ def stream_wavelet_pca(
     zscore_vs_recording: bool = True,
     baseline_mode: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int, UnreducedReference]:
-    """Stream the whole wavelet cache once, reducing each subject to its TF maps.
+    """Read every participant once, reducing each subject to its TF maps.
 
-    ``savez_compressed`` writes ``data.npy`` (shape ``(n_subj, n_channels*n_freqs,
-    n_times)``) as one sequential deflate stream, so it cannot be sliced randomly.
-    This reader decompresses one ``(n_freqs, n_times)`` channel block at a time,
-    z-scores it against the whole recording (optional) and epoch-averages it, then
-    once a subject's channel stack is complete collapses it to its leading component
-    TF maps and frees the stack. Peak memory is one subject's ``(n_channels,
+    Each subject's memory-mapped wavelets are read one ``(n_freqs, n_times)`` channel
+    block at a time, z-scored against the whole recording (optional) and
+    epoch-averaged; once a subject's channel stack is complete it is collapsed to its
+    leading component TF maps and freed. Peak memory is one subject's ``(n_channels,
     n_freqs, win)`` array, not the full multi-GB tensor. Keeping more components
-    costs one PCA fit per subject either way — the streaming read dominates.
+    costs one PCA fit per subject either way — the read dominates.
 
     The unreduced channel-space summaries (see :class:`UnreducedReference`) are taken
     from the same live stack, so the no-PCA reference figures cost no second pass and
     no extra memory beyond a few small arrays.
 
     Args:
-        npz_path: Path to the ``*__wavelet_power__*__freqdim1.npz`` cache.
-        n_channels: Number of EEG channels in the cache.
-        n_freqs: Number of wavelet frequencies in the cache.
+        wavelet_set: The condition's stored wavelets.
+        participants: Participants to read, in the subject order of the outputs.
         onsets: Stimulus onset sample indices.
         pre: Samples before each onset.
         post: Samples after each onset.
@@ -460,66 +459,50 @@ def stream_wavelet_pca(
         per component, by the caller.
     """
     win = pre + post
-    with zipfile.ZipFile(npz_path) as zf:
-        with zf.open("data.npy") as fh:
-            version = npformat.read_magic(fh)
-            if version == (1, 0):
-                shape, _, dtype = npformat.read_array_header_1_0(fh)
+    n_subj = len(participants)
+    n_channels, n_freqs = wavelet_set.n_channels, wavelet_set.n_freqs
+    # Component-major storage: axis 0 = component, axis 1 = subject. Every
+    # component is produced by the same code path, so none is special-cased.
+    tf_maps = np.zeros((n_components, n_subj, n_freqs, win), dtype=np.float64)
+    loadings = np.zeros((n_components, n_subj, n_channels), dtype=np.float64)
+    explained = np.zeros((n_components, n_subj), dtype=np.float64)
+    # Unreduced channel-space summaries, taken from the same live stack.
+    chan_mean_tf = np.zeros((n_subj, n_freqs, win), dtype=np.float64)
+    chan_stim_mean = np.zeros((n_subj, n_channels, n_freqs), dtype=np.float64)
+    chan_base_mean = np.zeros((n_subj, n_channels, n_freqs), dtype=np.float64)
+    n_times = 0
+    for subj, participant in enumerate(participants):
+        subject = wavelet_set.open(participant)
+        n_times = subject.shape[-1]
+        stack = np.empty((n_channels, n_freqs, win), dtype=np.float64)
+        for chan in range(n_channels):
+            block = np.asarray(subject[chan], dtype=np.float64)
+            if zscore_vs_recording:
+                block = zscore(block, axis=1)
+            if baseline_mode is None:
+                ev, _ = epoch_average(block, onsets, pre, post)  # (n_freqs, win)
             else:
-                shape, _, dtype = npformat.read_array_header_2_0(fh)
-            n_subj, n_feat_flat, n_times = shape
-            if n_feat_flat != n_channels * n_freqs:
-                raise ValueError(
-                    f"feature axis {n_feat_flat} != n_channels*n_freqs "
-                    f"{n_channels * n_freqs}"
+                ev, _ = epoch_average_baselined(
+                    block, onsets, pre, post, base_mask, baseline_mode
                 )
-
-            block_bytes = n_freqs * n_times * dtype.itemsize
-            # Component-major storage: axis 0 = component, axis 1 = subject. Every
-            # component is produced by the same code path, so none is special-cased.
-            tf_maps = np.zeros((n_components, n_subj, n_freqs, win), dtype=np.float64)
-            loadings = np.zeros((n_components, n_subj, n_channels), dtype=np.float64)
-            explained = np.zeros((n_components, n_subj), dtype=np.float64)
-            # Unreduced channel-space summaries, taken from the same live stack.
-            chan_mean_tf = np.zeros((n_subj, n_freqs, win), dtype=np.float64)
-            chan_stim_mean = np.zeros((n_subj, n_channels, n_freqs), dtype=np.float64)
-            chan_base_mean = np.zeros((n_subj, n_channels, n_freqs), dtype=np.float64)
-            for subj in range(n_subj):
-                stack = np.empty((n_channels, n_freqs, win), dtype=np.float64)
-                for chan in range(n_channels):
-                    buf = fh.read(block_bytes)
-                    block = np.frombuffer(
-                        buf, dtype=dtype, count=n_freqs * n_times
-                    ).reshape(n_freqs, n_times)
-                    if zscore_vs_recording:
-                        block = zscore(block, axis=1)
-                    if baseline_mode is None:
-                        ev, _ = epoch_average(
-                            block, onsets, pre, post
-                        )  # (n_freqs, win)
-                    else:
-                        ev, _ = epoch_average_baselined(
-                            block, onsets, pre, post, base_mask, baseline_mode
-                        )
-                    stack[chan] = ev
-                (
-                    tf_maps[:, subj],
-                    loadings[:, subj],
-                    explained[:, subj],
-                ) = channel_pca_tf_maps(stack, n_components)
-                # No-PCA reference summaries, while the stack is still alive.
-                chan_mean_tf[subj] = stack.mean(axis=0)
-                chan_stim_mean[subj] = stack[:, :, stim_mask].mean(axis=2)
-                chan_base_mean[subj] = stack[:, :, base_mask].mean(axis=2)
-                del stack
-                ev_summary = ", ".join(
-                    f"PC{c + 1} {explained[c, subj] * 100:.1f}%"
-                    for c in range(n_components)
-                )
-                print(
-                    f"  reduced subject {subj + 1}/{n_subj} ({ev_summary})",
-                    flush=True,
-                )
+            stack[chan] = ev
+        (
+            tf_maps[:, subj],
+            loadings[:, subj],
+            explained[:, subj],
+        ) = channel_pca_tf_maps(stack, n_components)
+        # No-PCA reference summaries, while the stack is still alive.
+        chan_mean_tf[subj] = stack.mean(axis=0)
+        chan_stim_mean[subj] = stack[:, :, stim_mask].mean(axis=2)
+        chan_base_mean[subj] = stack[:, :, base_mask].mean(axis=2)
+        del stack
+        ev_summary = ", ".join(
+            f"PC{c + 1} {explained[c, subj] * 100:.1f}%" for c in range(n_components)
+        )
+        print(
+            f"  reduced subject {subj + 1}/{n_subj} ({participant}, {ev_summary})",
+            flush=True,
+        )
     reference = UnreducedReference(chan_mean_tf, chan_stim_mean, chan_base_mean)
     return tf_maps, loadings, explained, n_times, reference
 
@@ -527,29 +510,6 @@ def stream_wavelet_pca(
 # --------------------------------------------------------------------------- #
 #  IO helpers                                                                 #
 # --------------------------------------------------------------------------- #
-def read_wavelet_metadata(npz_path: Path) -> tuple[np.ndarray, list[str], int]:
-    """Read the small metadata members and channel names from a wavelet cache.
-
-    Args:
-        npz_path: Path to the wavelet-power ``.npz`` cache.
-
-    Returns:
-        Tuple ``(freqs, channel_names, n_freqs)``. ``channel_names`` is recovered
-        from ``feature_names`` (layout ``channel * n_freqs + freq``).
-    """
-    with zipfile.ZipFile(npz_path) as zf:
-        with zf.open("freqs.npy") as fh:
-            freqs = npformat.read_array(fh, allow_pickle=True)
-        with zf.open("feature_names.npy") as fh:
-            feature_names = npformat.read_array(fh, allow_pickle=True)
-    n_freqs = len(freqs)
-    channel_names = [
-        str(feature_names[i * n_freqs]).split("@")[0]
-        for i in range(len(feature_names) // n_freqs)
-    ]
-    return np.asarray(freqs, dtype=float), channel_names, n_freqs
-
-
 def grid_shape(n_panels: int, max_cols: int = 5) -> tuple[int, int]:
     """Return ``(nrows, ncols)`` for a roughly square panel grid."""
     ncols = min(max_cols, n_panels)
@@ -1014,7 +974,7 @@ def plot_unreduced_channel_topomaps(
 # --------------------------------------------------------------------------- #
 #  Orchestration                                                              #
 # --------------------------------------------------------------------------- #
-def run_pca(args: argparse.Namespace) -> None:
+def run(args: argparse.Namespace) -> None:
     """Run the full channel-PCA reduction for one condition, writing all plots."""
     experiment = ExperimentNames(args.experiment)
     condition = ConditionVariants(args.condition)
@@ -1025,39 +985,42 @@ def run_pca(args: argparse.Namespace) -> None:
     concat_dir = processed_dir / PreprocessedDataVariants.CONCATENATED.value
     onsets_path = concat_dir / f"{label}{ProjectPaths.STIMULUS_ONSETS_SUFFIX}"
     meta_path = concat_dir / f"{label}.metadata.csv"
-    wavelet_dir = processed_dir / "wavelets" / "broadband"
-    wavelet_matches = sorted(
-        wavelet_dir.glob(f"{label}__wavelet_power__*__freqdim1.npz")
-    )
+    try:
+        wavelet_set = find_wavelet_set(wavelet_label_dir(None, experiment, label))
+    except FileNotFoundError:
+        wavelet_set = None
 
     # A condition may not have been generated yet — skip cleanly instead of failing.
     missing = [p for p in (onsets_path, meta_path) if not p.exists()]
-    if missing or not wavelet_matches:
+    if missing or wavelet_set is None:
         print(
             f"[SKIP] {label}: missing inputs "
-            f"({[p.name for p in missing] + ([] if wavelet_matches else ['wavelet npz'])}).",
+            f"({[p.name for p in missing] + ([] if wavelet_set else ['wavelets'])}).",
             flush=True,
         )
         return
-    wavelet_path = wavelet_matches[0]
 
     save_root = Path(args.save_dir) if args.save_dir else ProjectPaths.PLOTS_PATH
-    plots_dir = save_root / "00-preprocessing" / "assr_wavelet_pca" / label
+    plots_dir = ProjectPaths.analysis_plots_dir(
+        "00-preprocessing", label, analysis_type="assr_wavelet_pca", root=save_root
+    )
     plots_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"=== {label} ===", flush=True)
-    print(f"wavelet : {wavelet_path}", flush=True)
+    print(f"wavelet : {wavelet_set.directory}", flush=True)
     print(f"plots   : {plots_dir}", flush=True)
 
     # ---- Load shared inputs -------------------------------------------------
     onsets = np.load(onsets_path)
     meta = pd.read_csv(meta_path, index_col=0)
     gaps = np.diff(onsets)
-    freqs, channel_names, n_freqs = read_wavelet_metadata(wavelet_path)
-    n_channels = len(channel_names)
+    freqs, channel_names = wavelet_set.freqs, wavelet_set.channel_names
+    n_freqs, n_channels = wavelet_set.n_freqs, wavelet_set.n_channels
 
-    # Subject index -> participant label (ordered by concatenated person index).
+    # Subject index -> participant label (ordered by concatenated person index); the
+    # wavelets are read in that same order, so index s means one person everywhere.
     idx_to_pid = dict(zip(meta[_PIDX_COL], meta[_PID_COL].astype(str).str.zfill(3)))
+    participants = [idx_to_pid[s] for s in sorted(idx_to_pid)]
 
     sfreq = args.sfreq
     pre = int(round(args.pre_pad * sfreq))
@@ -1095,11 +1058,10 @@ def run_pca(args: argparse.Namespace) -> None:
         )
 
     # ---- Wavelet: single streaming pass, PCA per subject --------------------
-    print(f"Streaming wavelet cache ({wavelet_path.name}) ...", flush=True)
+    print(f"Reading wavelets of {len(participants)} participant(s) ...", flush=True)
     tf_maps, loadings, explained, n_times_wav, reference = stream_wavelet_pca(
-        wavelet_path,
-        n_channels,
-        n_freqs,
+        wavelet_set,
+        participants,
         onsets,
         pre,
         post,
@@ -1224,14 +1186,13 @@ def run_pca(args: argparse.Namespace) -> None:
     # the z-scored ones rather than overwriting them.
     if args.baseline_mode != "none":
         print(
-            f"Streaming again for the pre-stimulus-baseline ({args.baseline_mode}) "
+            f"Reading again for the pre-stimulus-baseline ({args.baseline_mode}) "
             "TF-map variant ...",
             flush=True,
         )
         tf_base, load_base, exp_base, _n_b, _ref_b = stream_wavelet_pca(
-            wavelet_path,
-            n_channels,
-            n_freqs,
+            wavelet_set,
+            participants,
             onsets,
             pre,
             post,
@@ -1383,7 +1344,7 @@ def run_pca(args: argparse.Namespace) -> None:
     print(f"[DONE] {label}: plots written to {plots_dir}", flush=True)
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _build_arg_parser() -> argparse.ArgumentParser:
     """Build the command-line argument parser."""
     parser = argparse.ArgumentParser(
         description=(
@@ -1496,5 +1457,13 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def main(argv: list[str] | None = None) -> None:
+    """Parse arguments and run.
+
+    :param argv: Command-line arguments; ``None`` reads ``sys.argv``.
+    """
+    run(_build_arg_parser().parse_args(argv))
+
+
 if __name__ == "__main__":
-    run_pca(build_parser().parse_args())
+    main()

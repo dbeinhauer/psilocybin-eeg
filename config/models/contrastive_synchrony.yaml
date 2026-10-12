@@ -1,0 +1,57 @@
+# Stage 08 — contrastive synchrony model: the baseline run.
+#
+# Every setting of a run lives here, and this file is the single source of defaults:
+# a variant file only lists what it changes and is merged on top of this one.
+#
+#   python scripts/run_contrastive_synchrony.py                       # this file as is
+#   python scripts/run_contrastive_synchrony.py --config my_variant.yaml
+#   python scripts/run_contrastive_synchrony.py --set model.name=mlp training.epochs=5
+#
+# Unknown keys are rejected, so a typo fails instead of being silently ignored.
+# Method: docs/analyses/08-contrastive-synchrony/README.md
+
+run_name: baseline  # names the results and plots directory of the run
+
+data:
+  experiment: psilo_music  # ASSR is held out for validation and refused here
+  conditions: [Placebo]
+  music_types: [CLASSIC, PSYTRANCE]
+  exclusions: [bad_music, artifacts]  # ExclusionCategories values
+  frame_rate: 25.0  # Hz; wavelet power is averaged into frames of this rate at load
+  freq_range: [1.0, 50.0]  # Hz kept from the 1-50 Hz wavelet grid
+  freq_pooling: bands  # bands: average bins into FREQUENCY_BANDS | none: keep bins
+  channels: null  # null = every channel, or a list of electrode names
+  normalize: subject  # subject: z-score each subject's feature over time | none
+  window_s: 4.0  # length of one embedded interval
+
+model:
+  name: conv1d  # a key of src.models.encoders.ENCODERS
+  embedding_dim: 64
+  encoders:  # constructor arguments per encoder; only model.name's entry is used
+    conv1d:
+      hidden: 128
+      n_layers: 3
+      kernel_size: 5
+      dropout: 0.1
+    mlp:
+      hidden: 256
+      dropout: 0.1
+
+training:
+  epochs: 50
+  steps_per_epoch: 100
+  times_per_batch: 64  # distinct time windows per batch
+  subjects_per_time: 4  # each window drawn from this many subjects -> the positives
+  temperature: 0.1
+  learning_rate: 1.0e-3
+  weight_decay: 1.0e-4
+  exclusion_s: 4.0  # same-track windows closer than this are not used as negatives
+  n_folds: 5  # tracks cut into this many time blocks; one model per held-out block
+  val_steps: 20
+  seed: 42
+  device: auto  # auto | cpu | cuda
+
+scoring:
+  stride_s: 1.0  # hop between scored windows
+  n_null: 200  # circular-shift surrogates for the null distribution
+  null_quantile: 0.95  # a window above this null quantile is a candidate

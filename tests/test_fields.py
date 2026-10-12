@@ -79,7 +79,7 @@ class TestConditionVariants:
         assert ConditionVariants.PSILOCYBIN.value == "Psilocybin"
 
     def test_joined(self):
-        assert ConditionVariants.JOINED.value == "Joined"
+        assert ConditionVariants.JOINED_SEPARATE.value == "JoinedSeparate"
 
     def test_joined_tracks(self):
         assert ConditionVariants.JOINED_TRACKS.value == "JoinedTracks"
@@ -88,13 +88,13 @@ class TestConditionVariants:
         assert set(JOINED_CONDITIONS) == set(ConditionVariants) - set(REAL_CONDITIONS)
 
     def test_real_conditions_excludes_the_virtual_one(self):
-        # JOINED selects over the real conditions, so anything mapping a *recording*
+        # JOINED_SEPARATE selects over the real conditions, so anything mapping a *recording*
         # to a condition must iterate REAL_CONDITIONS rather than the whole enum.
         assert REAL_CONDITIONS == (
             ConditionVariants.PLACEBO,
             ConditionVariants.PSILOCYBIN,
         )
-        assert ConditionVariants.JOINED not in REAL_CONDITIONS
+        assert ConditionVariants.JOINED_SEPARATE not in REAL_CONDITIONS
 
 
 class TestMusicTypeVariants:
@@ -196,7 +196,7 @@ class TestIvaVariants:
             "iva_channel",
             "iva_frequency_channel",
             "iva_time",
-            "iva_channel_joined",
+            "iva_channel_joined_separate",
             "iva_channel_joined_tracks",
         }
 
@@ -211,7 +211,7 @@ class TestIvaVariants:
             len(
                 {
                     IvaVariants.CHANNEL.value,
-                    IvaVariants.CHANNEL_JOINED.value,
+                    IvaVariants.CHANNEL_JOINED_SEPARATE.value,
                     IvaVariants.CHANNEL_JOINED_TRACKS.value,
                 }
             )
@@ -222,7 +222,7 @@ class TestIvaVariants:
 class TestJicaVariants:
     def test_values_are_the_canonical_output_subdirectory_names(self):
         assert {v.value for v in JicaVariants} == {
-            "ica_channel_joined",
+            "ica_channel_joined_separate",
             "ica_channel_joined_tracks",
             "ica_component_analysis",
         }
@@ -238,8 +238,8 @@ class TestJicaVariants:
 
     def test_the_two_joins_mirror_the_iva_ones(self):
         """Same joins, different decomposition — so the names should be recognisable."""
-        assert JicaVariants.CHANNEL_JOINED.value.endswith(
-            IvaVariants.CHANNEL_JOINED.value.removeprefix("iva_")
+        assert JicaVariants.CHANNEL_JOINED_SEPARATE.value.endswith(
+            IvaVariants.CHANNEL_JOINED_SEPARATE.value.removeprefix("iva_")
         )
         assert JicaVariants.CHANNEL_JOINED_TRACKS.value.endswith(
             IvaVariants.CHANNEL_JOINED_TRACKS.value.removeprefix("iva_")

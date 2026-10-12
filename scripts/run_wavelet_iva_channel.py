@@ -48,7 +48,7 @@ intentional, matching the notebook.
 
 Output (canonical per-condition layout)::
 
-    plots/05-channel-wavelet-iva-analysis/<Condition>_<MusicType>/
+    plots/05-wavelet-iva-analysis/<Condition>_<MusicType>/
         broadband/iva_channel/pca_<n_pca>/   # default (no --band)
             iva_component_ranking_<label>.png
             ...
@@ -230,7 +230,9 @@ from scripts.analysis_common import (  # noqa: E402
     _broadband_wavelet_4d,
     add_iva_store_args,
     add_wavelet_grid_args,
+    add_subset_arguments,
     analyzers_to_datasets,
+    apply_subset,
     load_analyzers,
     participant_labels,
     resolve_wavelet_dir,
@@ -262,7 +264,7 @@ from src.visualization import iva_quality_plots as qplots  # noqa: E402
 
 _logger = logging.getLogger(__name__)
 
-_STAGE_DIR = "05-channel-wavelet-iva-analysis"
+_STAGE_DIR = "05-wavelet-iva-analysis"
 _ANALYSIS_DIR = IvaVariants.CHANNEL.value
 
 # ---------------------------------------------------------------------------
@@ -471,6 +473,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable DEBUG logging.",
     )
+    add_subset_arguments(parser)
+
     return parser
 
 
@@ -1886,15 +1890,14 @@ def _run_iva(
 # ---------------------------------------------------------------------------
 
 
-if __name__ == "__main__":
-    parser = _build_arg_parser()
-    args = parser.parse_args()
+def run(args: argparse.Namespace) -> None:
+    """Run the analysis for an already-parsed argument namespace.
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    Split out of the ``__main__`` block so a notebook can drive the same code path the
+    CLI and the PBS job take, without going through ``sys.argv``.
 
+    :param args: Parsed arguments, as :func:`_build_arg_parser` produces.
+    """
     experiment_name = ExperimentNames(args.experiment)
     condition = ConditionVariants(args.condition)
     if args.music_type is not None:
@@ -1945,6 +1948,7 @@ if __name__ == "__main__":
         experiment_name=experiment_name,
     )
     datasets = analyzers_to_datasets(analyzers)
+    datasets = apply_subset(datasets, args)
 
     for mt in music_types:
         mt_label = mt.value
@@ -1990,7 +1994,7 @@ if __name__ == "__main__":
             dataset_key,
             representation="power",
             freqs=freqs_full,
-            wavelet_dir=(wavelet_dir / SpectrumTypeVariants.BROADBAND.value),
+            wavelet_dir=wavelet_dir,
             reuse_wavelets=args.reuse_wavelets,
             analyzer=analyzer,
         )
@@ -2014,7 +2018,9 @@ if __name__ == "__main__":
                 f"(freqs {iva_freqs[0]:.1f}-{iva_freqs[-1]:.1f} Hz)"
             )
 
-        save_dir = save_root / _STAGE_DIR / dataset_key
+        save_dir = ProjectPaths.analysis_plots_dir(
+            _STAGE_DIR, dataset_key, root=save_root
+        )
         _run_iva(
             data_4d,
             wd.sfreq,
@@ -2041,3 +2047,20 @@ if __name__ == "__main__":
         )
 
     _logger.info("IVA-channel analysis complete.")
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Parse arguments, configure logging and run.
+
+    :param argv: Command-line arguments; ``None`` reads ``sys.argv``.
+    """
+    args = _build_arg_parser().parse_args(argv)
+    logging.basicConfig(
+        level=logging.DEBUG if getattr(args, "verbose", False) else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    run(args)
+
+
+if __name__ == "__main__":
+    main()

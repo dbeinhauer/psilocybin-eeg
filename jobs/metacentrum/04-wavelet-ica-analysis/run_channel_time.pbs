@@ -14,9 +14,9 @@
 # components.  Processes the Placebo condition on both music types.
 #
 # Output:
-#   plots/04-channel-time-wavelet-ica-analysis/Placebo_CLASSIC/
+#   plots/04-wavelet-ica-analysis/Placebo_CLASSIC/
 #       broadband/channel_time/*.png
-#   plots/04-channel-time-wavelet-ica-analysis/Placebo_PSYTRANCE/
+#   plots/04-wavelet-ica-analysis/Placebo_PSYTRANCE/
 #       broadband/channel_time/*.png
 #
 # Reuses cached wavelet tensors from Stage-03 (run_wavelet_power.pbs).

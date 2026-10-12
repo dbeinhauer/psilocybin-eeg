@@ -10,6 +10,10 @@ in the psilocybin-EEG project.
 | Member | Value | Description |
 |--------|-------|-------------|
 | `PSILO_MUSIC` | `"psilo_music"` | Experiment with placebo and psilocybin, with music listening |
+| `ASSR` | `"assr"` | Auditory steady-state response recordings; stimulus timing from `fam+` annotations rather than a TAG channel |
+
+The values are also directory names under `data/raw/`, `data/interim/` and
+`data/processed/`, so they are a data vocabulary as well as a code enum.
 
 ### CoordinateSystems
 
@@ -24,10 +28,10 @@ in the psilocybin-EEG project.
 |--------|-------|
 | `PLACEBO` | `"Placebo"` |
 | `PSILOCYBIN` | `"Psilocybin"` |
-| `JOINED` | `"Joined"` |
+| `JOINED_SEPARATE` | `"JoinedSeparate"` |
 | `JOINED_TRACKS` | `"JoinedTracks"` |
 
-`JOINED` and `JOINED_TRACKS` are **virtual** conditions — no recording ever carries
+`JOINED_SEPARATE` and `JOINED_TRACKS` are **virtual** conditions — no recording ever carries
 either. Both select both real conditions at once, restricted to participants that
 contribute a recording to both, so both are balanced within-subject designs and both
 select exactly the same recordings. Use `REAL_CONDITIONS` (a tuple of `PLACEBO` and
@@ -35,53 +39,48 @@ select exactly the same recordings. Use `REAL_CONDITIONS` (a tuple of `PLACEBO` 
 `JOINED_CONDITIONS` for the two virtual ones.
 
 They differ only in the axis the conditions are pooled along, and each is usable
-anywhere a single condition is (`--condition Joined`, `--condition JoinedTracks`).
+anywhere a single condition is (`--condition JoinedSeparate`, `--condition JoinedTracks`).
 
 Neither needs any extra preprocessing — both read the same `RAW_CROPPED` as every
 single-condition run.
 
-- `JOINED` products are named `Joined_<MusicType>` (e.g. `Joined_ASSR.npy`).
+- `JOINED_SEPARATE` products are named `JoinedSeparate_<MusicType>` (e.g. `JoinedSeparate_ASSR.npy`).
 - `JOINED_TRACKS` products are named `JoinedTracks_<MusicType>`, with an extra
   `.segment_boundaries.npy` sidecar recording where each condition's time segment
   starts and ends. Its wavelets are **assembled in memory** from the two per-condition
-  caches rather than cached separately — the caches already share a time base, so the
+  stores rather than stored separately — the stores already share a time base, so the
   join is a selection plus a concatenation, not worth another ~85 GB on disk. Those
-  per-condition caches must exist first: build them by running the same workflow with
+  per-condition stores must exist first: build them by running the same workflow with
   `--condition Placebo` and `--condition Psilocybin`.
 
-For `JOINED`, the subject axis is ordered as one contiguous block per condition — all
+For `JOINED_SEPARATE`, the subject axis is ordered as one contiguous block per condition — all
 Placebo, then all Psilocybin, participants in the same order within each block — so
 subject `k` and subject `k + n_pairs` are the same participant. Use `subject_conditions`,
 `condition_index_mask`, `participant_condition_labels` and `paired_subject_index` from
 `scripts/analysis_common.py` to recover the split rather than slicing by position.
 
-`JOINED` **wavelets** are assembled in memory too, for the same reason as
-`JOINED_TRACKS`: the two per-condition caches already share the aligned time base, so
+`JOINED_SEPARATE` **wavelets** are assembled in memory too, for the same reason as
+`JOINED_TRACKS`: the two per-condition stores already share the aligned time base, so
 stacking them on the subject axis is a selection plus a concatenation rather than
 another ~100 GB on disk. `scripts/notebook_helpers.load_joined_condition_wavelets`
-loads each condition from its existing cache (one at a time, so the memory peak stays
-at one condition) and hands both to
+loads each condition from its existing store (one at a time) and hands both to
 `src.analysis.condition_tracks.pool_condition_subjects`, which returns a
 `PooledConditionSubjects` carrying the per-subject participant/condition bookkeeping —
 `condition_mask`, `condition_subjects`, `partner_index`, `subject_labels` and
 `select_participants`, the subject-axis counterparts of the `analysis_common` helpers
 above, working off the pooled object instead of an analyser's metadata. Asking
-`compute_wavelet_datasets` for a `Joined_*` label directly would instead write that
-second copy of the cache.
+`compute_wavelet_datasets` to store a `JoinedSeparate_*` label directly is refused: the
+store holds one file per participant, and a pooled cohort names each participant twice.
 
-Either join still has to read the two per-condition caches once, and that read — tens
-of GB decompressed per condition — is the dominant cost. Pass `subset_cache_dir` (see
-`resolve_notebook_wavelet_cache_dir` and
-[`notebooks/03-wavelet-analysis/README.md`](../notebooks/03-wavelet-analysis/README.md))
-to have the trimmed tensor stored per extent under the stage-03 notebook, so later runs
-skip that read entirely. The entries are keyed by condition and extent rather than by
-workflow, so they are shared with every single-condition notebook.
+Either join reads the two per-condition stores, memory-mapped, so a channel/time subset
+(`n_channels`, `n_times`) reads only that slice. The store layout is described in
+[`docs/analyses/03-wavelet-analysis/`](analyses/03-wavelet-analysis/README.md).
 
 ### Two ways to join the conditions
 
-`JOINED` is one of two variants, and they are not interchangeable:
+`JOINED_SEPARATE` is one of two variants, and they are not interchangeable:
 
-| | `ConditionVariants.JOINED` | `ConditionVariants.JOINED_TRACKS` |
+| | `ConditionVariants.JOINED_SEPARATE` | `ConditionVariants.JOINED_TRACKS` |
 |---|---|---|
 | Pools along | subject axis | **time** axis |
 | Subject axis | `2 × n_pairs` (each participant twice) | `n_pairs` (each participant once) |
@@ -101,8 +100,8 @@ selected the same way, by naming the condition. `PairedConditionTracks.from_anal
 rebuilds the per-condition split from the `.segment_boundaries.npy` sidecar, so
 `condition_track` works even in a bare CLI run that never called the paired loader.
 
-Why the standard workflow needs no changes for `JOINED_TRACKS`: its cached wavelets are
-stored **already per-condition z-scored**. Both segments therefore have mean 0 and unit
+Why the standard workflow needs no changes for `JOINED_TRACKS`: its assembled wavelets are
+returned **already per-condition z-scored**. Both segments therefore have mean 0 and unit
 variance per `(subject, channel, frequency)`, so the pooled series does too — making the
 usual `zscore_by_time` first step an exact identity rather than a re-normalisation that
 would undo the per-condition standardisation.
@@ -234,7 +233,7 @@ subdirectory under `plots/` **and** as the first filename token in the component
 | `CHANNEL` | `"iva_channel"` | channels | time × frequency | TF map `(F, T)` + channel topography `(C,)` |
 | `FREQUENCY_CHANNEL` | `"iva_frequency_channel"` | channel × frequency | time | timecourse `(T,)` + spectro-spatial pattern `(F, C)` |
 | `TIME` | `"iva_time"` | time | channel × frequency | temporal pattern `(T,)` + spectro-spatial score map `(F, C)` |
-| `CHANNEL_JOINED` | `"iva_channel_joined"` | channels | time × frequency | as `CHANNEL`, on the subject-axis join |
+| `CHANNEL_JOINED_SEPARATE` | `"iva_channel_joined_separate"` | channels | time × frequency | as `CHANNEL`, on the subject-axis join |
 | `CHANNEL_JOINED_TRACKS` | `"iva_channel_joined_tracks"` | channels | time × frequency | as `CHANNEL`, on the time-axis join (one shared topography per participant) |
 
 Only the channel-mixing variants have a per-component time-frequency map: the other two
@@ -297,7 +296,7 @@ Written by the IVA CLI scripts under `--store_components` and read through
 
 ```
 data/processed/{experiment}/iva_results/
-└── {Condition}/                                        # Placebo | Psilocybin | Joined | JoinedTracks
+└── {Condition}/                                        # Placebo | Psilocybin | JoinedSeparate | JoinedTracks
     └── {variant}__{MusicType}__{spectrum}__pca{N}.npz
 ```
 
@@ -313,10 +312,10 @@ Each `.npz` holds:
 |-----|-------------|
 | `array__{name}` | One `IvaComponentArrays` entry, `(S, K, ...)`, `float32` by default |
 | `participants` | Participant label per row — **the mapping**; without it the subject axis is unreadable |
-| `subject_conditions` | Condition per row (a participant owns one row per condition in a `Joined` run) |
+| `subject_conditions` | Condition per row (a participant owns one row per condition in a `JoinedSeparate` run) |
 | `freqs`, `times`, `channel_names` | Coordinate axes of the stored arrays; each present only when some array has that axis |
 | `segment_conditions`, `segment_lengths` | Time-axis segments of a `JoinedTracks` run, so a condition is recoverable as a slice |
-| `extra__stimulus_onsets_{Condition}` | Onset samples per condition, trimmed to the stored axis, so an onset-locked read-out needs no re-derivation. Frame matches the arrays: shared axis for `Joined`, segment-local for `JoinedTracks` |
+| `extra__stimulus_onsets_{Condition}` | Onset samples per condition, trimmed to the stored axis, so an onset-locked read-out needs no re-derivation. Frame matches the arrays: shared axis for `JoinedSeparate`, segment-local for `JoinedTracks` |
 | `variant`, `experiment`, `condition`, `music_type`, `band`, `n_pca`, `sfreq` | The run descriptor, i.e. the filename's contents in readable form |
 | `extra__{name}` | Per-run diagnostics (component ranking, PCA explained variance, sign alignment) |
 | `format_version` | On-disk format version; a newer file is refused rather than misread |

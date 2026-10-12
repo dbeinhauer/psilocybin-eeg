@@ -64,7 +64,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.analysis_common import (  # noqa: E402
     BAND_ISC_THRESHOLDS,
+    add_subset_arguments,
     analyzers_to_datasets,
+    apply_subset,
     load_analyzers,
 )
 from src.analysis.isc import (  # noqa: E402
@@ -198,6 +200,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable DEBUG logging.",
     )
+    add_subset_arguments(parser)
+
     return parser
 
 
@@ -523,15 +527,14 @@ def _run_mean_field_analysis(
     )
 
 
-if __name__ == "__main__":
-    parser = _build_arg_parser()
-    args = parser.parse_args()
+def run(args: argparse.Namespace) -> None:
+    """Run the analysis for an already-parsed argument namespace.
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    Split out of the ``__main__`` block so a notebook can drive the same code path the
+    CLI and the PBS job take, without going through ``sys.argv``.
 
+    :param args: Parsed arguments, as :func:`_build_arg_parser` produces.
+    """
     experiment_name = ExperimentNames(args.experiment)
     condition = ConditionVariants(args.condition)
     if args.music_type is not None:
@@ -563,6 +566,7 @@ if __name__ == "__main__":
         experiment_name=experiment_name,
     )
     datasets = analyzers_to_datasets(analyzers)
+    datasets = apply_subset(datasets, args)
     print_data_overview(datasets)
 
     for mt in music_types:
@@ -575,7 +579,9 @@ if __name__ == "__main__":
         ad = datasets[dataset_key]
         _logger.info(f"Dataset [{label}]: shape={ad.data.shape}  sfreq={ad.sfreq} Hz")
 
-        save_dir = save_root / _STAGE_DIR / dataset_key
+        save_dir = ProjectPaths.analysis_plots_dir(
+            _STAGE_DIR, dataset_key, root=save_root
+        )
 
         _run_broadband_analysis(
             ad,
@@ -611,3 +617,20 @@ if __name__ == "__main__":
         )
 
     _logger.info("ISC analysis complete.")
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Parse arguments, configure logging and run.
+
+    :param argv: Command-line arguments; ``None`` reads ``sys.argv``.
+    """
+    args = _build_arg_parser().parse_args(argv)
+    logging.basicConfig(
+        level=logging.DEBUG if getattr(args, "verbose", False) else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    run(args)
+
+
+if __name__ == "__main__":
+    main()

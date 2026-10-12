@@ -9,9 +9,7 @@ entry-point script or from a Jupyter notebook.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import logging
-import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
@@ -44,6 +42,7 @@ import numpy as np
 from scipy.stats import circmean
 
 from src.analysis.data_representations import (
+    subset as data_subset,
     AnalysisData,
     DataRepresentation,
     to_wavelet_phase,
@@ -78,25 +77,26 @@ from src.visualization.mean_variance_plots import (
     plot_windowed_analysis,
 )
 from src.visualization.wavelet_plots import (
-    compute_itpc,
-    compute_phase_band_loo_iscs,
-    plot_band_itpc_timecourse,
     plot_band_power_timecourse,
     plot_cross_frequency_coupling,
     plot_intersubject_variance,
-    plot_itpc_spectrum,
-    plot_itpc_vs_isc,
-    plot_phase_distribution,
-    plot_power_phase_joint,
     plot_spectral_profile,
     plot_tf_isc,
-    plot_tf_itpc_map,
     plot_tf_map,
     plot_wavelet_loo_isc_bar,
     plot_wavelet_loo_isc_distributions,
     plot_wavelet_topomap_isc,
 )
 
+from src.io.wavelet_store import (
+    REPRESENTATIONS,
+    WaveletSet,
+    find_wavelet_set,
+    load_wavelet_subjects,
+    safe_label,
+    wavelet_root,
+    write_wavelet_subject,
+)
 from src.preprocessing.stimulus_alignment import apply_keep_segments_to_array
 
 if TYPE_CHECKING:
@@ -128,11 +128,13 @@ def resolve_wavelet_dir(
     base: str | Path | None,
     experiment_name: ExperimentNames,
 ) -> Path:
-    """Resolve the wavelet cache directory for a given experiment.
+    """Resolve the wavelet store root for a given experiment.
 
     The ``<experiment>/wavelets`` suffix is *always* part of the returned
     path, so the wavelets of one experiment can never be written into another
     experiment's directory — even when an explicit base directory is supplied.
+    Each ``<Condition>_<MusicType>`` label has its own subdirectory below it, holding
+    one file per participant (:mod:`src.io.wavelet_store`).
 
     :param base: Optional base *data* directory. When ``None``, defaults to
         :attr:`ProjectPaths.PROCESSED_DATA_DIR`. It must point at a data root,
@@ -154,7 +156,7 @@ def resolve_wavelet_dir(
             f"{sorted(offending)} in '{root}'). The '<experiment>/wavelets' "
             "suffix is added automatically — pass e.g. 'data/processed'."
         )
-    return root / experiment_name.value / "wavelets"
+    return wavelet_root(root, experiment_name)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -626,7 +628,7 @@ def subject_conditions(filtered_df, n_subjects: int) -> list[str]:
     """Map each concatenated subject index to its condition.
 
     Needed whenever the dataset pools both conditions
-    (:attr:`~src.definitions.fields.ConditionVariants.JOINED`), where the subject axis
+    (:attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE`), where the subject axis
     holds every participant twice and the array alone cannot say which half is which.
 
     :param filtered_df: The analyser's ``filtered_df`` metadata table.
@@ -682,7 +684,7 @@ def paired_subject_index(filtered_df, n_subjects: int) -> np.ndarray:
 
     Lets paired (within-subject) statistics index directly into the subject axis
     without re-deriving the pairing. In a
-    :attr:`~src.definitions.fields.ConditionVariants.JOINED` dataset every participant
+    :attr:`~src.definitions.fields.ConditionVariants.JOINED_SEPARATE` dataset every participant
     contributes exactly two recordings, so every entry is a valid partner index.
 
     :param filtered_df: The analyser's ``filtered_df`` metadata table.
@@ -712,11 +714,23 @@ def paired_subject_index(filtered_df, n_subjects: int) -> np.ndarray:
 
 
 def analyzers_to_datasets(analyzers: dict) -> dict[str, AnalysisData]:
-    """Convert loaded analysers to AnalysisData instances."""
-    datasets = {
-        label: a.to_analysis_data(label=label) for label, a in analyzers.items()
-    }
-    for label, ad in datasets.items():
+    """Convert loaded analysers to AnalysisData instances.
+
+    Each dataset's ``metadata["participants"]`` names the participant of every row,
+    which is how its wavelets are found in the per-subject store
+    (:mod:`src.io.wavelet_store`). An analyser without participant metadata yields a
+    dataset without the list; it can still be transformed, but not stored.
+    """
+    datasets = {}
+    for label, analyzer in analyzers.items():
+        ad = analyzer.to_analysis_data(label=label)
+        try:
+            ad.metadata["participants"] = participant_labels(
+                getattr(analyzer, "filtered_df", None), ad.data.shape[0]
+            )
+        except ValueError as error:
+            _logger.warning(f"[{label}] rows carry no participant ids: {error}")
+        datasets[label] = ad
         _logger.info(f"[{label}] {ad}")
     return datasets
 
@@ -862,6 +876,203 @@ def run_isc_workflow(
 # ──────────────────────────────────────────────────────────────────────
 
 
+def dataset_participants(ad: AnalysisData) -> list[str]:
+    """The participant of every row of *ad*, as :func:`analyzers_to_datasets` records it.
+
+    :raises ValueError: If *ad* names no participants, or one twice. The store holds
+        one file per participant, so a pooled (joined) dataset cannot be stored as
+        one: store each condition on its own and pool them afterwards
+        (:func:`~scripts.notebook_helpers.load_joined_condition_wavelets`).
+    """
+    participants = ad.metadata.get("participants")
+    if participants is None or len(participants) != ad.data.shape[0]:
+        raise ValueError(
+            f"[{ad.label}] the dataset does not name the participant of each of its "
+            f"{ad.data.shape[0]} rows, so its wavelets cannot be stored or read per "
+            "subject. Build it with analyzers_to_datasets."
+        )
+    duplicates = sorted({p for p in participants if list(participants).count(p) > 1})
+    if duplicates:
+        raise ValueError(
+            f"[{ad.label}] participants {duplicates} appear more than once; store each "
+            "condition on its own and pool them with load_joined_condition_wavelets."
+        )
+    return list(participants)
+
+
+def _is_fragment(ad: AnalysisData) -> bool:
+    """Whether *ad* was cut on its channel or time axis.
+
+    A subject subset is not a fragment: each of its subjects is still whole.
+    """
+    original = ad.metadata.get("subset_of")
+    return original is not None and tuple(original[1:]) != tuple(ad.data.shape[1:])
+
+
+def _wavelet_output(
+    data_4d: np.ndarray,
+    ad: AnalysisData,
+    freqs: np.ndarray,
+    n_cycles: np.ndarray,
+    representation: str,
+    *,
+    keep_frequency_dim: bool,
+    reshape_frequency_dim: bool,
+    source: Path | None,
+) -> AnalysisData:
+    """Wrap ``(subjects, channels, freqs, times)`` wavelets in the shape asked for.
+
+    Power is averaged over frequency, phase circularly averaged, when the frequency
+    axis is not kept; a kept axis is either reshaped out (4-D) or flattened into the
+    feature axis channel-major, named ``<channel>@<freq>Hz``.
+    """
+    n_items, n_channels, n_freqs, n_samples = data_4d.shape
+    channel_names = (
+        list(ad.feature_names[:n_channels]) if ad.feature_names is not None else None
+    )
+    feature_names = channel_names
+    if not keep_frequency_dim:
+        data = (
+            data_4d.mean(axis=2)
+            if representation == "power"
+            else circmean(data_4d, high=np.pi, low=-np.pi, axis=2)
+        )
+    elif reshape_frequency_dim:
+        data = data_4d
+    else:
+        data = data_4d.reshape(n_items, n_channels * n_freqs, n_samples)
+        if channel_names is not None:
+            feature_names = [
+                f"{name}@{freq:.1f}Hz" for name in channel_names for freq in freqs
+            ]
+    metadata = {
+        **ad.metadata,
+        "freqs": freqs,
+        "n_cycles": n_cycles,
+        "keep_frequency_dim": keep_frequency_dim,
+    }
+    if source is not None:
+        metadata["loaded_from_wavelet_file"] = str(source)
+    return AnalysisData(
+        data=data,
+        sfreq=ad.sfreq,
+        representation=(
+            DataRepresentation.WAVELET_PHASE
+            if representation == "phase"
+            else DataRepresentation.WAVELET_POWER
+        ),
+        label=(
+            f"{ad.label} (wavelet {representation} {freqs[0]:.0f}-{freqs[-1]:.0f} Hz)"
+        ),
+        feature_names=feature_names,
+        info=ad.info,
+        metadata=metadata,
+    )
+
+
+def _load_stored_wavelets(
+    ad: AnalysisData,
+    directory: Path,
+    representation: str,
+    freqs: np.ndarray,
+) -> tuple[np.ndarray, WaveletSet] | None:
+    """Read *ad*'s subjects from the store at *ad*'s own extent; ``None`` on a miss.
+
+    The extent is the dataset's: its participants, its first channels and its first
+    samples, so a subset run reads only what it keeps.
+
+    :raises ValueError: If the stored channels are not the dataset's.
+    """
+    participants = dataset_participants(ad)
+    try:
+        wavelet_set = find_wavelet_set(directory, representation, freqs)
+    except FileNotFoundError:
+        return None
+    missing = wavelet_set.missing(participants)
+    if missing:
+        _logger.info(f"[{ad.label}] {missing} not stored yet; computing.")
+        return None
+
+    n_channels, n_times = ad.data.shape[1], ad.data.shape[2]
+    if ad.feature_names is not None and (
+        wavelet_set.channel_names[:n_channels] != list(ad.feature_names[:n_channels])
+    ):
+        raise ValueError(
+            f"[{ad.label}] the stored wavelets in {directory} have a different channel "
+            "axis than the dataset; they were built from other data."
+        )
+    stored_times = wavelet_set.open(participants[0]).shape[-1]
+    if stored_times != n_times and not _is_fragment(ad):
+        _logger.warning(
+            f"[{ad.label}] stored wavelets have {stored_times} samples, the dataset "
+            f"{n_times}; reading {min(stored_times, n_times)}."
+        )
+    data = load_wavelet_subjects(
+        wavelet_set,
+        participants,
+        n_channels=n_channels,
+        n_times=min(stored_times, n_times),
+    )
+    _logger.info(f"[{ad.label}] read {data.shape} from {directory}")
+    return data, wavelet_set
+
+
+def _compute_wavelets(
+    ad: AnalysisData,
+    label: str,
+    representation: str,
+    freqs: np.ndarray,
+    directory: Path | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Transform *ad* one subject at a time, storing each subject under *directory*.
+
+    A dataset cut on its channel or time axis is transformed but not stored: its
+    arrays are fragments, and under a participant's name they would replace the
+    whole array a later full run expects to find.
+
+    :return: ``(subjects, channels, freqs, times)`` float32 and the ``n_cycles`` used.
+    """
+    store = directory is not None and not _is_fragment(ad)
+    if directory is not None and not store:
+        _logger.warning(
+            f"[{label}] the dataset is cut on its channel or time axis; its wavelets "
+            "are computed in memory and not stored."
+        )
+    participants = dataset_participants(ad) if store else None
+    if store and ad.feature_names is None:
+        raise ValueError(f"[{label}] wavelets cannot be stored without channel names.")
+
+    transform = to_wavelet_power if representation == "power" else to_wavelet_phase
+    n_items, n_channels, n_samples = ad.data.shape
+    out = np.empty((n_items, n_channels, len(freqs), n_samples), np.float32)
+    n_cycles = np.asarray(freqs, dtype=float) / 2.0
+    for row in range(n_items):
+        single = AnalysisData(
+            data=ad.data[row : row + 1],
+            sfreq=ad.sfreq,
+            representation=ad.representation,
+            label=ad.label,
+            feature_names=ad.feature_names,
+        )
+        transformed = transform(single, freqs, keep_frequency_dim=True)
+        n_cycles = np.asarray(transformed.metadata["n_cycles"], dtype=float)
+        out[row] = transformed.data[0].reshape(n_channels, len(freqs), n_samples)
+        if store:
+            write_wavelet_subject(
+                directory,
+                participants[row],
+                out[row],
+                label=label,
+                representation=representation,
+                freqs=freqs,
+                n_cycles=n_cycles,
+                sfreq=ad.sfreq,
+                channel_names=ad.feature_names,
+            )
+        _logger.info(f"[{label}] subject {row + 1}/{n_items} transformed")
+    return out, n_cycles
+
+
 def wavelet_transform(
     datasets: dict[str, AnalysisData],
     freqs: np.ndarray,
@@ -872,255 +1083,62 @@ def wavelet_transform(
     wavelet_dir: Path | None = None,
     reuse_wavelets: bool = False,
 ) -> dict[str, AnalysisData]:
-    """Apply a wavelet *representation* to every dataset.
+    """Apply a wavelet *representation* to every dataset, through the per-subject store.
 
-    :param datasets: Source :class:`AnalysisData` objects keyed by label.
+    With *wavelet_dir* (the experiment's ``wavelets`` root), each dataset's subjects
+    live under ``<wavelet_dir>/<label>/`` — see :mod:`src.io.wavelet_store`. With
+    *reuse_wavelets*, a dataset whose subjects are all stored is read back at its own
+    extent and nothing is computed; otherwise every subject is transformed and stored.
+
+    :param datasets: Source :class:`AnalysisData` objects keyed by label. Storing or
+        reading needs ``metadata["participants"]`` (:func:`analyzers_to_datasets`).
     :param freqs: Morlet frequencies (Hz).
-    :param representation: Wavelet representation (``"power"`` or ``"phase"``).
+    :param representation: ``"power"`` or ``"phase"``.
     :param keep_frequency_dim: Keep frequency dimension instead of averaging it.
-    :param reshape_frequency_dim: When ``keep_frequency_dim`` is true, reshape
-        flattened ``(feature×frequency)`` output into
-        ``(n_items, n_features, n_freqs, n_samples)``.
-    :param wavelet_dir: Optional directory for persisted wavelet outputs.
-    :param reuse_wavelets: If true, reuse stored wavelet files when present.
-    :returns: New dict of transformed datasets with the same keys.
+    :param reshape_frequency_dim: When ``keep_frequency_dim`` is true, return
+        ``(n_items, n_features, n_freqs, n_samples)`` instead of flattening.
+    :param wavelet_dir: The experiment's wavelet root, or ``None`` to neither read nor
+        store.
+    :param reuse_wavelets: Read stored subjects instead of recomputing them.
+    :returns: New dict of transformed datasets with the same keys, float32.
     """
-    if representation not in ("power", "phase"):
+    if representation not in REPRESENTATIONS:
         raise ValueError(
-            f"Only 'power' and 'phase' wavelet representations are supported, got {representation!r}"
+            f"Only 'power' and 'phase' wavelet representations are supported, got "
+            f"{representation!r}"
         )
     if reshape_frequency_dim and not keep_frequency_dim:
         raise ValueError("reshape_frequency_dim=True requires keep_frequency_dim=True.")
 
-    if wavelet_dir is not None:
-        wavelet_dir.mkdir(parents=True, exist_ok=True)
-
     transformed: dict[str, AnalysisData] = {}
-    freq_sig = f"{freqs[0]:.3f}_{freqs[-1]:.3f}_{len(freqs)}"
-
-    def _reduce_frequency_dimension(
-        wavelet_ad: AnalysisData,
-        *,
-        representation_kind: str,
-        base_feature_names: list[str] | None,
-    ) -> AnalysisData:
-        """Reduce a frequency-resolved wavelet AnalysisData along frequency axis."""
-        n_freqs = int(np.asarray(wavelet_ad.metadata["freqs"]).shape[0])
-        n_items, n_features_flat, n_samples = wavelet_ad.data.shape
-        if n_features_flat % n_freqs != 0:
-            raise ValueError(
-                "Frequency-resolved wavelet data has invalid shape for "
-                f"reduction: n_features={n_features_flat}, n_freqs={n_freqs}"
-            )
-
-        n_features = n_features_flat // n_freqs
-        reshaped = wavelet_ad.data.reshape(n_items, n_features, n_freqs, n_samples)
-        if representation_kind == "power":
-            reduced = reshaped.mean(axis=2)
-        else:
-            reduced = circmean(reshaped, high=np.pi, low=-np.pi, axis=2)
-
-        return AnalysisData(
-            data=reduced,
-            sfreq=wavelet_ad.sfreq,
-            representation=wavelet_ad.representation,
-            label=wavelet_ad.label,
-            feature_names=base_feature_names,
-            info=wavelet_ad.info,
-            metadata={**wavelet_ad.metadata, "keep_frequency_dim": False},
-        )
-
-    def _reshape_frequency_dimension(
-        wavelet_ad: AnalysisData,
-        *,
-        base_feature_names: list[str] | None,
-    ) -> AnalysisData:
-        """Reshape flattened frequency-resolved wavelet output to 4D."""
-        n_freqs = len(wavelet_ad.metadata["freqs"])
-        n_items, n_features_flat, n_samples = wavelet_ad.data.shape
-        if n_features_flat % n_freqs != 0:
-            raise ValueError(
-                "Frequency-resolved wavelet data has invalid shape for "
-                f"reshape: n_features={n_features_flat}, n_freqs={n_freqs}"
-            )
-
-        n_features = n_features_flat // n_freqs
-        reshaped = wavelet_ad.data.reshape(n_items, n_features, n_freqs, n_samples)
-        return AnalysisData(
-            data=reshaped,
-            sfreq=wavelet_ad.sfreq,
-            representation=wavelet_ad.representation,
-            label=wavelet_ad.label,
-            feature_names=base_feature_names,
-            info=wavelet_ad.info,
-            metadata={**wavelet_ad.metadata, "keep_frequency_dim": True},
-        )
-
     for label, ad in datasets.items():
-        wavelet_file: Path | None = None
-        legacy_wavelet_file: Path | None = None
-        if wavelet_dir is not None:
-            safe_label = re.sub(r"[^A-Za-z0-9_-]", "_", label).strip("_")
-            if not safe_label:
-                safe_label = f"dataset_{hashlib.sha256(label.encode()).hexdigest()[:8]}"
-            wavelet_file = wavelet_dir / (
-                f"{safe_label}__wavelet_{representation}__{freq_sig}__freqdim1.npz"
-            )
-            legacy_wavelet_file = wavelet_dir / (
-                f"{safe_label}__wavelet_{representation}__"
-                f"{freq_sig}__freqdim{int(keep_frequency_dim)}.npz"
-            )
-            if reuse_wavelets and wavelet_file.exists():
-                loaded = np.load(wavelet_file)
-                has_feature_names = loaded["has_feature_names"].item()
-                loaded_feature_names = loaded["feature_names"]
-                feature_names = (
-                    loaded_feature_names.tolist()
-                    if has_feature_names and loaded_feature_names.size > 0
-                    else None
-                )
-                transformed[label] = AnalysisData(
-                    data=loaded["data"],
-                    sfreq=float(loaded["sfreq"]),
-                    representation=(
-                        DataRepresentation.WAVELET_PHASE
-                        if representation == "phase"
-                        else DataRepresentation.WAVELET_POWER
-                    ),
-                    label=str(loaded["label"]),
-                    feature_names=feature_names,
-                    info=ad.info,
-                    metadata={
-                        **ad.metadata,
-                        "freqs": loaded["freqs"],
-                        "n_cycles": loaded["n_cycles"],
-                        "keep_frequency_dim": bool(loaded["keep_frequency_dim"]),
-                        "loaded_from_wavelet_file": str(wavelet_file),
-                    },
-                )
-                if not keep_frequency_dim:
-                    transformed[label] = _reduce_frequency_dimension(
-                        transformed[label],
-                        representation_kind=representation,
-                        base_feature_names=ad.feature_names,
-                    )
-                elif reshape_frequency_dim:
-                    transformed[label] = _reshape_frequency_dimension(
-                        transformed[label],
-                        base_feature_names=ad.feature_names,
-                    )
-                continue
-
-            if (
-                reuse_wavelets
-                and legacy_wavelet_file is not None
-                and legacy_wavelet_file.exists()
-            ):
-                loaded = np.load(legacy_wavelet_file)
-                has_feature_names = loaded["has_feature_names"].item()
-                loaded_feature_names = loaded["feature_names"]
-                feature_names = (
-                    loaded_feature_names.tolist()
-                    if has_feature_names and loaded_feature_names.size > 0
-                    else None
-                )
-                transformed[label] = AnalysisData(
-                    data=loaded["data"],
-                    sfreq=float(loaded["sfreq"]),
-                    representation=(
-                        DataRepresentation.WAVELET_PHASE
-                        if representation == "phase"
-                        else DataRepresentation.WAVELET_POWER
-                    ),
-                    label=str(loaded["label"]),
-                    feature_names=feature_names,
-                    info=ad.info,
-                    metadata={
-                        **ad.metadata,
-                        "freqs": loaded["freqs"],
-                        "n_cycles": loaded["n_cycles"],
-                        "keep_frequency_dim": bool(loaded["keep_frequency_dim"]),
-                        "loaded_from_wavelet_file": str(legacy_wavelet_file),
-                    },
-                )
-                if not keep_frequency_dim:
-                    transformed[label] = _reduce_frequency_dimension(
-                        transformed[label],
-                        representation_kind=representation,
-                        base_feature_names=ad.feature_names,
-                    )
-                elif reshape_frequency_dim:
-                    transformed[label] = _reshape_frequency_dimension(
-                        transformed[label],
-                        base_feature_names=ad.feature_names,
-                    )
-                continue
-
-        if representation == "power":
-            wd_freq = to_wavelet_power(ad, freqs, keep_frequency_dim=True)
+        directory = (
+            None if wavelet_dir is None else Path(wavelet_dir) / safe_label(label)
+        )
+        stored = (
+            _load_stored_wavelets(ad, directory, representation, freqs)
+            if directory is not None and reuse_wavelets
+            else None
+        )
+        if stored is not None:
+            data_4d, wavelet_set = stored
+            n_cycles, source = wavelet_set.n_cycles, directory
         else:
-            wd_freq = to_wavelet_phase(ad, freqs, keep_frequency_dim=True)
-        if keep_frequency_dim and reshape_frequency_dim:
-            transformed[label] = _reshape_frequency_dimension(
-                wd_freq,
-                base_feature_names=ad.feature_names,
+            data_4d, n_cycles = _compute_wavelets(
+                ad, label, representation, freqs, directory
             )
-        elif keep_frequency_dim:
-            transformed[label] = wd_freq
-        else:
-            transformed[label] = _reduce_frequency_dimension(
-                wd_freq,
-                representation_kind=representation,
-                base_feature_names=ad.feature_names,
-            )
-        if wavelet_file is not None:
-            feature_names = (
-                wd_freq.feature_names if wd_freq.feature_names is not None else []
-            )
-            np.savez_compressed(
-                wavelet_file,
-                data=wd_freq.data,
-                sfreq=wd_freq.sfreq,
-                label=wd_freq.label,
-                feature_names=np.asarray(feature_names, dtype=str),
-                has_feature_names=np.asarray(
-                    int(wd_freq.feature_names is not None), dtype=np.int8
-                ),
-                freqs=freqs,
-                n_cycles=np.asarray(wd_freq.metadata.get("n_cycles")),
-                keep_frequency_dim=np.asarray(1, dtype=np.int8),
-            )
+            source = None
+        transformed[label] = _wavelet_output(
+            data_4d,
+            ad,
+            np.asarray(freqs, dtype=float),
+            n_cycles,
+            representation,
+            keep_frequency_dim=keep_frequency_dim,
+            reshape_frequency_dim=reshape_frequency_dim,
+            source=source,
+        )
     return transformed
-
-
-#: Alias retained for backward compatibility with older call-sites.
-_wavelet_transform = wavelet_transform
-
-
-def _wavelet_cache_path(
-    wavelet_dir: Path,
-    label: str,
-    representation: str,
-    freqs: np.ndarray,
-) -> Path:
-    """Cache filename for one label/representation/frequency-grid combination.
-
-    Mirrors the naming used by :func:`wavelet_transform` and
-    :func:`precompute_pre_alignment_wavelet_cache` so all three agree.
-
-    :param wavelet_dir: Cache directory.
-    :param label: Dataset label, e.g. ``"Placebo_ASSR"``.
-    :param representation: ``"power"`` or ``"phase"``.
-    :param freqs: Morlet frequencies (Hz).
-    :return: Path to the ``.npz`` cache file.
-    """
-    safe_label = re.sub(r"[^A-Za-z0-9_-]", "_", label).strip("_")
-    if not safe_label:
-        safe_label = f"dataset_{hashlib.sha256(label.encode()).hexdigest()[:8]}"
-    freq_sig = f"{freqs[0]:.3f}_{freqs[-1]:.3f}_{len(freqs)}"
-    return wavelet_dir / (
-        f"{safe_label}__wavelet_{representation}__{freq_sig}__freqdim1.npz"
-    )
 
 
 def assemble_condition_track_wavelets(
@@ -1130,13 +1148,13 @@ def assemble_condition_track_wavelets(
     representation: str,
     wavelet_dir: Path,
 ) -> AnalysisData:
-    """Assemble ``JoinedTracks`` wavelets from the per-condition caches, in memory.
+    """Assemble ``JoinedTracks`` wavelets from the per-condition stores, in memory.
 
-    There is deliberately **no** ``JoinedTracks`` wavelet cache on disk. Since the
-    alignment is fitted once over every recording of both conditions, the two
-    per-condition caches already share a time base and carry the same stimuli, so the
-    joined dataset is just a selection plus a concatenation — cheap enough to redo per
-    run and not worth another ~85 GB of storage.
+    There is deliberately **no** ``JoinedTracks`` store on disk. Since the alignment is
+    fitted once over every recording of both conditions, the two per-condition stores
+    already share a time base and carry the same stimuli, so the joined dataset is just
+    a selection plus a concatenation — cheap enough to redo per run. Only participants
+    recorded under both conditions are read.
 
     Each track is z-scored on its own before concatenation. Both segments then have
     mean 0 and unit variance per ``(subject, channel, frequency)``, so the pooled
@@ -1145,85 +1163,73 @@ def assemble_condition_track_wavelets(
     consumer works on this unchanged.
 
     :param analyzer: A ``JOINED_TRACKS`` analyser, used for the participant cohorts.
-    :param music_type: Music type, needed to derive the per-condition cache labels.
+    :param music_type: Music type, needed to derive the per-condition labels.
     :param freqs: Morlet frequencies (Hz).
     :param representation: ``"power"`` or ``"phase"``.
-    :param wavelet_dir: Directory holding the per-condition caches.
+    :param wavelet_dir: The experiment's wavelet root.
     :return: The concatenated 4-D ``(n_pairs, n_channels, n_freqs, n_times)`` dataset.
-    :raises FileNotFoundError: If a per-condition cache is missing. Build it first by
+    :raises FileNotFoundError: If a per-condition store is missing. Build it first by
         running the same workflow for that single condition.
     """
     from src.analysis.condition_tracks import concatenate_condition_tracks
 
-    wavelet_dir = Path(wavelet_dir)
     joined_label = f"{ConditionVariants.JOINED_TRACKS.value}_{music_type.value}"
+    cohorts = {c: _condition_participants(analyzer, c) for c in REAL_CONDITIONS}
+    paired = [
+        p for p in cohorts[REAL_CONDITIONS[0]] if all(p in cohorts[c] for c in cohorts)
+    ]
 
     tracks: dict[ConditionVariants, AnalysisData] = {}
-    participants: dict[ConditionVariants, list[str]] = {}
     for condition in REAL_CONDITIONS:
         label = f"{condition.value}_{music_type.value}"
-        source = _wavelet_cache_path(wavelet_dir, label, representation, freqs)
-        if not source.exists():
-            raise FileNotFoundError(
-                f"Per-condition wavelet cache {source} is missing, so the "
-                f"{joined_label} dataset cannot be assembled. Run the same workflow "
-                f"with --condition {condition.value} first."
+        try:
+            wavelet_set = find_wavelet_set(
+                Path(wavelet_dir) / safe_label(label), representation, freqs
             )
-        _logger.info(f"[{joined_label}] loading {source.name} …")
-        loaded = np.load(source)
-        feature_names = (
-            loaded["feature_names"].tolist()
-            if loaded["has_feature_names"].item() and loaded["feature_names"].size > 0
-            else None
-        )
-        data = loaded["data"]
-        # The cache is stored flattened as (subjects, channels*freqs, times).
-        n_subjects, n_flat, n_times = data.shape
-        n_freqs = len(loaded["freqs"])
+        except FileNotFoundError as error:
+            raise FileNotFoundError(
+                f"The {label} wavelets are missing, so the {joined_label} dataset "
+                f"cannot be assembled. Run the same workflow with --condition "
+                f"{condition.value} first."
+            ) from error
+        _logger.info(f"[{joined_label}] reading {label} for {len(paired)} pair(s) …")
         tracks[condition] = AnalysisData(
-            data=data.reshape(n_subjects, n_flat // n_freqs, n_freqs, n_times),
-            sfreq=float(loaded["sfreq"]),
+            data=load_wavelet_subjects(wavelet_set, paired),
+            sfreq=wavelet_set.sfreq,
             representation=(
                 DataRepresentation.WAVELET_PHASE
                 if representation == "phase"
                 else DataRepresentation.WAVELET_POWER
             ),
             label=label,
-            feature_names=feature_names,
-            metadata={"freqs": loaded["freqs"], "n_cycles": loaded["n_cycles"]},
+            feature_names=wavelet_set.channel_names,
+            metadata={"freqs": wavelet_set.freqs, "n_cycles": wavelet_set.n_cycles},
         )
-        participants[condition] = _condition_participants(analyzer, condition)
 
-    paired = concatenate_condition_tracks(
+    paired_tracks = concatenate_condition_tracks(
         tracks,
-        participants,
+        {condition: paired for condition in REAL_CONDITIONS},
         conditions=REAL_CONDITIONS,
         zscore_mode="per_condition",
         label=joined_label,
     )
     _logger.info(
-        f"[{joined_label}] assembled {paired.n_pairs} pair(s): "
-        f"{paired.data.data.shape}, segments {paired.segment_lengths}."
+        f"[{joined_label}] assembled {paired_tracks.n_pairs} pair(s): "
+        f"{paired_tracks.data.data.shape}, segments {paired_tracks.segment_lengths}."
     )
-    return paired.data
+    return paired_tracks.data
 
 
 def _condition_participants(
     analyzer: "EEGSummarizedAnalyzer",
     condition: ConditionVariants,
 ) -> list[str]:
-    """Participant labels describing one per-condition cache's subject axis.
-
-    These must match the cache being read, **not** the paired cohort. A
-    single-condition cache spans that condition's full cohort (e.g. 15 Placebo ASSR
-    subjects), which is a superset of the ones that pair up;
-    :func:`~src.analysis.condition_tracks.concatenate_condition_tracks` does the
-    matching itself and needs a label for every row it might select.
+    """Participant labels of one condition's cohort under the analyser's exclusions.
 
     :param analyzer: A ``JOINED_TRACKS`` analyser, used for the dataset metadata,
         music types and exclusion categories.
     :param condition: Condition whose cohort is wanted.
-    :return: Participant labels ordered by that condition's cache subject axis.
+    :return: Participant labels, in the cohort's metadata order.
     """
     from src.filtering.dataset_filter import DatasetFilter
 
@@ -1245,7 +1251,7 @@ def precompute_pre_alignment_wavelet_cache(
     resample_freq: float = 250.0,
     n_jobs: int = -1,
 ) -> None:
-    """Compute per-subject wavelet caches from continuous ``RAW_AFTER_ICA`` data.
+    """Store per-subject wavelets computed from continuous ``RAW_AFTER_ICA`` data.
 
     For stimulus-based experiments (ASSR), computing wavelets on the
     stimulus-spliced ``RAW_CROPPED`` signal introduces edge artifacts at every
@@ -1256,48 +1262,50 @@ def precompute_pre_alignment_wavelet_cache(
     — reproducing the same splice that ``align_raws`` would apply, but after
     the transform instead of before.
 
-    Saves the result to the same ``.npz`` cache format that
-    :func:`wavelet_transform` produces, so downstream steps (Stage-04 ICA,
-    Stage-05 IVA) transparently reuse it via ``--reuse_wavelets``.
-
-    Skips any label whose cache file already exists (idempotent).
+    Each subject is written to the per-subject store
+    (:func:`~src.io.wavelet_store.write_wavelet_subject`) as soon as it is
+    transformed, so downstream steps reuse it via ``--reuse_wavelets``, and a run
+    that stops part-way resumes at the first subject not yet stored.
 
     :param analyzers: Loaded :class:`~src.analysis.summary.EEGSummarizedAnalyzer`
         instances keyed by label (e.g. ``"Placebo_ASSR"``). Each must have a
         registered stimulus label (e.g. ASSR).
     :param freqs: Morlet wavelet frequencies (Hz).
-    :param representations: Wavelet representations to compute and cache;
+    :param representations: Wavelet representations to compute and store;
         ``"power"`` and/or ``"phase"``.
-    :param wavelet_dir: Directory where cache files are written (the same
-        directory passed as ``wavelet_dir`` to :func:`wavelet_transform`).
+    :param wavelet_dir: The experiment's wavelet root.
     :param resample_freq: Target sampling frequency in Hz (default 250).
     :param n_jobs: Parallel jobs for resampling (``-1`` = all CPUs).
     """
-    wavelet_dir = Path(wavelet_dir)
-    freq_sig = f"{freqs[0]:.3f}_{freqs[-1]:.3f}_{len(freqs)}"
-    n_cycles = freqs / 2.0
+    n_cycles = np.asarray(freqs, dtype=float) / 2.0
 
     for label, analyzer in analyzers.items():
-        safe_label = re.sub(r"[^A-Za-z0-9_-]", "_", label).strip("_")
-        if not safe_label:
-            safe_label = f"dataset_{hashlib.sha256(label.encode()).hexdigest()[:8]}"
+        directory = Path(wavelet_dir) / safe_label(label)
+        # load_pre_alignment_data returns the recordings in the analyser's metadata
+        # order, so the participants are read off that same table.
+        participants = [
+            participant_label(pid)
+            for pid in analyzer.filtered_df[SingleDataMetadata.PARTICIPANT_ID]
+        ]
 
         for representation in representations:
-            cache_file = wavelet_dir / (
-                f"{safe_label}__wavelet_{representation}__{freq_sig}__freqdim1.npz"
-            )
-            if cache_file.exists():
+            try:
+                pending = find_wavelet_set(directory, representation, freqs).missing(
+                    participants
+                )
+            except FileNotFoundError:
+                pending = list(participants)
+            if not pending:
                 _logger.info(
-                    f"[{label}] Pre-alignment wavelet cache already exists, "
-                    f"skipping: {cache_file.name}"
+                    f"[{label}] all {len(participants)} subject(s) already stored "
+                    f"({representation}); skipping."
                 )
                 continue
 
             _logger.info(
-                f"[{label}] Pre-alignment wavelet ({representation}): "
+                f"[{label}] Pre-alignment wavelet ({representation}) for {pending}: "
                 "loading RAW_AFTER_ICA per subject …"
             )
-
             # `segments` is indexed by this analyser's selection; `aligner` is fitted
             # over the whole alignment cohort, so its own keep_segments must not be
             # zipped with `arrays`.
@@ -1305,16 +1313,18 @@ def precompute_pre_alignment_wavelet_cache(
                 resample_freq=resample_freq,
                 n_jobs=n_jobs,
             )
+            if len(arrays) != len(participants):
+                raise ValueError(
+                    f"[{label}] {len(arrays)} recording(s) loaded for "
+                    f"{len(participants)} participant(s) in the metadata."
+                )
             ch_names = list(info["ch_names"]) if info is not None else None
 
-            wavelet_aligned: list[np.ndarray] = []
-            cache_label: str | None = None
-            cache_feature_names: list[str] | None = None
-
-            for subj_idx, (subj_arr, keep) in enumerate(zip(arrays, segments)):
+            for participant, subj_arr, keep in zip(participants, arrays, segments):
+                if participant not in pending:
+                    continue
                 _logger.info(
-                    f"  [{label}] subject {subj_idx + 1}/{len(arrays)} "
-                    f"({subj_arr.shape[-1]} samples) …"
+                    f"  [{label}] {participant} ({subj_arr.shape[-1]} samples) …"
                 )
                 ad_subj = AnalysisData(
                     data=subj_arr[np.newaxis].astype(float),
@@ -1331,42 +1341,18 @@ def precompute_pre_alignment_wavelet_cache(
 
                 # wd.data: (1, n_ch*n_freqs, n_times_full) — trim the time axis.
                 trimmed = apply_keep_segments_to_array(wd.data[0], keep)
-                # trimmed: (n_ch*n_freqs, n_times_aligned)
-                wavelet_aligned.append(trimmed)
-
-                if cache_label is None:
-                    cache_label = wd.label
-                    cache_feature_names = wd.feature_names
-
-            stacked = np.stack(
-                wavelet_aligned
-            )  # (n_subj, n_ch*n_freqs, n_times_aligned)
-            _logger.info(
-                f"[{label}] stacked pre-alignment wavelet shape: {stacked.shape}"
-            )
-
-            cache_file.parent.mkdir(parents=True, exist_ok=True)
-            np.savez_compressed(
-                cache_file,
-                data=stacked,
-                sfreq=np.float64(resample_freq),
-                label=cache_label if cache_label is not None else label,
-                feature_names=np.asarray(
-                    cache_feature_names if cache_feature_names is not None else [],
-                    dtype=str,
-                ),
-                has_feature_names=np.asarray(
-                    int(cache_feature_names is not None),
-                    dtype=np.int8,
-                ),
-                freqs=freqs,
-                n_cycles=np.asarray(n_cycles),
-                keep_frequency_dim=np.asarray(1, dtype=np.int8),
-            )
-            _logger.info(
-                f"[{label}] saved pre-alignment wavelet cache "
-                f"({representation}): {cache_file.name}"
-            )
+                write_wavelet_subject(
+                    directory,
+                    participant,
+                    trimmed.reshape(len(ch_names), len(freqs), -1),
+                    label=label,
+                    representation=representation,
+                    freqs=freqs,
+                    n_cycles=n_cycles,
+                    sfreq=resample_freq,
+                    channel_names=ch_names,
+                )
+            _logger.info(f"[{label}] stored pre-alignment wavelets ({representation}).")
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -1442,51 +1428,6 @@ def _wavelet_4d_to_3d(
     )
 
 
-def _try_load_phase_band_iscs(
-    ad: AnalysisData,
-    label: str,
-    *,
-    wavelet_dir: Path | None,
-    freqs: np.ndarray,
-    bands: dict[str, tuple[float, float]],
-) -> dict[str, np.ndarray]:
-    """Compute per-band phase LOO-ISC(cos φ) from the broadband phase cache.
-
-    Used by the wavelet-power workflow to render the optional power vs.
-    phase joint plot. Slices the cached *broadband* phase wavelet tensor per
-    band (matching the broadband-only caching scheme) rather than reading
-    separate per-band caches. Returns ``{}`` (and logs) when no broadband
-    phase cache is present.
-    """
-    if wavelet_dir is None:
-        return {}
-    bb_phase_dir = wavelet_dir / SpectrumTypeVariants.BROADBAND.value
-    safe_label = re.sub(r"[^A-Za-z0-9_-]", "_", label).strip("_")
-    if not safe_label:
-        safe_label = f"dataset_{hashlib.sha256(label.encode()).hexdigest()[:8]}"
-    freq_sig = f"{freqs[0]:.3f}_{freqs[-1]:.3f}_{len(freqs)}"
-    cache_file = bb_phase_dir / f"{safe_label}__wavelet_phase__{freq_sig}__freqdim1.npz"
-    if not cache_file.exists():
-        _logger.info(
-            f"[{label}] No broadband phase wavelet cache "
-            f"(expected {cache_file.name}); skipping power_phase_joint plot."
-        )
-        return {}
-    try:
-        phase_4d = _broadband_wavelet_4d(
-            ad,
-            label,
-            representation="phase",
-            freqs=freqs,
-            wavelet_dir=bb_phase_dir,
-            reuse_wavelets=True,
-        )
-    except Exception as exc:  # pragma: no cover - defensive
-        _logger.warning(f"[{label}] Failed to load broadband phase cache: {exc}")
-        return {}
-    return compute_phase_band_loo_iscs(phase_4d.data, freqs, bands=bands)
-
-
 def _run_wavelet_workflow_for_label(
     ad: AnalysisData,
     label: str,
@@ -1534,15 +1475,19 @@ def _run_wavelet_workflow_for_label(
         label,
         representation=representation,
         freqs=freqs,
-        wavelet_dir=(
-            (wavelet_dir / SpectrumTypeVariants.BROADBAND.value)
-            if wavelet_dir
-            else None
-        ),
+        wavelet_dir=wavelet_dir,
         reuse_wavelets=reuse_wavelets,
     )
     bb_4d_data = wd_4d.data  # (n_subj, n_ch, n_freqs, n_times)
     _logger.info(f"[{label}] broadband 4D shape: {bb_4d_data.shape}")
+
+    if representation == "phase":
+        # Phase is extracted and cached, never analysed. Everything below treats its
+        # input as a linear quantity -- means, variances, Pearson and Spearman ISC --
+        # and phase angles are circular, so none of it is meaningful on them. The
+        # extraction is kept because a later analysis may want the cache.
+        _logger.info(f"[{label}] phase extracted and cached; no analysis is run on it.")
+        return
 
     if include_broadband:
         # Reduce to 3D for mean-variance and ISC plots.
@@ -1776,99 +1721,6 @@ def _run_wavelet_workflow_for_label(
                 save_path=(
                     bb_dir / "cross_freq_coupling" / f"cross_freq_coupling_{label}.png"
                 ),
-            )
-
-            # Power vs Phase joint plot — only when phase cache is present.
-            phase_band_iscs = _try_load_phase_band_iscs(
-                ad,
-                label,
-                wavelet_dir=cross_representation_wavelet_dir,
-                freqs=freqs,
-                bands=selected_bands,
-            )
-            if phase_band_iscs:
-                try:
-                    plot_power_phase_joint(
-                        band_mean_iscs_from_bb,
-                        phase_band_iscs,
-                        label=label,
-                        save_path=(
-                            bb_dir
-                            / "power_phase_joint"
-                            / f"power_phase_isc_{label}.png"
-                        ),
-                    )
-                except ValueError as exc:
-                    _logger.warning(f"[{label}] Skipping power_phase_joint plot: {exc}")
-
-        else:  # representation == "phase"
-            plot_phase_distribution(
-                bb_4d_data,
-                label=label,
-                save_path=(
-                    bb_dir / "phase_distribution" / f"phase_distribution_{label}.png"
-                ),
-            )
-            itpc_full = compute_itpc(bb_4d_data)
-            plot_itpc_spectrum(
-                itpc_full,
-                freqs,
-                label=label,
-                bands=selected_bands,
-                save_path=bb_dir / "itpc_spectrum" / f"itpc_spectrum_{label}.png",
-            )
-            plot_tf_itpc_map(
-                itpc_full,
-                freqs,
-                wd_4d.sfreq,
-                label=label,
-                save_path=bb_dir / "tf_itpc_map" / f"tf_itpc_map_{label}.png",
-            )
-            plot_band_itpc_timecourse(
-                itpc_full,
-                freqs,
-                wd_4d.sfreq,
-                label=label,
-                bands=selected_bands,
-                save_path=bb_dir / "band_itpc_tc" / f"band_itpc_tc_{label}.png",
-            )
-
-            # Phase LOO-ISC per band: cos(circmean(phase)) → compute_loo_isc.
-            band_mean_iscs_from_bb = compute_phase_band_loo_iscs(
-                bb_4d_data, freqs, bands=selected_bands
-            )
-            plot_wavelet_loo_isc_bar(
-                band_mean_iscs_from_bb,
-                label=label,
-                color="darkgreen",
-                save_path=(bb_dir / "phase_loo_isc" / f"phase_loo_isc_{label}.png"),
-            )
-            plot_wavelet_loo_isc_distributions(
-                band_mean_iscs_from_bb,
-                label=label,
-                color="darkgreen",
-                save_path=(
-                    bb_dir
-                    / "phase_loo_isc"
-                    / f"phase_loo_isc_distributions_{label}.png"
-                ),
-            )
-            plot_wavelet_topomap_isc(
-                band_mean_iscs_from_bb,
-                info,
-                label=label,
-                title_prefix="Topographic phase LOO-ISC(cos φ) per band",
-                save_path=(
-                    bb_dir / "topomap_phase_isc" / f"topomap_phase_isc_{label}.png"
-                ),
-            )
-            plot_itpc_vs_isc(
-                itpc_full,
-                band_mean_iscs_from_bb,
-                freqs,
-                label=label,
-                bands=selected_bands,
-                save_path=bb_dir / "itpc_vs_isc" / f"itpc_vs_isc_{label}.png",
             )
 
         # Keep wd_4d / bb_4d_data — the per-band stage slices them below.
@@ -2220,3 +2072,53 @@ def run_wavelet_workflow(
         )
 
     _logger.info(f"Wavelet {representation} analysis complete.")
+
+
+def add_subset_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add the three axis limits every stage uses to run notebook-sized.
+
+    Named the same everywhere so one habit carries across stages, and applied through
+    :func:`~src.analysis.data_representations.subset` so they mean the same thing.
+
+    :param parser: Parser to extend.
+    """
+    group = parser.add_argument_group("notebook-sized runs")
+    group.add_argument(
+        "--n_subjects",
+        type=int,
+        default=None,
+        help="Keep only the first N subjects. Default: all.",
+    )
+    group.add_argument(
+        "--n_channels",
+        type=int,
+        default=None,
+        help="Keep only the first N channels. Default: all. Note a spatial filter or "
+        "electrode mask built for the full montage will not match a subset.",
+    )
+    group.add_argument(
+        "--n_times",
+        type=int,
+        default=None,
+        help="Keep only the first N time samples. Default: all.",
+    )
+
+
+def apply_subset(datasets: dict, args: argparse.Namespace) -> dict:
+    """Apply ``--n_subjects/--n_channels/--n_times`` to every dataset.
+
+    :param datasets: Mapping of dataset key to :class:`AnalysisData`.
+    :param args: Parsed arguments carrying the three limits.
+    :return: The same mapping with each entry subset; unchanged when no limit is set.
+    """
+    limits = {
+        "n_items": getattr(args, "n_subjects", None),
+        "n_features": getattr(args, "n_channels", None),
+        "n_samples": getattr(args, "n_times", None),
+    }
+    if all(value is None for value in limits.values()):
+        return datasets
+    out = {key: data_subset(value, **limits) for key, value in datasets.items()}
+    shapes = {key: value.data.shape for key, value in out.items()}
+    _logger.info(f"subset to {limits} -> {shapes}")
+    return out

@@ -2,8 +2,8 @@
 
 Whole-cohort counterpart of
 ``notebooks/04-wavelet-ica-analysis/separate_assr_wavelet_ica_channel.ipynb``: the
-notebook reads a subject subset so it stays interactive, this script streams the
-cache once and decomposes **every** participant, writing the same figures.
+notebook reads a subject subset so it stays interactive, this script reads the
+wavelets once and decomposes **every** participant, writing the same figures.
 
 Sibling of the *joint* channel-IVA analysis
 (``scripts/run_wavelet_iva_channel.py`` /
@@ -87,16 +87,16 @@ Inputs (produced by stimulus alignment + the wavelet store jobs)::
 
     data/processed/<exp>/concatenated/<Condition>_ASSR.stimulus_onsets.npy
     data/processed/<exp>/concatenated/<Condition>_ASSR.metadata.csv
-    data/processed/<exp>/wavelets/broadband/<Condition>_ASSR__wavelet_power__*__freqdim1.npz
+    data/processed/<exp>/wavelets/<Condition>_ASSR/<participant>__wavelet_power__*.npy
 
 One ``RAW_CROPPED`` recording header is also opened (``preload=False``, no sample
 data) for the topomap electrode positions.
 
-The wavelet cache is ~tens of GB and ``savez_compressed`` stores it as a single
-deflate stream, so it is read **lazily** in one sequential pass: every channel
-block is decompressed once and immediately reduced to its ``(n_freqs, win)`` trial
-average, and each subject's channel stack is decomposed and freed before the next
-subject is read. Peak memory is one subject's channel stack.
+The wavelets are tens of GB, so they are read **lazily**, one memory-mapped
+participant at a time: every channel block is read once and immediately reduced to
+its ``(n_freqs, win)`` trial average, and each subject's channel stack is decomposed
+and freed before the next subject is read. Peak memory is one subject's channel
+stack.
 
 A note on ``--n_ica``: convergence is **subject-dependent** and degrades as the
 count grows — measured on this data, 3 converges for every subject while 6 already
@@ -117,7 +117,6 @@ Usage::
 import argparse
 import sys
 import warnings
-import zipfile
 from pathlib import Path
 
 import matplotlib
@@ -127,7 +126,6 @@ matplotlib.use("Agg")  # headless: no interactive display on the cluster
 import matplotlib.pyplot as plt  # noqa: E402
 import mne  # noqa: E402
 import numpy as np  # noqa: E402
-import numpy.lib.format as npformat  # noqa: E402
 import pandas as pd  # noqa: E402
 from scipy.stats import zscore  # noqa: E402
 from sklearn.decomposition import FastICA  # noqa: E402
@@ -135,14 +133,12 @@ from sklearn.exceptions import ConvergenceWarning  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Reused verbatim from the stage-00 channel-PCA script: the epoching, the lazy
-# cache reader's metadata helpers and the montage lookup are the same objects
-# here, and a second copy would be a second place for the ASSR epoch convention
-# to drift.
+# Reused verbatim from the stage-00 channel-PCA script: the epoching and the
+# montage lookup are the same objects here, and a second copy would be a second
+# place for the ASSR epoch convention to drift.
 from scripts.run_assr_wavelet_pca import (  # noqa: E402
     build_topomap_montage,
     epoch_average,
-    read_wavelet_metadata,
 )
 from src.definitions.constants import AssrEpoch, ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
@@ -151,6 +147,12 @@ from src.definitions.fields import (  # noqa: E402
     MusicTypeVariants,
     PreprocessedDataVariants,
     SingleDataMetadata,
+)
+
+from src.io.wavelet_store import (  # noqa: E402
+    WaveletSet,
+    find_wavelet_set,
+    wavelet_label_dir,
 )
 
 mne.set_log_level("ERROR")
@@ -346,9 +348,8 @@ def stimulus_abs_correlation(
 
 
 def stream_wavelet_ica(
-    npz_path: Path,
-    n_channels: int,
-    n_freqs: int,
+    wavelet_set: WaveletSet,
+    participants: list[str],
     onsets: np.ndarray,
     pre: int,
     post: int,
@@ -357,21 +358,18 @@ def stream_wavelet_ica(
     *,
     ica_kwargs: dict | None = None,
     zscore_vs_recording: bool = True,
-    max_subjects: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[int], int]:
-    """Stream the whole wavelet cache once, decomposing each subject as it arrives.
+    """Read every participant once, decomposing each subject as it is read.
 
-    ``savez_compressed`` writes ``data.npy`` as one sequential deflate stream, so
-    it cannot be sliced randomly. This reader decompresses one
-    ``(n_freqs, n_times)`` channel block at a time, z-scores it against the whole
-    recording (optional) and epoch-averages it; once a subject's channel stack is
-    complete it is decomposed and freed. Peak memory is one subject's
-    ``(n_channels, n_freqs, win)`` array, not the multi-GB tensor.
+    Each subject's memory-mapped wavelets are read one ``(n_freqs, n_times)`` channel
+    block at a time, z-scored against the whole recording (optional) and
+    epoch-averaged; once a subject's channel stack is complete it is decomposed and
+    freed. Peak memory is one subject's ``(n_channels, n_freqs, win)`` array, not the
+    multi-GB tensor.
 
     Args:
-        npz_path: Path to the ``*__wavelet_power__*__freqdim1.npz`` cache.
-        n_channels: Number of EEG channels in the cache.
-        n_freqs: Number of wavelet frequencies in the cache.
+        wavelet_set: The condition's stored wavelets.
+        participants: Participants to read, in the subject order of the outputs.
         onsets: Stimulus onset sample indices.
         pre: Samples before each onset.
         post: Samples after each onset.
@@ -381,77 +379,55 @@ def stream_wavelet_ica(
             :func:`fit_channel_ica` (``algorithm``, ``fun``, ``max_iter``, ``tol``).
         zscore_vs_recording: Z-score each channel's per-frequency power against
             the whole recording before epoching (removes the 1/f tilt).
-        max_subjects: Stop after this many subjects (debugging aid). The read is
-            sequential, so this genuinely shortens the pass.
 
     Returns:
         Tuple ``(tf_maps, patterns, ic_variance, retained, non_converged,
         n_times)``: ``(S, n_ica, n_freqs, win)`` score maps, ``(S, n_ica,
         n_channels)`` forward patterns, ``(S, n_ica)`` variance fractions,
-        ``(S,)`` retained fractions, the cache-order indices of subjects whose
-        FastICA did not converge, and the cache's time length. Signs and order are
-        arbitrary here — see :func:`orient_and_order_components`.
+        ``(S,)`` retained fractions, the indices of subjects whose FastICA did not
+        converge, and the wavelets' time length. Signs and order are arbitrary
+        here — see :func:`orient_and_order_components`.
     """
     ica_kwargs = ica_kwargs or {}
     win = pre + post
-    with zipfile.ZipFile(npz_path) as zf:
-        with zf.open("data.npy") as fh:
-            version = npformat.read_magic(fh)
-            if version == (1, 0):
-                shape, _, dtype = npformat.read_array_header_1_0(fh)
-            else:
-                shape, _, dtype = npformat.read_array_header_2_0(fh)
-            n_subj_cache, n_feat_flat, n_times = shape
-            if n_feat_flat != n_channels * n_freqs:
-                raise ValueError(
-                    f"feature axis {n_feat_flat} != n_channels*n_freqs "
-                    f"{n_channels * n_freqs}"
-                )
-            n_subj = (
-                n_subj_cache
-                if max_subjects is None
-                else min(n_subj_cache, max_subjects)
-            )
-
-            block_bytes = n_freqs * n_times * dtype.itemsize
-            tf_maps = np.zeros((n_subj, n_ica, n_freqs, win), dtype=np.float64)
-            patterns = np.zeros((n_subj, n_ica, n_channels), dtype=np.float64)
-            ic_variance = np.zeros((n_subj, n_ica), dtype=np.float64)
-            retained = np.zeros(n_subj, dtype=np.float64)
-            non_converged: list[int] = []
-            for subj in range(n_subj):
-                stack = np.empty((n_channels, n_freqs, win), dtype=np.float64)
-                for chan in range(n_channels):
-                    buf = fh.read(block_bytes)
-                    block = np.frombuffer(
-                        buf, dtype=dtype, count=n_freqs * n_times
-                    ).reshape(n_freqs, n_times)
-                    if zscore_vs_recording:
-                        block = zscore(block, axis=1)
-                    ev, _ = epoch_average(block, onsets, pre, post)  # (n_freqs, win)
-                    stack[chan] = ev
-                # Samples = (freq, time) bins, mixing variables = channels.
-                matrix = stack.reshape(n_channels, n_freqs * win).T
-                del stack
-                (
-                    tf_maps[subj],
-                    patterns[subj],
-                    ic_variance[subj],
-                    retained[subj],
-                    converged,
-                ) = fit_channel_ica(
-                    matrix, n_ica, n_freqs, win, random_state, **ica_kwargs
-                )
-                del matrix
-                if not converged:
-                    non_converged.append(subj)
-                print(
-                    f"  decomposed subject {subj + 1}/{n_subj}: {n_ica} ICs, "
-                    f"retained {retained[subj] * 100:.1f}% of channel variance, "
-                    f"top ic_variance {ic_variance[subj].max() * 100:.1f}%"
-                    f"{'' if converged else '  <-- FastICA DID NOT CONVERGE'}",
-                    flush=True,
-                )
+    n_subj = len(participants)
+    n_channels, n_freqs = wavelet_set.n_channels, wavelet_set.n_freqs
+    tf_maps = np.zeros((n_subj, n_ica, n_freqs, win), dtype=np.float64)
+    patterns = np.zeros((n_subj, n_ica, n_channels), dtype=np.float64)
+    ic_variance = np.zeros((n_subj, n_ica), dtype=np.float64)
+    retained = np.zeros(n_subj, dtype=np.float64)
+    non_converged: list[int] = []
+    n_times = 0
+    for subj, participant in enumerate(participants):
+        subject = wavelet_set.open(participant)
+        n_times = subject.shape[-1]
+        stack = np.empty((n_channels, n_freqs, win), dtype=np.float64)
+        for chan in range(n_channels):
+            block = np.asarray(subject[chan], dtype=np.float64)
+            if zscore_vs_recording:
+                block = zscore(block, axis=1)
+            ev, _ = epoch_average(block, onsets, pre, post)  # (n_freqs, win)
+            stack[chan] = ev
+        # Samples = (freq, time) bins, mixing variables = channels.
+        matrix = stack.reshape(n_channels, n_freqs * win).T
+        del stack
+        (
+            tf_maps[subj],
+            patterns[subj],
+            ic_variance[subj],
+            retained[subj],
+            converged,
+        ) = fit_channel_ica(matrix, n_ica, n_freqs, win, random_state, **ica_kwargs)
+        del matrix
+        if not converged:
+            non_converged.append(subj)
+        print(
+            f"  decomposed subject {subj + 1}/{n_subj} ({participant}): {n_ica} ICs, "
+            f"retained {retained[subj] * 100:.1f}% of channel variance, "
+            f"top ic_variance {ic_variance[subj].max() * 100:.1f}%"
+            f"{'' if converged else '  <-- FastICA DID NOT CONVERGE'}",
+            flush=True,
+        )
     return tf_maps, patterns, ic_variance, retained, non_converged, n_times
 
 
@@ -649,7 +625,7 @@ def plot_stimulus_correlation(
 # --------------------------------------------------------------------------- #
 #  Orchestration                                                              #
 # --------------------------------------------------------------------------- #
-def run_separate_ica(args: argparse.Namespace) -> None:
+def run(args: argparse.Namespace) -> None:
     """Run the per-participant channel ICA for one condition, writing all outputs."""
     experiment = ExperimentNames(args.experiment)
     condition = ConditionVariants(args.condition)
@@ -660,35 +636,41 @@ def run_separate_ica(args: argparse.Namespace) -> None:
     concat_dir = processed_dir / PreprocessedDataVariants.CONCATENATED.value
     onsets_path = concat_dir / f"{label}{ProjectPaths.STIMULUS_ONSETS_SUFFIX}"
     meta_path = concat_dir / f"{label}.metadata.csv"
-    wavelet_dir = processed_dir / "wavelets" / "broadband"
-    wavelet_matches = sorted(
-        wavelet_dir.glob(f"{label}__wavelet_power__*__freqdim1.npz")
-    )
+    try:
+        wavelet_set = find_wavelet_set(wavelet_label_dir(None, experiment, label))
+    except FileNotFoundError:
+        wavelet_set = None
 
     # A condition may not have been generated yet — skip cleanly instead of failing.
     missing = [p for p in (onsets_path, meta_path) if not p.exists()]
-    if missing or not wavelet_matches:
-        absent = [p.name for p in missing] + (
-            [] if wavelet_matches else ["wavelet npz"]
-        )
+    if missing or wavelet_set is None:
+        absent = [p.name for p in missing] + ([] if wavelet_set else ["wavelets"])
         print(f"[SKIP] {label}: missing inputs ({absent}).", flush=True)
         return
-    wavelet_path = wavelet_matches[0]
 
     save_root = Path(args.save_dir) if args.save_dir else ProjectPaths.PLOTS_PATH
-    analysis_dir = save_root / _STAGE_DIR / label / "broadband" / _ANALYSIS_DIR
+    analysis_dir = ProjectPaths.analysis_plots_dir(
+        _STAGE_DIR,
+        label,
+        spectrum="broadband",
+        analysis_type=_ANALYSIS_DIR,
+        root=save_root,
+    )
 
     print(f"=== {label} ===", flush=True)
-    print(f"wavelet : {wavelet_path}", flush=True)
+    print(f"wavelet : {wavelet_set.directory}", flush=True)
 
     # ---- Load shared inputs -------------------------------------------------
     onsets = np.load(onsets_path)
     meta = pd.read_csv(meta_path, index_col=0)
     gaps = np.diff(onsets)
-    freqs, channel_names, n_freqs = read_wavelet_metadata(wavelet_path)
-    n_channels = len(channel_names)
+    freqs, channel_names = wavelet_set.freqs, wavelet_set.channel_names
+    n_freqs, n_channels = wavelet_set.n_freqs, wavelet_set.n_channels
 
+    # Subject index -> participant label, in concatenation order; the wavelets are
+    # read in that order, and --max_subjects keeps its leading ones.
     idx_to_pid = dict(zip(meta[_PIDX_COL], meta[_PID_COL].astype(str).str.zfill(3)))
+    participants = [idx_to_pid[s] for s in sorted(idx_to_pid)][: args.max_subjects]
 
     sfreq = args.sfreq
     pre = int(round(args.pre_pad * sfreq))
@@ -738,7 +720,7 @@ def run_separate_ica(args: argparse.Namespace) -> None:
         )
 
     # ---- Wavelet: single streaming pass, FastICA per subject ----------------
-    print(f"Streaming wavelet cache ({wavelet_path.name}) ...", flush=True)
+    print(f"Reading wavelets of {len(participants)} participant(s) ...", flush=True)
     (
         tf_maps,
         patterns,
@@ -747,9 +729,8 @@ def run_separate_ica(args: argparse.Namespace) -> None:
         non_converged,
         n_times_wav,
     ) = stream_wavelet_ica(
-        wavelet_path,
-        n_channels,
-        n_freqs,
+        wavelet_set,
+        participants,
         onsets,
         pre,
         post,
@@ -762,7 +743,6 @@ def run_separate_ica(args: argparse.Namespace) -> None:
             "tol": args.ica_tol,
         },
         zscore_vs_recording=args.zscore_vs_recording,
-        max_subjects=args.max_subjects,
     )
     n_subj = tf_maps.shape[0]
     print(
@@ -882,7 +862,7 @@ def run_separate_ica(args: argparse.Namespace) -> None:
     print(f"[DONE] {label}: plots written to {plots_dir}", flush=True)
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _build_arg_parser() -> argparse.ArgumentParser:
     """Build the command-line argument parser."""
     parser = argparse.ArgumentParser(
         description=(
@@ -1010,10 +990,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--max_subjects",
         type=int,
         default=None,
-        help=(
-            "Stop after this many subjects (debugging aid). The cache is read "
-            "sequentially, so this genuinely shortens the pass."
-        ),
+        help=("Read only the first N subjects in concatenation order (debugging aid)."),
     )
     parser.add_argument(
         "--no_zscore_vs_recording",
@@ -1036,5 +1013,13 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def main(argv: list[str] | None = None) -> None:
+    """Parse arguments and run.
+
+    :param argv: Command-line arguments; ``None`` reads ``sys.argv``.
+    """
+    run(_build_arg_parser().parse_args(argv))
+
+
 if __name__ == "__main__":
-    run_separate_ica(build_parser().parse_args())
+    main()
