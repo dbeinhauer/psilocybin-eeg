@@ -273,9 +273,11 @@ def plot_loading_bars(
         ax = axes[panel // ncols][panel % ncols]
         for c, condition in enumerate(conditions):
             heights = [
-                values[row_of[(participant, condition)], k]
-                if (participant, condition) in row_of
-                else np.nan
+                (
+                    values[row_of[(participant, condition)], k]
+                    if (participant, condition) in row_of
+                    else np.nan
+                )
                 for participant in bar_participants
             ]
             ax.bar(

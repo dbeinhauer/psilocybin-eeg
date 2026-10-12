@@ -356,7 +356,10 @@ class TestJoinedCondition:
             [ConditionVariants.JOINED_SEPARATE],
             [],
         )
-        assert ConditionVariants.JOINED_SEPARATE not in result[SingleDataMetadata.CONDITION]
+        assert (
+            ConditionVariants.JOINED_SEPARATE
+            not in result[SingleDataMetadata.CONDITION]
+        )
 
     def test_exclusion_in_one_condition_drops_the_whole_pair(self, paired_metadata):
         """A participant excluded under one condition cannot form a pair."""

@@ -7,7 +7,6 @@ import pytest
 from src.analysis import assr_trials as at
 from src.definitions.constants import AssrEpoch
 
-
 # ---------------------------------------------------------------------------
 # Labels and frequency selection
 # ---------------------------------------------------------------------------

@@ -39,9 +39,7 @@ def _write(directory, participant, data, channels=CHANNELS, freqs=FREQS):
 
 def _subject(value: float, n_times: int = 40) -> np.ndarray:
     """A subject whose every entry encodes (value, channel, freq, time)."""
-    c, f, t = np.meshgrid(
-        np.arange(3), np.arange(5), np.arange(n_times), indexing="ij"
-    )
+    c, f, t = np.meshgrid(np.arange(3), np.arange(5), np.arange(n_times), indexing="ij")
     return value * 1e4 + c * 1e3 + f * 1e2 + t
 
 

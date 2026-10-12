@@ -141,9 +141,7 @@ def run(args: argparse.Namespace) -> None:
     # analysis writes under the same ``03-wavelet-analysis`` tree so the
     # Results Browser picks them up using the same notebook-based ID.
     save_root = args.save_dir if args.save_dir is not None else ProjectPaths.PLOTS_PATH
-    wavelet_plots_root = ProjectPaths.analysis_plots_dir(
-        _STAGE_DIR, "", root=save_root
-    )
+    wavelet_plots_root = ProjectPaths.analysis_plots_dir(_STAGE_DIR, "", root=save_root)
     # The experiment's wavelet store: one directory per label, one file per
     # participant, power and phase side by side (the representation is in the name).
     wavelet_cache_root = resolve_wavelet_dir(args.wavelet_data_dir, experiment_name)
@@ -239,4 +237,3 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
-

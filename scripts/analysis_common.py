@@ -962,8 +962,7 @@ def _wavelet_output(
             else DataRepresentation.WAVELET_POWER
         ),
         label=(
-            f"{ad.label} (wavelet {representation} "
-            f"{freqs[0]:.0f}-{freqs[-1]:.0f} Hz)"
+            f"{ad.label} (wavelet {representation} {freqs[0]:.0f}-{freqs[-1]:.0f} Hz)"
         ),
         feature_names=feature_names,
         info=ad.info,
@@ -1113,7 +1112,9 @@ def wavelet_transform(
 
     transformed: dict[str, AnalysisData] = {}
     for label, ad in datasets.items():
-        directory = None if wavelet_dir is None else Path(wavelet_dir) / safe_label(label)
+        directory = (
+            None if wavelet_dir is None else Path(wavelet_dir) / safe_label(label)
+        )
         stored = (
             _load_stored_wavelets(ad, directory, representation, freqs)
             if directory is not None and reuse_wavelets
@@ -1721,7 +1722,6 @@ def _run_wavelet_workflow_for_label(
                     bb_dir / "cross_freq_coupling" / f"cross_freq_coupling_{label}.png"
                 ),
             )
-
 
         # Keep wd_4d / bb_4d_data — the per-band stage slices them below.
         del wd_3d, data_sub_bb

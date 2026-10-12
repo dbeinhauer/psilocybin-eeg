@@ -111,6 +111,8 @@ REAL_CONDITIONS = (ConditionVariants.PLACEBO, ConditionVariants.PSILOCYBIN)
 # Conditions that select both real conditions and restrict to complete participant
 # pairs. They differ only in the axis the two conditions are pooled along.
 JOINED_CONDITIONS = (ConditionVariants.JOINED_SEPARATE, ConditionVariants.JOINED_TRACKS)
+
+
 class MusicTypeVariants(Enum):
     """
     All variants of music used in the experiment, values are ids from filenames in lowercase.

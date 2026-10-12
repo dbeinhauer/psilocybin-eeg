@@ -154,7 +154,11 @@ def test_dataset_is_read_from_the_wavelet_store_as_log_frames(tmp_path):
         )
 
     config = load_config(
-        overrides=["data.normalize=none", "data.freq_pooling=none", "data.frame_rate=10"]
+        overrides=[
+            "data.normalize=none",
+            "data.freq_pooling=none",
+            "data.frame_rate=10",
+        ]
     ).data
     dataset = build_dataset(
         config,

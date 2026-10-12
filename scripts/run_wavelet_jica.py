@@ -295,7 +295,10 @@ _CONDITION_COLORS = {
 
 #: How the two joins map onto their plot subdirectory and product label.
 _JOIN_CHOICES = {
-    "joined_separate": (ConditionVariants.JOINED_SEPARATE, JicaVariants.CHANNEL_JOINED_SEPARATE),
+    "joined_separate": (
+        ConditionVariants.JOINED_SEPARATE,
+        JicaVariants.CHANNEL_JOINED_SEPARATE,
+    ),
     "joined_tracks": (
         ConditionVariants.JOINED_TRACKS,
         JicaVariants.CHANNEL_JOINED_TRACKS,
@@ -2004,7 +2007,6 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     run(args)
-
 
 
 if __name__ == "__main__":

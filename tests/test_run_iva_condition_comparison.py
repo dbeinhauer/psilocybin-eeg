@@ -462,7 +462,9 @@ class TestProductName:
         )
         entries = list_iva_results(ExperimentNames.ASSR, processed_data_dir=store)
         # The store names the condition from the enum; the plot tree must match it.
-        assert [p.parent.name for p in entries] == [ConditionVariants.JOINED_SEPARATE.value]
+        assert [p.parent.name for p in entries] == [
+            ConditionVariants.JOINED_SEPARATE.value
+        ]
         # pca_<n> -> <analysis type> -> <spectrum> -> the run's product name.
         assert (
             _out_dir(tmp_path).parents[2].name
@@ -681,7 +683,9 @@ class TestComponentStore:
         )
         entries = list_iva_results(ExperimentNames.ASSR, processed_data_dir=store)
         assert [p.parent.name for p in entries] == ["JoinedSeparate"]
-        assert entries[0].name == "iva_channel_joined_separate__ASSR__broadband__pca3.npz"
+        assert (
+            entries[0].name == "iva_channel_joined_separate__ASSR__broadband__pca3.npz"
+        )
 
     def test_a_band_run_stores_a_separate_entry(self, tmp_path, stub_loaders):
         store = tmp_path / "processed"

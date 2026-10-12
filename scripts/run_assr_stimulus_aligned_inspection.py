@@ -504,13 +504,11 @@ def run_inspection(args: argparse.Namespace) -> None:
         return
 
     save_root = Path(args.save_dir) if args.save_dir else ProjectPaths.PLOTS_PATH
-    plots_dir = (
-        ProjectPaths.analysis_plots_dir(
-            "00-preprocessing",
-            label,
-            analysis_type="assr_stimulus_aligned_inspection",
-            root=save_root,
-        )
+    plots_dir = ProjectPaths.analysis_plots_dir(
+        "00-preprocessing",
+        label,
+        analysis_type="assr_stimulus_aligned_inspection",
+        root=save_root,
     )
     plots_dir.mkdir(parents=True, exist_ok=True)
 

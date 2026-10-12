@@ -124,7 +124,9 @@ class TestAssembleJoin:
         raw = _raw()
         del raw[CONDITIONS[1]]
         with pytest.raises(ValueError, match="No array supplied"):
-            assemble_join(raw, PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_SEPARATE)
+            assemble_join(
+                raw, PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_SEPARATE
+            )
 
     def test_row_count_must_match_the_participant_labels(self):
         with pytest.raises(ValueError, match="participant label"):
@@ -136,7 +138,9 @@ class TestAssembleJoin:
         raw = _raw()
         raw[CONDITIONS[1]] = raw[CONDITIONS[1]][:, :-1]
         with pytest.raises(ValueError, match="non-time axes"):
-            assemble_join(raw, PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_SEPARATE)
+            assemble_join(
+                raw, PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_SEPARATE
+            )
 
     def test_block_of_refuses_an_unknown_pair(self):
         layout = assemble_join(
@@ -477,7 +481,9 @@ class TestSubspaceReference:
         """A recording join gives each condition its own block; a time join does not."""
         raw = _raw()
         weights = self._weights()
-        joined = assemble_join(raw, PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_SEPARATE)
+        joined = assemble_join(
+            raw, PARTICIPANTS, CONDITIONS, ConditionVariants.JOINED_SEPARATE
+        )
         result = fit_joint_ica(joined, n_ica=3, max_iter=200)
         rows = subspace_mask_rows(result, weights)
         reference = subspace_reference_rows(raw, joined, rows, [1], zscore=False)

@@ -990,9 +990,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--max_subjects",
         type=int,
         default=None,
-        help=(
-            "Read only the first N subjects in concatenation order (debugging aid)."
-        ),
+        help=("Read only the first N subjects in concatenation order (debugging aid)."),
     )
     parser.add_argument(
         "--no_zscore_vs_recording",

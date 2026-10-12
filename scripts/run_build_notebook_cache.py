@@ -85,7 +85,9 @@ def paired_participants(sets: list[WaveletSet], n_subjects: int) -> list[str]:
     :param n_subjects: How many to keep; ``0`` or fewer keeps all.
     :raises ValueError: If the conditions share no participant.
     """
-    shared = sorted(set(sets[0].participants).intersection(*(s.participants for s in sets)))
+    shared = sorted(
+        set(sets[0].participants).intersection(*(s.participants for s in sets))
+    )
     if not shared:
         raise ValueError("No participant is stored under every condition.")
     return shared if n_subjects <= 0 else shared[:n_subjects]
@@ -96,7 +98,9 @@ def frequency_window(freqs: np.ndarray, center: float, halfwidth: float) -> np.n
     if halfwidth <= 0:
         return np.arange(freqs.size)
     indices = np.flatnonzero(np.abs(freqs - center) <= halfwidth)
-    return indices if indices.size else np.array([int(np.argmin(np.abs(freqs - center)))])
+    return (
+        indices if indices.size else np.array([int(np.argmin(np.abs(freqs - center)))])
+    )
 
 
 def run(args: argparse.Namespace) -> None:

@@ -400,22 +400,14 @@ def _default_store_condition(variant: IvaVariants) -> ConditionVariants:
     return ConditionVariants.JOINED_SEPARATE
 
 
-
-
 # ---------------------------------------------------------------------------
 # Row bookkeeping — the one thing the two variants differ on
 # ---------------------------------------------------------------------------
 
 
-
-
 # ---------------------------------------------------------------------------
 # Projection — one streaming pass produces every signal variant's input
 # ---------------------------------------------------------------------------
-
-
-
-
 
 
 # ---------------------------------------------------------------------------

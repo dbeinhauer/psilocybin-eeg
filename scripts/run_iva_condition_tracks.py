@@ -791,8 +791,12 @@ def run_condition_tracks(
         else SpectrumTypeVariants.BANDS.value
     )
     out_dir = ProjectPaths.analysis_plots_dir(
-        _STAGE_DIR, label, spectrum=spectrum, analysis_type=_ANALYSIS_DIR,
-        n_pca=n_pca, root=save_root,
+        _STAGE_DIR,
+        label,
+        spectrum=spectrum,
+        analysis_type=_ANALYSIS_DIR,
+        n_pca=n_pca,
+        root=save_root,
     )
     out_dir.mkdir(parents=True, exist_ok=True)
     participants_dir = out_dir / "participants"
@@ -1028,7 +1032,6 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     run(args)
-
 
 
 if __name__ == "__main__":

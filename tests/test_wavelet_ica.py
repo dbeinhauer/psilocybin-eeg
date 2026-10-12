@@ -328,4 +328,3 @@ class TestNormalizePatternsPerSubject:
             normalize_patterns_per_subject(np.zeros((3, 4, 5, 6)))  # not 3-D
         with pytest.raises(ValueError):
             normalize_patterns_per_subject(np.zeros((0, 4, 5)))  # no subjects
-

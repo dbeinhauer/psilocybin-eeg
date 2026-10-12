@@ -378,7 +378,11 @@ class TestWaveletStore:
 
         part = subset(dataset, n_items=1, n_features=2, n_samples=60)
         loaded = self._transform(
-            part, tmp_path, reuse=True, keep_frequency_dim=True, reshape_frequency_dim=True
+            part,
+            tmp_path,
+            reuse=True,
+            keep_frequency_dim=True,
+            reshape_frequency_dim=True,
         )
         np.testing.assert_allclose(loaded.data, full.data[:1, :2, :, :60])
 

@@ -112,8 +112,7 @@ class WaveletSet:
         """Every participant with a file in this set, sorted by id."""
         suffix = f"__{self.token}.npy"
         return sorted(
-            path.name.removesuffix(suffix)
-            for path in self.directory.glob(f"*{suffix}")
+            path.name.removesuffix(suffix) for path in self.directory.glob(f"*{suffix}")
         )
 
     def missing(self, participants: Sequence[str]) -> list[str]:
@@ -314,8 +313,9 @@ def iter_wavelet_subjects(
     freq_sel = slice(None) if freq_indices is None else np.asarray(freq_indices, int)
     for participant in participants:
         array = wavelet_set.open(participant)
-        yield participant, np.array(
-            array[:keep_channels, freq_sel, :keep_times], dtype=STORE_DTYPE
+        yield (
+            participant,
+            np.array(array[:keep_channels, freq_sel, :keep_times], dtype=STORE_DTYPE),
         )
 
 
