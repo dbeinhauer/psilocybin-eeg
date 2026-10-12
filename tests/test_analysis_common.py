@@ -16,7 +16,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.analysis_common import (
-    _wavelet_transform,
     add_common_arguments,
     condition_index_mask,
     paired_subject_index,
@@ -26,6 +25,7 @@ from scripts.analysis_common import (
     resolve_wavelet_dir,
     run_wavelet_workflow,
     subject_conditions,
+    wavelet_transform,
 )
 from src.analysis.data_representations import AnalysisData, DataRepresentation
 from src.definitions.constants import ProjectPaths
@@ -35,6 +35,7 @@ from src.definitions.fields import (
     ExperimentNames,
     SingleDataMetadata,
 )
+from src.io.wavelet_store import find_wavelet_set
 from src.definitions.frequency import (
     WAVELET_FREQ_MAX,
     WAVELET_FREQ_MIN,
@@ -308,93 +309,121 @@ class TestRunWaveletWorkflowValidation:
             )
 
 
-class TestWaveletStorageBehavior:
+class TestWaveletStore:
+    """``wavelet_transform`` through the per-subject store (src.io.wavelet_store)."""
+
+    FREQS = np.linspace(4.0, 8.0, 3)
+
     @pytest.fixture
-    def sample_dataset(self):
+    def dataset(self):
         rng = np.random.default_rng(42)
-        return {
-            "TEST": AnalysisData(
-                data=rng.normal(size=(2, 3, 120)),
-                sfreq=120.0,
-                representation=DataRepresentation.TIME_DOMAIN,
-                label="TEST",
-                feature_names=["Fz", "Cz", "Pz"],
-            )
-        }
-
-    def test_wavelet_store_always_saves_frequency_dim(self, tmp_path, sample_dataset):
-        freqs = np.linspace(4.0, 8.0, 3)
-        _wavelet_transform(
-            sample_dataset,
-            freqs,
-            representation="power",
-            keep_frequency_dim=False,
-            wavelet_dir=tmp_path / "wavelets",
-            reuse_wavelets=False,
+        return AnalysisData(
+            data=rng.normal(size=(2, 3, 120)),
+            sfreq=120.0,
+            representation=DataRepresentation.TIME_DOMAIN,
+            label="TEST",
+            feature_names=["Fz", "Cz", "Pz"],
+            metadata={"participants": ["901", "902"]},
         )
 
-        saved = list((tmp_path / "wavelets").glob("*.npz"))
-        assert len(saved) == 1
-        loaded = np.load(saved[0])
-        assert bool(loaded["keep_frequency_dim"]) is True
-        assert loaded["data"].shape == (2, 3 * len(freqs), 120)
-        assert "_freqdim1.npz" in saved[0].name
-
-
-class TestWaveletLoadShapeBehavior:
-    @pytest.fixture
-    def sample_dataset(self):
-        rng = np.random.default_rng(7)
-        return {
-            "TEST": AnalysisData(
-                data=rng.normal(size=(2, 3, 120)),
-                sfreq=120.0,
-                representation=DataRepresentation.TIME_DOMAIN,
-                label="TEST",
-                feature_names=["Fz", "Cz", "Pz"],
-            )
-        }
-
-    def test_wavelet_reuse_can_reshape_to_4d(self, tmp_path, sample_dataset):
-        freqs = np.linspace(4.0, 8.0, 3)
-        wavelet_dir = tmp_path / "wavelets"
-
-        _wavelet_transform(
-            sample_dataset,
-            freqs,
+    def _transform(self, dataset, wavelet_dir, reuse, **kwargs):
+        return wavelet_transform(
+            {"TEST": dataset},
+            self.FREQS,
             representation="power",
-            keep_frequency_dim=False,
             wavelet_dir=wavelet_dir,
-            reuse_wavelets=False,
-        )
-
-        loaded = _wavelet_transform(
-            sample_dataset,
-            freqs,
-            representation="power",
-            keep_frequency_dim=True,
-            reshape_frequency_dim=True,
-            wavelet_dir=wavelet_dir,
-            reuse_wavelets=True,
+            reuse_wavelets=reuse,
+            **kwargs,
         )["TEST"]
 
-        assert loaded.data.shape == (2, 3, len(freqs), 120)
-        assert loaded.metadata["keep_frequency_dim"] is True
+    def test_one_float32_file_per_participant(self, tmp_path, dataset):
+        self._transform(dataset, tmp_path, reuse=False, keep_frequency_dim=False)
+        stored = find_wavelet_set(tmp_path / "TEST", "power", self.FREQS)
+        assert stored.participants == ["901", "902"]
+        array = stored.open("901")
+        assert array.dtype == np.float32 and array.shape == (3, len(self.FREQS), 120)
+        assert stored.channel_names == ["Fz", "Cz", "Pz"]
 
-    def test_wavelet_reshape_requires_keep_frequency_dim(self, sample_dataset):
-        freqs = np.linspace(4.0, 8.0, 3)
+    def test_reuse_reads_back_without_recomputing(self, tmp_path, dataset):
+        computed = self._transform(
+            dataset,
+            tmp_path,
+            reuse=False,
+            keep_frequency_dim=True,
+            reshape_frequency_dim=True,
+        )
+        with patch(
+            "scripts.analysis_common.to_wavelet_power",
+            side_effect=AssertionError("recomputed"),
+        ):
+            loaded = self._transform(
+                dataset,
+                tmp_path,
+                reuse=True,
+                keep_frequency_dim=True,
+                reshape_frequency_dim=True,
+            )
+        assert loaded.data.shape == (2, 3, len(self.FREQS), 120)
+        np.testing.assert_allclose(loaded.data, computed.data)
+
+    def test_reuse_reads_only_the_dataset_extent(self, tmp_path, dataset):
+        full = self._transform(
+            dataset,
+            tmp_path,
+            reuse=False,
+            keep_frequency_dim=True,
+            reshape_frequency_dim=True,
+        )
+        from src.analysis.data_representations import subset
+
+        part = subset(dataset, n_items=1, n_features=2, n_samples=60)
+        loaded = self._transform(
+            part, tmp_path, reuse=True, keep_frequency_dim=True, reshape_frequency_dim=True
+        )
+        np.testing.assert_allclose(loaded.data, full.data[:1, :2, :, :60])
+
+    def test_a_channel_or_time_fragment_is_never_stored(self, tmp_path, dataset):
+        from src.analysis.data_representations import subset
+
+        self._transform(subset(dataset, n_features=2), tmp_path, reuse=False)
+        assert not (tmp_path / "TEST").exists()
+
+        # A subject subset is whole per subject, so it is stored.
+        self._transform(subset(dataset, n_items=1), tmp_path, reuse=False)
+        assert find_wavelet_set(tmp_path / "TEST").participants == ["901"]
+
+    def test_storing_needs_unique_participants(self, tmp_path, dataset):
+        unnamed = AnalysisData(
+            data=dataset.data,
+            sfreq=dataset.sfreq,
+            representation=dataset.representation,
+            label="TEST",
+            feature_names=dataset.feature_names,
+        )
+        with pytest.raises(ValueError, match="does not name the participant"):
+            self._transform(unnamed, tmp_path, reuse=False)
+        pooled = AnalysisData(
+            data=dataset.data,
+            sfreq=dataset.sfreq,
+            representation=dataset.representation,
+            label="TEST",
+            feature_names=dataset.feature_names,
+            metadata={"participants": ["901", "901"]},
+        )
+        with pytest.raises(ValueError, match="more than once"):
+            self._transform(pooled, tmp_path, reuse=False)
+
+    def test_wavelet_reshape_requires_keep_frequency_dim(self, dataset):
         with pytest.raises(
             ValueError,
             match="reshape_frequency_dim=True requires keep_frequency_dim=True",
         ):
-            _wavelet_transform(
-                sample_dataset,
-                freqs,
-                representation="power",
+            self._transform(
+                dataset,
+                None,
+                reuse=False,
                 keep_frequency_dim=False,
                 reshape_frequency_dim=True,
-                wavelet_dir=None,
-                reuse_wavelets=False,
             )
 
 

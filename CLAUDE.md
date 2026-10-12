@@ -16,8 +16,10 @@ Two experiments, both live:
   `fam+` annotations, not a TAG channel, so it uses a different alignment path
   (`stimulus_alignment.py`, `marker_shift.py`).
 
-Analysis stages 00-07 are complete. Current work is a cleanup pass ahead of a new phase
-based on ML methods.
+Analysis stages 00-07 are complete. Stage 08 (`src/models/`, a contrastive synchrony
+model trained on the music wavelet power) opens the ML phase; it is a baseline meant to
+be iterated through its config, `config/models/contrastive_synchrony.yaml`. ASSR is its
+held-out validation set and is never trained on.
 
 ## Environment
 
@@ -48,7 +50,11 @@ python scripts/run_time_alignment.py --condition Placebo --music_type CLASSIC
 python scripts/run_isc.py --music_type CLASSIC PSYTRANCE
 python scripts/run_mean_variance.py --music_type CLASSIC PSYTRANCE
 python scripts/run_analysis.py --analysis wavelet_power   # --analysis is required
+python scripts/run_contrastive_synchrony.py --run_name mlp --set model.name=mlp
 ```
+
+PyTorch is in `requirements.txt` and the job container but **not** in the `psilo-music`
+conda env; the torch tests in `tests/test_models.py` skip there.
 
 `scripts/analysis_common.py` holds the shared wavelet/ISC workflow helpers;
 `scripts/notebook_helpers.py` is the stable import surface used by the notebooks (and, in
@@ -62,7 +68,9 @@ practice, by three CLI scripts too).
   (`ProjectPaths`), `frequency.py` (`FREQUENCY_BANDS`, wavelet grid defaults),
   `mappings.py` (channel names). Never hardcode a categorical value as a string.
 - **`io/`** — `parsing.py` (filename → metadata), `loading.py` (recordings, electrode
-  CSVs, the streaming wavelet cache reader), `saving.py`, `iva_store.py` (IVA component
+  CSVs), `wavelet_store.py` (the per-subject wavelet store: one float32 `.npy` per
+  participant under `data/processed/<experiment>/wavelets/<Condition>_<MusicType>/`,
+  memory-mapped reads), `saving.py`, `iva_store.py` (IVA component
   `.npz` products).
 - **`preprocessing/`** — `channel_prep` → `filtering` → `ica` → `time_alignment` for
   `psilo_music`; `stimulus_alignment` and `marker_shift` carry the ASSR path.
@@ -74,9 +82,14 @@ practice, by three CLI scripts too).
   (`EEGSummarizedAnalyzer`). Input shape convention:
   `(n_subjects, n_channels, n_timepoints)`; wavelet tensors are
   `(n_subjects, n_channels, n_freqs, n_times)`.
-- **`visualization/`** — 9 modules: `preprocessing_plots`, `isc_plots`,
+- **`models/`** — stage 08, the contrastive synchrony model. `config.py` (YAML config,
+  deep-merged variants, `--set` overrides, unknown keys refused), `data.py` (read the
+  wavelet store as frame-rate log power, `(subjects, features, frames)`),
+  `encoders.py` (`@register_encoder` registry), `training.py` (InfoNCE, batch sampler,
+  train loop, embedding), `synchrony.py` (group synchrony + time-shift null, numpy only).
+- **`visualization/`** — 10 modules: `preprocessing_plots`, `isc_plots`,
   `mean_variance_plots`, `wavelet_plots`, `iva_quality_plots`, `iva_condition_plots`,
-  `jica_plots`, `assr_filter_plots`, `assr_snr_plots`. Seaborn for statistical plots, Matplotlib for
+  `jica_plots`, `assr_filter_plots`, `assr_snr_plots`, `contrastive_plots`. Seaborn for statistical plots, Matplotlib for
   topomaps. Most plot functions take an optional `save_path`, but this is not universal —
   `preprocessing_plots.py` uses `plot_path` / `save_fig` instead.
 - **`filtering/`** — `DatasetFilter`, metadata-level DataFrame filtering.
@@ -114,7 +127,7 @@ check the data before pruning one.
 ### Notebooks
 
 `notebooks/NN-<kebab-case-name>/`, stages `00-preprocessing` through
-`07-ica-condition-comparison`. Imports go in the first cell with `# noqa: E402` after the
+`08-contrastive-synchrony`. Imports go in the first cell with `# noqa: E402` after the
 `sys.path.insert` block.
 
 **A notebook is for parameter selection**, not for holding workflow logic: config, the
@@ -128,14 +141,15 @@ PBS job use, and the resulting figures. Three rules follow:
 - **Deep method prose lives in `docs/analyses/<stage>/`**, not in the notebook. The
   notebook explains a step briefly and links there.
 
-Stages 01-07 are converted; each notebook is a driver of about eight cells. Stage 00 is
-not yet. The notebooks are generated from templates, so siblings cannot drift apart.
+Stages 01-08 are drivers of about eight cells each; stage 00 is not yet converted.
+The notebooks are generated from templates, so siblings cannot drift apart.
 
 A notebook runs small through `--n_subjects`, `--n_channels` and `--n_times`, which every
-script accepts, and through the shared strip caches under `notebooks/cache/` — a subset of
-the wavelet data in the same on-disk layout as the full cache, built by
-`scripts/run_build_notebook_cache.py`. Never point a notebook at the source-of-truth
-cache; that is what the job is for.
+script accepts. The wavelet store is memory-mapped, so a small run reads only its slice
+of it, and a dataset cut on its channel or time axis is transformed in memory and never
+stored — a notebook cannot overwrite a participant's full array. Strips under
+`notebooks/cache/` (same layout, built by `scripts/run_build_notebook_cache.py`) are for
+running the notebooks where the full store is not available.
 
 Notebook outputs are stripped before commit (CI runs `nbstripout`).
 

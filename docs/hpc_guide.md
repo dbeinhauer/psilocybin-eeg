@@ -18,7 +18,8 @@ jobs/
     ├── 04-wavelet-ica-analysis/       (11)  five axis variants, broadband + alpha
     ├── 05-wavelet-iva-analysis/       (9)   channel / frequency-channel / time, + quality
     ├── 06-iva-condition-comparison/   (8)   joined and joined-tracks, SNR grid
-    └── 07-ica-condition-comparison/   (2)   joint ICA
+    ├── 07-ica-condition-comparison/   (2)   joint ICA
+    └── 08-contrastive-synchrony/      (1)   contrastive model training (GPU)
 ```
 
 Every template lives in the stage directory matching its script; there are no flat

@@ -202,10 +202,8 @@ class TestCliDefaults:
         with pytest.raises(SystemExit):
             _build_arg_parser().parse_args(["--zscore_mode", "standard"])
 
-    def test_caches_are_opt_in(self):
-        args = _build_arg_parser().parse_args([])
-        assert args.reuse_wavelets is False
-        assert args.subset_cache is False
+    def test_wavelet_reuse_is_opt_in(self):
+        assert _build_arg_parser().parse_args([]).reuse_wavelets is False
 
     def test_an_explicit_band_range_parses_as_two_floats(self):
         args = _build_arg_parser().parse_args(["--band_range", "30", "50"])
@@ -442,18 +440,6 @@ class TestEndToEnd:
         )
         main(_argv(tmp_path, "--zscore_mode", "joint", "--skip_onset_average"))
         assert seen == ["joint"]
-
-    def test_the_subset_cache_is_written_only_when_asked(
-        self, tmp_path, stub_loaders, monkeypatch
-    ):
-        cache = tmp_path / "subset_cache"
-        monkeypatch.setattr(
-            run_iva_condition_tracks,
-            "resolve_notebook_wavelet_cache_dir",
-            lambda experiment_name: cache,
-        )
-        main(_argv(tmp_path, "--skip_onset_average"))
-        assert not cache.exists()
 
     def test_assr_defaults_to_the_placeholder_music_type(
         self, tmp_path, stub_loaders, monkeypatch

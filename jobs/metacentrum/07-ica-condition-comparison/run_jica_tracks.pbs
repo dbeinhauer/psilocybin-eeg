@@ -115,12 +115,9 @@
 # eigendecomposition, the FastICA iterations and the band-limited read-out are all
 # negligible beside it. walltime=6:00:00 leaves roughly 3x margin on that.
 #
-# WORTH KNOWING IF YOU WILL RE-RUN. --subset_cache writes each condition's trimmed
-# tensor back UNCOMPRESSED, so a second run at the same extent reads it in seconds
-# instead of 40 minutes — the 80-minute read is paid once rather than every time. The
-# cost is disk on the HOME filesystem, ~44 GB per condition at full extent, counted
-# against quota. It is left OFF here because that is a quota decision rather than a
-# default; turn it on if you plan a --n_ica sweep or the companion join.
+# The memory and time figures in this header were measured on the old single
+# compressed float64 cache per condition. The per-subject float32 store holds half
+# the bytes and is read without decompression, so they are now upper bounds.
 #
 # --------------------------------------------------------------------------
 # THREE EXTENTS THAT ARE NOT FREE KNOBS, all left at full below:
@@ -153,11 +150,9 @@
 # spectral STRUCTURE. The read-out is unaffected — its trials are cut from the
 # RAW, un-z-scored power.
 #
-# NO new wavelet cache is written. Unlike the subject-axis join this variant does
+# NO new wavelets are written. Unlike the subject-axis join this variant does
 # NOT need the two conditions to share a time base, so the tracks may differ in
-# length. --subset_cache is deliberately NOT passed: at this extent the "subset"
-# would be a large uncompressed copy per condition for little saving; it pays off
-# only for a small channel/time subset (see the exploration block below).
+# length.
 #
 # --------------------------------------------------------------------------
 # Plots:

@@ -55,15 +55,15 @@
 # analysis (jobs/metacentrum/05-wavelet-iva-analysis/run_channel.pbs) provides and
 # this one deliberately does not.
 #
-# Resources: the work is one sequential zlib decompression pass (single-threaded)
-# plus a small per-subject SVD, so 4 CPUs is what the code can actually use.
+# Resources: the work is one sequential read of each participant's wavelets plus a
+# small per-subject SVD, so 4 CPUs is what the code can actually use.
 # Memory peaks on the back-projection assertion, which holds two
 # (n_subj, n_freqs*win, n_channels) arrays (~0.8 GB for 19 subjects).
 #
 # Requires (per condition), produced by the stimulus alignment + wavelet store:
 #   data/processed/assr/concatenated/<Condition>_ASSR.stimulus_onsets.npy
 #   data/processed/assr/concatenated/<Condition>_ASSR.metadata.csv
-#   data/processed/assr/wavelets/broadband/<Condition>_ASSR__wavelet_power__*.npz
+#   data/processed/assr/wavelets/<Condition>_ASSR/<participant>__wavelet_power__*.npy
 #   data/processed/assr/<RAW_CROPPED recording>  (header only, for the montage)
 # A condition whose inputs are absent is skipped cleanly rather than failing.
 #

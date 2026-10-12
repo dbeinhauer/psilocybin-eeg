@@ -79,9 +79,12 @@
 # As there, the dominant peak is the wavelet cache read (~110 GB per condition,
 # decompressed in full before it is trimmed), which is what mem=499gb is for — and it
 # is also the dominant TIME cost: ~40 minutes per condition, measured. Everything
-# after it is minutes. See run_jica_tracks.pbs for the full timeline and for the
-# --subset_cache trade if you plan to re-run. Stage-03 (store_assr_wavelets.pbs) must
-# have produced those caches first.
+# after it is minutes. See run_jica_tracks.pbs for the full timeline. Stage-03
+# (store_assr_wavelets.pbs) must have produced the wavelet store first.
+#
+# The memory and time figures in this header were measured on the old single
+# compressed float64 cache per condition. The per-subject float32 store holds half
+# the bytes and is read without decompression, so they are now upper bounds.
 #
 # --------------------------------------------------------------------------
 # Plots:
@@ -158,7 +161,7 @@ WAVELET_DIR="/mnt/data/processed"
 # array cannot be overridden by prefixing it — it has to be left out.
 COMMON_ARGS=(
     --experiment assr
-    --join joined
+    --join joined_separate
     --conditions Placebo Psilocybin
     --random_state 42
     --ica_algorithm parallel

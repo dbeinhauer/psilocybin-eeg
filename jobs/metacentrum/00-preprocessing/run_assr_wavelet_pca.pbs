@@ -38,12 +38,11 @@
 # orthogonal to those topographies is filtered out. Electrode positions come from
 # one RAW_CROPPED recording header (preload=False, no sample data read).
 #
-# The wavelet cache (tens of GB, stored by jobs/metacentrum/03-wavelet-analysis/
-# store_assr_wavelets.pbs) is read lazily in one sequential streaming pass — each
-# channel block is decompressed once and immediately reduced, and each subject's
-# channel stack is collapsed to its component maps before the next subject is
-# read — so memory stays low; walltime is dominated by decompressing the cache
-# once per condition.
+# The wavelets (tens of GB, stored per participant by jobs/metacentrum/
+# 03-wavelet-analysis/store_assr_wavelets.pbs) are read lazily, one memory-mapped
+# participant at a time — each channel block is read once and immediately reduced,
+# and each subject's channel stack is collapsed to its component maps before the
+# next subject is read — so memory stays low; walltime is dominated by that read.
 #
 # The job also writes an UNREDUCED (no-PCA) channel-space reference — the test
 # reference the component panels are checked against: channel-mean TF maps,
@@ -58,7 +57,7 @@
 # Requires (per condition), produced by the stimulus alignment + wavelet store:
 #   data/processed/assr/concatenated/<Condition>_ASSR.stimulus_onsets.npy
 #   data/processed/assr/concatenated/<Condition>_ASSR.metadata.csv
-#   data/processed/assr/wavelets/broadband/<Condition>_ASSR__wavelet_power__*.npz
+#   data/processed/assr/wavelets/<Condition>_ASSR/<participant>__wavelet_power__*.npy
 #   data/processed/assr/<RAW_CROPPED recording>  (header only, for the montage)
 # A condition whose inputs are absent (e.g. Psilocybin not yet generated) is
 # skipped cleanly rather than failing the job.

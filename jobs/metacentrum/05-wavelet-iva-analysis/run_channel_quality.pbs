@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N PSILO_IVA_CH_QUALITY_05
-#PBS -l walltime=0:30:00
+#PBS -l walltime=1:00:00
 #PBS -l select=1:ncpus=8:mem=499gb:scratch_local=80gb
 #PBS -m ae
 #PBS -j oe
@@ -136,7 +136,7 @@ source /opt/myproject/.venv/bin/activate
 WAVELET_DIR="/mnt/data/processed"
 
 COMMON_ARGS=(
-    --condition Psilocybin
+    --condition Placebo Psilocybin
     --experiment assr
     --n_pca 5
     --n_top 5

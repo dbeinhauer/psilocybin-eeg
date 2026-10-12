@@ -107,7 +107,7 @@ Examples::
     python scripts/run_assr_snr_grid.py --experiment assr --variant iva_channel_joined_separate \\
         --n_pca 5 --halfwidths 0 5 --stimulus_intervals 0:0.5 0.2:0.5
 
-    # A quick shape check without decompressing the whole cache.
+    # A quick shape check on the first 12 s.
     python scripts/run_assr_snr_grid.py --experiment assr --n_pca 5 --n_times 3000 \\
         --skip_plots
 
@@ -152,11 +152,9 @@ from src.definitions.fields import (  # noqa: E402
 from src.io.iva_store import load_iva_components  # noqa: E402
 from src.io.loading import (  # noqa: E402
     assr_electrode_mask,
-    cache_participant_labels as _cache_participants,
     concatenated_dir as _concatenated_dir,
-    read_wavelet_cache_header,
-    wavelet_cache_path as _wavelet_cache_path,
 )
+from src.io.wavelet_store import find_wavelet_set, wavelet_label_dir  # noqa: E402
 from src.visualization.assr_snr_plots import (  # noqa: E402
     plot_cell as _plot_cell,
     plot_courses as _plot_courses,
@@ -369,26 +367,20 @@ def _load_onsets(concat_dir: Path, label: str) -> np.ndarray:
     return np.load(path).astype(int)
 
 
-def _cache_frequency_grid(cache_paths: dict, conditions: list[str]) -> np.ndarray:
+def _cache_frequency_grid(wavelet_sets: dict, conditions: list[str]) -> np.ndarray:
     """The wavelet cache's own frequency axis, checked identical across conditions.
 
     Separate from the store's axis on purpose: a band-restricted store holds only its
     band's bins, while the cache is always the broadband one, so an index resolved on
-    one grid is meaningless on the other. Reading the header is cheap — it decompresses
-    nothing.
+    one grid is meaningless on the other.
 
-    :param cache_paths: Condition → cache path.
+    :param wavelet_sets: Condition → :class:`~src.io.wavelet_store.WaveletSet`.
     :param conditions: Conditions to read, in order.
     :return: The shared ``(F,)`` frequency grid in Hz.
     :raises ValueError: If the conditions' caches were built on different grids, which
         would make one bin index mean two frequencies.
     """
-    grids = {
-        condition: np.asarray(
-            read_wavelet_cache_header(cache_paths[condition]).freqs, dtype=float
-        )
-        for condition in conditions
-    }
+    grids = {condition: wavelet_sets[condition].freqs for condition in conditions}
     reference = grids[conditions[0]]
     for condition, grid in grids.items():
         if grid.shape != reference.shape or not np.allclose(grid, reference):
@@ -482,21 +474,14 @@ def run(args: argparse.Namespace) -> None:
 
     # ---- 2. onsets, caches, paired cohort --------------------------------
     concat_dir = _concatenated_dir(experiment, args.concat_dir)
-    onsets, cache_labels, cache_paths = {}, {}, {}
+    onsets, wavelet_sets, cached = {}, {}, {}
     for condition in conditions:
         label = f"{condition}_{music_type.value}"
         onsets[condition] = _load_onsets(concat_dir, label)
-        cache_paths[condition] = _wavelet_cache_path(
-            args.wavelet_data_dir, experiment, label
+        wavelet_sets[condition] = find_wavelet_set(
+            wavelet_label_dir(args.wavelet_data_dir, experiment, label)
         )
-        # A strip cache names its own subject axis; a full one is named through the
-        # concatenation metadata, whose order it shares.
-        strip_labels = read_wavelet_cache_header(cache_paths[condition]).participants
-        cache_labels[condition] = (
-            list(strip_labels)
-            if strip_labels is not None
-            else _cache_participants(concat_dir, label)
-        )
+        cached[condition] = set(wavelet_sets[condition].participants)
 
     # ---- 3. frequency selections, resolved on BOTH grids -----------------
     # The store and the cache do NOT share a frequency axis, and a bin index only means
@@ -508,7 +493,7 @@ def run(args: argparse.Namespace) -> None:
     # any band-restricted run, while leaving broadband runs correct because there the
     # two grids coincide. Each side now gets the selection resolved on its OWN grid, so
     # both read the same HERTZ.
-    cache_freqs = _cache_frequency_grid(cache_paths, conditions)
+    cache_freqs = _cache_frequency_grid(wavelet_sets, conditions)
     store_selections, cache_selections = {}, {}
     for halfwidth in args.halfwidths:
         name = at.selection_label(args.center_freq, halfwidth)
@@ -538,7 +523,7 @@ def run(args: argparse.Namespace) -> None:
                 "different parts of it. Narrow --halfwidths, or use a store whose band "
                 "contains the whole window."
             )
-    # The union is over CACHE bins, because it is what the streaming reader indexes.
+    # The union is over CACHE bins, because it is what the wavelet reader indexes.
     union = np.unique(np.concatenate(list(cache_selections.values())))
     union_position = {int(b): i for i, b in enumerate(union)}
 
@@ -547,7 +532,7 @@ def run(args: argparse.Namespace) -> None:
         p
         for p in store_participants
         if all(resolve_ok(results, p, c, per_recording) for c in conditions)
-        and all(p in cache_labels[c] for c in conditions)
+        and all(p in cached[c] for c in conditions)
     ]
     if not participants:
         raise ValueError(
@@ -609,7 +594,7 @@ def run(args: argparse.Namespace) -> None:
     projected: dict[str, _Projected] = {}
     for condition in conditions:
         projected[condition] = _project_condition(
-            cache_paths[condition],
+            wavelet_sets[condition],
             condition,
             participants,
             resolve,
@@ -617,7 +602,6 @@ def run(args: argparse.Namespace) -> None:
             binary,
             pca_rows,
             union,
-            cache_labels[condition],
             store_channels,
             args.n_times,
             roi_index,

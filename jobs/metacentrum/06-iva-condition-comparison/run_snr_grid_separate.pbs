@@ -40,15 +40,16 @@
 # None of them costs another pass over the cache: the extra operators ride the same
 # streamed block, and stored_prestim reuses the stored IC rows zscored already reads.
 #
-# RESOURCES. I/O bound, one streamed pass over the ~50 GB DEFLATE cache per
-# condition (~13 min each). Memory holds the stored tf_maps (~2 GB for the 2P-row
+# RESOURCES. I/O bound, one pass over each participant's wavelets per condition
+# (measured ~13 min per condition on the old compressed cache; the per-subject
+# float32 store reads faster). Memory holds the stored tf_maps (~2 GB for the 2P-row
 # subject-axis store) plus the kept-frequency projections — the four filter variants
 # add four more (P, K, F, T) arrays per condition, together smaller than the ROI block
-# already held; ncpus=4 because the decompression is single-threaded.
+# already held; ncpus=4 because the read is sequential.
 #
 # NEEDS ON DISK (all from earlier stages):
 #   data/processed/assr/iva_results/JoinedSeparate/iva_*__pca<N>.npz          (the store)
-#   data/processed/assr/wavelets/broadband/<Cond>_ASSR__wavelet_power__*__freqdim1.npz
+#   data/processed/assr/wavelets/<Cond>_ASSR/<participant>__wavelet_power__*.npy
 #   data/processed/assr/concatenated/<Cond>_ASSR.stimulus_onsets.npy
 #   data/processed/assr/concatenated/<Cond>_ASSR.metadata.csv
 #

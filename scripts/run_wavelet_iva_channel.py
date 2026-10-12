@@ -1994,7 +1994,7 @@ def run(args: argparse.Namespace) -> None:
             dataset_key,
             representation="power",
             freqs=freqs_full,
-            wavelet_dir=(wavelet_dir / SpectrumTypeVariants.BROADBAND.value),
+            wavelet_dir=wavelet_dir,
             reuse_wavelets=args.reuse_wavelets,
             analyzer=analyzer,
         )

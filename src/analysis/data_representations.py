@@ -407,8 +407,11 @@ def subset(
     rerun always sees the same rows.
 
     ``info`` and ``feature_names`` are cut with the feature axis, so a topography drawn
-    from a subset still names the channels it actually holds. Nothing is copied that is
-    not sliced, and the input is never modified.
+    from a subset still names the channels it actually holds, and a
+    ``metadata["participants"]`` list is cut with the item axis. ``metadata["subset_of"]``
+    records the shape before the *first* subset, so it still says what was cut after
+    repeated subsetting. Nothing is copied that is not sliced, and the input is never
+    modified.
 
     :param data: The container to subset.
     :param n_items: Keep this many items (subjects); ``None`` keeps all.
@@ -435,11 +438,17 @@ def subset(
     names = data.feature_names
     if names is not None and keep_f < features:
         names = list(names[:keep_f])
+    metadata = {
+        **data.metadata,
+        "subset_of": data.metadata.get("subset_of", data.data.shape),
+    }
+    if data.metadata.get("participants") is not None:
+        metadata["participants"] = list(data.metadata["participants"][:keep_i])
 
     return replace(
         data,
         data=data.data[:keep_i, :keep_f, :keep_s],
         feature_names=names,
         info=subset_info,
-        metadata={**data.metadata, "subset_of": data.data.shape},
+        metadata=metadata,
     )

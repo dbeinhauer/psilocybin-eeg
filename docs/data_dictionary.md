@@ -48,9 +48,9 @@ single-condition run.
 - `JOINED_TRACKS` products are named `JoinedTracks_<MusicType>`, with an extra
   `.segment_boundaries.npy` sidecar recording where each condition's time segment
   starts and ends. Its wavelets are **assembled in memory** from the two per-condition
-  caches rather than cached separately — the caches already share a time base, so the
+  stores rather than stored separately — the stores already share a time base, so the
   join is a selection plus a concatenation, not worth another ~85 GB on disk. Those
-  per-condition caches must exist first: build them by running the same workflow with
+  per-condition stores must exist first: build them by running the same workflow with
   `--condition Placebo` and `--condition Psilocybin`.
 
 For `JOINED_SEPARATE`, the subject axis is ordered as one contiguous block per condition — all
@@ -60,26 +60,21 @@ subject `k` and subject `k + n_pairs` are the same participant. Use `subject_con
 `scripts/analysis_common.py` to recover the split rather than slicing by position.
 
 `JOINED_SEPARATE` **wavelets** are assembled in memory too, for the same reason as
-`JOINED_TRACKS`: the two per-condition caches already share the aligned time base, so
+`JOINED_TRACKS`: the two per-condition stores already share the aligned time base, so
 stacking them on the subject axis is a selection plus a concatenation rather than
 another ~100 GB on disk. `scripts/notebook_helpers.load_joined_condition_wavelets`
-loads each condition from its existing cache (one at a time, so the memory peak stays
-at one condition) and hands both to
+loads each condition from its existing store (one at a time) and hands both to
 `src.analysis.condition_tracks.pool_condition_subjects`, which returns a
 `PooledConditionSubjects` carrying the per-subject participant/condition bookkeeping —
 `condition_mask`, `condition_subjects`, `partner_index`, `subject_labels` and
 `select_participants`, the subject-axis counterparts of the `analysis_common` helpers
 above, working off the pooled object instead of an analyser's metadata. Asking
-`compute_wavelet_datasets` for a `JoinedSeparate_*` label directly would instead write that
-second copy of the cache.
+`compute_wavelet_datasets` to store a `JoinedSeparate_*` label directly is refused: the
+store holds one file per participant, and a pooled cohort names each participant twice.
 
-Either join still has to read the two per-condition caches once, and that read — tens
-of GB decompressed per condition — is the dominant cost. Pass `subset_cache_dir` (see
-`resolve_notebook_wavelet_cache_dir` and
-[`notebooks/03-wavelet-analysis/README.md`](../notebooks/03-wavelet-analysis/README.md))
-to have the trimmed tensor stored per extent under the stage-03 notebook, so later runs
-skip that read entirely. The entries are keyed by condition and extent rather than by
-workflow, so they are shared with every single-condition notebook.
+Either join reads the two per-condition stores, memory-mapped, so a channel/time subset
+(`n_channels`, `n_times`) reads only that slice. The store layout is described in
+[`docs/analyses/03-wavelet-analysis/`](analyses/03-wavelet-analysis/README.md).
 
 ### Two ways to join the conditions
 
@@ -105,8 +100,8 @@ selected the same way, by naming the condition. `PairedConditionTracks.from_anal
 rebuilds the per-condition split from the `.segment_boundaries.npy` sidecar, so
 `condition_track` works even in a bare CLI run that never called the paired loader.
 
-Why the standard workflow needs no changes for `JOINED_TRACKS`: its cached wavelets are
-stored **already per-condition z-scored**. Both segments therefore have mean 0 and unit
+Why the standard workflow needs no changes for `JOINED_TRACKS`: its assembled wavelets are
+returned **already per-condition z-scored**. Both segments therefore have mean 0 and unit
 variance per `(subject, channel, frequency)`, so the pooled series does too — making the
 usual `zscore_by_time` first step an exact identity rather than a re-normalisation that
 would undo the per-condition standardisation.

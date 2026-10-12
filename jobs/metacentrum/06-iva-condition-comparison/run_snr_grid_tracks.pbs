@@ -55,17 +55,17 @@
 # In THIS variant the mixing matrix is shared across the conditions, so the cohort mean
 # averages one topography per participant rather than one per recording.
 #
-# RESOURCES. Like run_trial_stats.pbs this is I/O bound: the cost is one streamed
-# pass over the ~50 GB DEFLATE cache per condition (~13 min each), decompressed
-# subject by subject. Memory holds the stored tf_maps (~1 GB) plus the kept-frequency
-# projections — the four filter variants add four more (P, K, F, T) arrays per
-# condition, together smaller than the ROI block already held; ncpus=4 because the
-# decompression is single-threaded. Do NOT copy the 499gb/8cpu header from
-# run_condition_tracks.pbs.
+# RESOURCES. Like run_trial_stats.pbs this is I/O bound: the cost is one pass over
+# each participant's wavelets per condition (measured ~13 min per condition on the
+# old compressed cache; the per-subject float32 store reads faster). Memory holds the
+# stored tf_maps (~1 GB) plus the kept-frequency projections — the four filter
+# variants add four more (P, K, F, T) arrays per condition, together smaller than the
+# ROI block already held; ncpus=4 because the read is sequential. Do NOT copy the
+# 499gb/8cpu header from run_condition_tracks.pbs.
 #
 # NEEDS ON DISK (all from earlier stages):
 #   data/processed/assr/iva_results/JoinedTracks/iva_*__pca<N>.npz   (the store)
-#   data/processed/assr/wavelets/broadband/<Cond>_ASSR__wavelet_power__*__freqdim1.npz
+#   data/processed/assr/wavelets/<Cond>_ASSR/<participant>__wavelet_power__*.npy
 #   data/processed/assr/concatenated/<Cond>_ASSR.stimulus_onsets.npy
 #   data/processed/assr/concatenated/<Cond>_ASSR.metadata.csv
 #

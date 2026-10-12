@@ -707,12 +707,20 @@ class EEGSummarizedAnalyzer(LoggerMixin):
             )
 
         if info_filename is not None:
+            # Picked like the stored array was (load_and_prepare_data), so the
+            # channel names match its channel axis.
             raw = self.dataset_handler.load_data_file(
                 info_filename,
                 is_processed=True,
                 processed_data_type=PreprocessedDataVariants.RAW_CROPPED,
                 preload=False,
-            )
+            ).pick(["eeg"])
+            if len(raw.ch_names) != self.data.shape[1]:
+                raise ValueError(
+                    f"{info_filename} has {len(raw.ch_names)} EEG channels, the "
+                    f"stored array {load_path.name} has {self.data.shape[1]}; "
+                    "rebuild it with --process_and_save."
+                )
             self._refresh_info(raw.info)
 
         # Store the resampling frequency.

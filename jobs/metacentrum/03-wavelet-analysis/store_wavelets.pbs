@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N PSILO_STORE_WAVELETS_03
-#PBS -l walltime=18:00:00
+#PBS -l walltime=4:00:00
 #PBS -l select=1:ncpus=8:mem=490gb:scratch_local=100gb
 #PBS -m ae
 #PBS -j oe
@@ -8,15 +8,23 @@
 # ---------------------------------------------------------------------------
 # Bulk wavelet storage for both power and phase representations.
 #
-# Computes and stores broadband + all per-band wavelet transforms for
-# music types (CLASSIC, PSYTRANCE) — Placebo condition by default.
+# Computes and stores the wavelet transforms for music types (CLASSIC,
+# PSYTRANCE), both conditions, and runs the stage-03 analyses on them.
 # WAVELET_DIR is a base data directory; the '<experiment>/wavelets' suffix is
-# appended automatically (e.g. data/processed/psilo_music/wavelets).
+# appended automatically.
+#
+# Output (one float32 file per participant, src/io/wavelet_store.py):
+#   data/processed/psilo_music/wavelets/<Condition>_<MusicType>/
+#       wavelet_power__1.000_50.000_50.json              shared axes
+#       <participant>__wavelet_power__1.000_50.000_50.npy  (channels, freqs, times)
+#
+# Each subject is stored as soon as it is transformed. Stages 04-08 read these
+# files with --reuse_wavelets.
 #
 # Uses the same split-run approach as the individual analysis scripts:
 # low-freq bands + broadband first, then high-freq bands with reuse.
 #
-# To also run Psilocybin, uncomment the "Psilocybin" blocks below.
+# Both conditions run by default; comment a block out to skip one.
 # ---------------------------------------------------------------------------
 
 set -e
@@ -68,12 +76,12 @@ python /mnt/scripts/run_analysis.py \
 
 
 # ----- Psilocybin (uncomment to enable) -----
-# python /mnt/scripts/run_analysis.py \
-#     --analysis wavelet_power \
-#     --experiment psilo_music \
-#     --condition Psilocybin \
-#     --wavelet_data_dir "$WAVELET_DIR" \
-#     --n_jobs -1
+python /mnt/scripts/run_analysis.py \
+    --analysis wavelet_power \
+    --experiment psilo_music \
+    --condition Psilocybin \
+    --wavelet_data_dir "$WAVELET_DIR" \
+    --n_jobs -1
 
 # ----- Placebo -----
 # To restrict to specific music types, add:  --music_type CLASSIC PSYTRANCE

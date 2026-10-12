@@ -1,9 +1,9 @@
 """
-Per-condition projection of a wavelet cache into every ASSR signal variant.
+Per-condition projection of stored wavelets into every ASSR signal variant.
 
 The stage-06 analysis compares one fixed electrode reference against several learned
-spatial filters. Building those comparison inputs means streaming a wavelet cache once
-and applying every operator to the same decompressed block, which is what
+spatial filters. Building those comparison inputs means reading each participant's
+wavelets once and applying every operator to the same block, which is what
 :func:`project_condition` does.
 
 Extracted from ``scripts/run_assr_snr_grid.py`` so the notebook and the CLI build their
@@ -15,13 +15,12 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 
 from src.analysis import assr_trials as at
 from src.definitions.fields import IvaVariants
-from src.io.loading import read_wavelet_cache_header, stream_wavelet_cache_subjects
+from src.io.wavelet_store import WaveletSet, iter_wavelet_subjects
 
 _logger = logging.getLogger(__name__)
 
@@ -84,7 +83,7 @@ class ProjectedVariants:
 
 
 def project_condition(
-    cache_path: Path,
+    wavelet_set: WaveletSet,
     condition: str,
     participants: list[str],
     resolve,
@@ -92,7 +91,6 @@ def project_condition(
     binary: np.ndarray,
     pca_rows: np.ndarray,
     freq_indices: np.ndarray,
-    cache_labels: list[str],
     store_channels: list[str],
     n_times: int | None,
     roi_index: np.ndarray,
@@ -101,12 +99,12 @@ def project_condition(
     mean_masked_filter: np.ndarray,
     projectors: np.ndarray,
 ) -> ProjectedVariants:
-    """Stream one condition once; return every per-condition array the grid needs.
+    """Read one condition once; return every per-condition array the grid needs.
 
-    Everything is read off the **same** decompressed block, so the four operators the
-    ``mean_*`` / ``masked_*`` variants add cost one more tensordot each rather than
-    another pass over a ~50 GB cache. The z-scored copy of a block is built once and
-    shared by every operator that needs it, for the same reason.
+    Everything is read off the **same** per-participant block, so the four operators
+    the ``mean_*`` / ``masked_*`` variants add cost one more tensordot each rather than
+    another read. The z-scored copy of a block is built once and shared by every
+    operator that needs it, for the same reason.
 
     The z-scored IC rows of ``stored_prestim`` are read straight from the store, so they
     are not produced here.
@@ -121,14 +119,13 @@ def project_condition(
         the IVA's own input can be rebuilt as ``P^T P (z)`` in channel space.
     :return: A :class:`ProjectedVariants`.
     """
-    header = read_wavelet_cache_header(cache_path)
-    if header.channel_names != store_channels:
+    if wavelet_set.channel_names != store_channels:
         raise ValueError(
-            f"{cache_path.name}: channel axis does not match the stored run's; the "
-            "filters are indexed by the stored channels."
+            f"{wavelet_set.directory}: channel axis does not match the stored run's; "
+            "the filters are indexed by the stored channels."
         )
-    keep_times = header.n_times if n_times is None else min(n_times, header.n_times)
-    wanted = {name: row for row, name in enumerate(participants)}
+    available = wavelet_set.open(participants[0]).shape[-1]
+    keep_times = available if n_times is None else min(n_times, available)
     n_comp = filters.shape[1]
 
     def _empty(rows: int) -> np.ndarray:
@@ -143,21 +140,16 @@ def project_condition(
     mean_stored_z = _empty(n_comp)
     masked_z = _empty(n_comp)
     mean_masked_z = _empty(n_comp)
-    seen = np.zeros(len(participants), bool)
 
     _logger.info(
-        f"[{condition}] streaming {cache_path.name} "
-        f"({cache_path.stat().st_size / 1e9:.1f} GB, {header.n_subjects} subjects, "
-        f"{freq_indices.size}/{header.n_freqs} bins kept)"
+        f"[{condition}] reading {len(participants)} participant(s) from "
+        f"{wavelet_set.directory} ({freq_indices.size}/{wavelet_set.n_freqs} bins kept)"
     )
     started = time.time()
-    for subject, block in stream_wavelet_cache_subjects(
-        cache_path, freq_indices=freq_indices, n_times=keep_times, header=header
-    ):
-        name = cache_labels[subject] if subject < len(cache_labels) else None
-        if name is None or name not in wanted:
-            continue
-        row = wanted[name]
+    subjects = iter_wavelet_subjects(
+        wavelet_set, participants, freq_indices=freq_indices, n_times=keep_times
+    )
+    for row, (name, block) in enumerate(subjects):
         store = resolve(name, condition)
         # per-recording spatial operators for this (participant, condition)
         full_row = binary[None, :]
@@ -191,15 +183,9 @@ def project_condition(
         # electrodes" entirely.
         masked_z[row] = at.project_channels(masked_filters[store], block_z)
         mean_masked_z[row] = at.project_channels(mean_masked_filter, block_z)
-        seen[row] = True
         _logger.info(
-            f"[{condition}]   {name} ({int(seen.sum())}/{len(participants)}, "
+            f"[{condition}]   {name} ({row + 1}/{len(participants)}, "
             f"{time.time() - started:.0f}s)"
-        )
-    if not seen.all():
-        absent = [p for p, ok in zip(participants, seen) if not ok]
-        raise ValueError(
-            f"[{condition}] participants {absent} never appeared in the cache."
         )
     _logger.info(f"[{condition}] projected in {time.time() - started:.0f}s")
     return ProjectedVariants(

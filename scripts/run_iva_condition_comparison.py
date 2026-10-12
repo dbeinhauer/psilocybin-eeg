@@ -20,18 +20,13 @@ one aligned set describes the whole pooled cohort — while the channel
 topographies ``(C,)`` stay per recording, which is what makes a per-condition
 contrast of the patterns meaningful.
 
-**No new wavelet cache is written.** The pooled tensor is assembled in memory
-from the existing per-condition caches by
+**No new wavelets are written.** The pooled tensor is assembled in memory
+from the existing per-condition stores by
 :func:`~scripts.notebook_helpers.load_joined_condition_wavelets`, which is
 possible because the alignment was fitted over every recording of both
 conditions, so they already share one time base. Asking for a ``JoinedSeparate_*``
-label directly would instead write a second, redundant copy of the cache.
-
-Pass ``--subset_cache`` to additionally keep a **per-extent** copy of each
-condition's trimmed tensor under
-``notebooks/03-wavelet-analysis/wavelet_cache/<experiment>/``: the first run at
-a given extent writes it, every later run reads it back and never decompresses
-the multi-GB source cache. Worth it here, since a joined load reads two of them.
+label directly would instead fail: the per-subject store holds one file per
+participant, and a pooled cohort names every participant twice.
 
 Sign handling, in the order it happens:
 
@@ -86,12 +81,12 @@ Examples::
 
     # ASSR, all matched participants, ten components
     python scripts/run_iva_condition_comparison.py \\
-        --experiment assr --n_pca 10 --reuse_wavelets --subset_cache
+        --experiment assr --n_pca 10 --reuse_wavelets
 
-    # Fast exploration on a channel/time subset, cached for the next run
+    # Fast exploration on a channel/time subset
     python scripts/run_iva_condition_comparison.py \\
         --experiment assr --n_pca 10 --n_channels 32 --n_times 3000 \\
-        --n_pairs 5 --reuse_wavelets --subset_cache
+        --n_pairs 5 --reuse_wavelets
 
 Pass ``--store_components`` to additionally keep the recovered components under
 ``data/processed/<experiment>/iva_results/<Condition>/``: the sign-aligned TF maps
@@ -123,7 +118,6 @@ from scripts.analysis_common import (  # noqa: E402
 )
 from scripts.notebook_helpers import (  # noqa: E402
     load_joined_condition_wavelets,
-    resolve_notebook_wavelet_cache_dir,
 )
 from src.analysis import iva_quality  # noqa: E402
 from src.analysis.iva_condition_comparison import (  # noqa: E402
@@ -305,26 +299,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--reuse_wavelets",
         action="store_true",
-        help="Reuse the cached per-condition transforms when available.",
-    )
-    parser.add_argument(
-        "--subset_cache",
-        action="store_true",
-        help=(
-            "Keep a per-extent copy of each condition's trimmed wavelet tensor "
-            "under notebooks/03-wavelet-analysis/wavelet_cache/<experiment>/, so "
-            "later runs at the same extent skip decompressing the source cache. "
-            "Shared with every other wavelet workflow."
-        ),
-    )
-    parser.add_argument(
-        "--no_reuse_subset_cache",
-        action="store_true",
-        help=(
-            "With --subset_cache, recompute from the source cache and overwrite "
-            "the subset entry instead of reading it — the escape hatch for a stale "
-            "cache."
-        ),
+        help="Reuse the stored per-condition transforms when available.",
     )
     band_group = parser.add_mutually_exclusive_group()
     band_group.add_argument(
@@ -489,8 +464,6 @@ def run_condition_comparison(
     freqs_full: np.ndarray,
     wavelet_dir: Path,
     reuse_wavelets: bool,
-    subset_cache_dir: Path | None,
-    reuse_subset_cache: bool,
     n_pca: int,
     components: list[int] | None,
     n_pairs: int | None,
@@ -521,8 +494,6 @@ def run_condition_comparison(
     :param wavelet_dir: Per-condition wavelet cache directory (band subdirectory
         appended here).
     :param reuse_wavelets: Reuse the cached transforms.
-    :param subset_cache_dir: Notebook-level subset cache, or ``None`` to disable.
-    :param reuse_subset_cache: Read an existing subset cache entry when present.
     :param n_pca: Per-recording channel-PCA dimension (= number of components).
     :param components: 0-based component indices to draw, or ``None`` for all.
     :param n_pairs: Keep only the first N matched participants, or ``None`` for all.
@@ -549,14 +520,12 @@ def run_condition_comparison(
         music_type,
         exclusion_categories,
         freqs_full,
-        wavelet_dir=wavelet_dir / SpectrumTypeVariants.BROADBAND.value,
+        wavelet_dir=wavelet_dir,
         experiment_name=experiment_name,
         conditions=conditions,
         n_channels=n_channels,
         n_times=n_times,
         reuse_wavelets=reuse_wavelets,
-        subset_cache_dir=subset_cache_dir,
-        reuse_subset_cache=reuse_subset_cache,
         n_jobs=n_jobs,
     )
 
@@ -892,12 +861,6 @@ def run(args: argparse.Namespace) -> None:
             else ProjectPaths.PROCESSED_DATA_DIR
         )
     )
-    subset_cache_dir = (
-        resolve_notebook_wavelet_cache_dir(experiment_name)
-        / SpectrumTypeVariants.BROADBAND.value
-        if args.subset_cache
-        else None
-    )
     freqs_full = np.linspace(
         args.wavelet_freq_min, args.wavelet_freq_max, args.wavelet_n_freqs
     )
@@ -916,8 +879,7 @@ def run(args: argparse.Namespace) -> None:
         f"band={band_token(band) or SpectrumTypeVariants.BROADBAND.value}, "
         f"iva_opt={args.iva_opt_approach}"
     )
-    _logger.info(f"Wavelet source cache : {wavelet_dir}")
-    _logger.info(f"Wavelet subset cache : {subset_cache_dir or 'disabled'}")
+    _logger.info(f"Wavelet store : {wavelet_dir}")
 
     for music_type in music_types:
         _logger.info(f"=== {music_type.value} ===")
@@ -929,8 +891,6 @@ def run(args: argparse.Namespace) -> None:
             freqs_full=freqs_full,
             wavelet_dir=wavelet_dir,
             reuse_wavelets=args.reuse_wavelets,
-            subset_cache_dir=subset_cache_dir,
-            reuse_subset_cache=not args.no_reuse_subset_cache,
             n_pca=args.n_pca,
             components=components,
             n_pairs=args.n_pairs,

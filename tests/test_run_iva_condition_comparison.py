@@ -211,11 +211,8 @@ class TestCliDefaults:
         assert args.n_channels is None
         assert args.n_times is None
 
-    def test_caches_are_opt_in(self):
-        """Neither cache may be written unless asked for."""
-        args = _build_arg_parser().parse_args([])
-        assert args.reuse_wavelets is False
-        assert args.subset_cache is False
+    def test_wavelet_reuse_is_opt_in(self):
+        assert _build_arg_parser().parse_args([]).reuse_wavelets is False
 
     def test_the_stimulus_average_is_on_by_default(self):
         assert _build_arg_parser().parse_args([]).skip_onset_average is False
@@ -534,18 +531,6 @@ class TestEndToEnd:
         ]
         # The band prefix never leaks into the broadband tree.
         assert not any(p.name.startswith("gamma_") for p in broadband.rglob("*.png"))
-
-    def test_the_subset_cache_is_written_only_when_asked(
-        self, tmp_path, stub_loaders, monkeypatch
-    ):
-        cache = tmp_path / "subset_cache"
-        monkeypatch.setattr(
-            run_iva_condition_comparison,
-            "resolve_notebook_wavelet_cache_dir",
-            lambda experiment_name: cache,
-        )
-        main(_argv(tmp_path, "--skip_onset_average"))
-        assert not cache.exists(), "the cache was written without --subset_cache"
 
     def test_psilo_music_defaults_to_both_music_types(
         self, tmp_path, stub_loaders, monkeypatch

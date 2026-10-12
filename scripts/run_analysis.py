@@ -43,7 +43,6 @@ from scripts.analysis_common import (
     run_wavelet_workflow,
 )
 from src.definitions.fields import (
-    SpectrumTypeVariants,
     MusicTypeVariants,
     ConditionVariants,
     ExclusionCategories,
@@ -145,18 +144,16 @@ def run(args: argparse.Namespace) -> None:
     wavelet_plots_root = ProjectPaths.analysis_plots_dir(
         _STAGE_DIR, "", root=save_root
     )
-    # Shared wavelet cache directory — power and phase outputs coexist since
-    # the representation is encoded in the cached filename. This lets the
-    # power workflow reuse a pre-computed phase cache for the power-vs-phase
-    # joint plot.
+    # The experiment's wavelet store: one directory per label, one file per
+    # participant, power and phase side by side (the representation is in the name).
     wavelet_cache_root = resolve_wavelet_dir(args.wavelet_data_dir, experiment_name)
 
     # ── Pre-alignment wavelet cache (stimulus-based experiments) ──
     # For experiments that use stimulus-based alignment (e.g. ASSR), wavelets
     # computed on the spliced RAW_CROPPED signal suffer from edge artifacts at
-    # every splice point.  When the cache is not being reused, pre-compute the
+    # every splice point.  When the store is not being reused, pre-compute the
     # wavelet transform on the continuous RAW_AFTER_ICA data and trim
-    # afterwards, then tell the workflow to reuse the just-saved cache.
+    # afterwards, then tell the workflow to reuse the just-stored subjects.
     reuse_wavelets_for_workflow = args.reuse_wavelets
     if (
         run_wavelet
@@ -166,18 +163,15 @@ def run(args: argparse.Namespace) -> None:
         representations = (["power"] if run_wavelet_power else []) + (
             ["phase"] if run_wavelet_phase else []
         )
-        # The workflow (and all Stage-04/05 consumers) read the broadband
-        # wavelet cache from ``<wavelet_dir>/broadband`` (see
-        # ``_broadband_wavelet_4d``). Write the pre-aligned cache to that same
-        # subdirectory so it is actually reused downstream — otherwise the
-        # workflow would silently recompute wavelets from the stimulus-spliced
-        # RAW_CROPPED signal, reintroducing the splice-edge artifacts this
-        # pre-alignment step exists to avoid.
+        # Written to the same store the workflow (and every later stage) reads, so
+        # it is actually reused downstream — otherwise the workflow would recompute
+        # wavelets from the stimulus-spliced RAW_CROPPED signal, reintroducing the
+        # splice-edge artifacts this pre-alignment step exists to avoid.
         precompute_pre_alignment_wavelet_cache(
             analyzers,
             freqs=wavelet_freqs,
             representations=representations,
-            wavelet_dir=wavelet_cache_root / SpectrumTypeVariants.BROADBAND.value,
+            wavelet_dir=wavelet_cache_root,
             resample_freq=250.0,
             n_jobs=args.n_jobs,
         )
