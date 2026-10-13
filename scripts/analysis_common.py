@@ -39,8 +39,14 @@ from src.definitions.frequency import (
     WAVELET_N_FREQS,
 )
 import numpy as np
+import pandas as pd
 from scipy.stats import circmean
 
+from src.analysis.corrca import (
+    CorrcaDecomposition,
+    CorrcaResult,
+    anchor_component_signs,
+)
 from src.analysis.data_representations import (
     subset as data_subset,
     AnalysisData,
@@ -71,6 +77,7 @@ from src.visualization.isc_plots import (
     plot_multiscale_sliding_window_isc,
     plot_band_multiscale_sliding_window_isc,
 )
+from src.visualization.corrca_plots import plot_condition_isc, plot_shared_topomaps
 from src.visualization.mean_variance_plots import (
     plot_timeseries,
     plot_variance_distribution,
@@ -235,6 +242,333 @@ def add_iva_store_args(parser: argparse.ArgumentParser) -> None:
             "computed values bit-exact."
         ),
     )
+
+
+# ──────────────────────────────────────────────────────────────────────
+# CorrCA condition comparison (stage 06b)
+# ──────────────────────────────────────────────────────────────────────
+
+#: Sign note printed on every stage-06b figure when the anchor was applied.
+CORRCA_ALIGNMENT_NOTE = (
+    "corr(shared topography, ASSR electrode mask), one sign per component"
+)
+#: The same when the montage carries no anchor electrode.
+CORRCA_ALIGNMENT_NOTE_NONE = "fit orientation (no ASSR anchor electrode present)"
+
+
+def add_corrca_condition_args(parser: argparse.ArgumentParser) -> None:
+    """Add the arguments both stage-06b scripts share.
+
+    Mirrors the stage-06 IVA scripts' interface, minus the IVA optimiser settings and
+    plus ``--gamma``, so a run moves between the two stages by changing the script.
+
+    :param parser: Parser to extend.
+    """
+    parser.add_argument(
+        "--experiment",
+        choices=[e.value for e in ExperimentNames],
+        default=ExperimentNames.PSILO_MUSIC.value,
+        help="Which experiment dataset to analyse.",
+    )
+    parser.add_argument(
+        "--music_type",
+        nargs="+",
+        choices=[mt.value for mt in MusicTypeVariants],
+        default=None,
+        help=(
+            "One or more music types, each analysed in its own run. When omitted, "
+            "defaults to CLASSIC + PSYTRANCE for psilo_music and ASSR for assr."
+        ),
+    )
+    parser.add_argument(
+        "--conditions",
+        nargs="+",
+        choices=[c.value for c in REAL_CONDITIONS],
+        default=[c.value for c in REAL_CONDITIONS],
+        help="Conditions to join, in block order and figure-row order.",
+    )
+    parser.add_argument(
+        "--n_pca",
+        type=int,
+        default=10,
+        help=(
+            "Dimension of the pooled within-subject covariance subspace the shared "
+            "filters are sought in, i.e. the number of components. Must be ≤ the "
+            "number of channels."
+        ),
+    )
+    parser.add_argument(
+        "--gamma",
+        type=float,
+        default=0.0,
+        help=(
+            "Shrinkage of the pooled within-subject covariance toward a scaled "
+            "identity, in [0, 1]. 0 relies on the --n_pca truncation alone."
+        ),
+    )
+    parser.add_argument(
+        "--components",
+        type=int,
+        nargs="+",
+        default=None,
+        help="1-based component numbers to draw ('CC <k>'). Defaults to all.",
+    )
+    parser.add_argument(
+        "--n_pairs",
+        type=int,
+        default=None,
+        help="Keep only the first N matched participants, by ID. Defaults to all.",
+    )
+    parser.add_argument(
+        "--n_channels",
+        type=int,
+        default=None,
+        help="Keep only the first N channels. Defaults to all of them.",
+    )
+    parser.add_argument(
+        "--n_times",
+        type=int,
+        default=None,
+        help="Keep only the first N time samples (of each condition). Defaults to all.",
+    )
+    add_wavelet_grid_args(parser)
+    parser.add_argument(
+        "--wavelet_data_dir",
+        type=Path,
+        default=None,
+        help=(
+            "Base data directory holding the per-condition wavelet caches. The "
+            "'<experiment>/wavelets' suffix is appended automatically."
+        ),
+    )
+    parser.add_argument(
+        "--reuse_wavelets",
+        action="store_true",
+        help="Reuse the stored per-condition transforms when available.",
+    )
+    band_group = parser.add_mutually_exclusive_group()
+    band_group.add_argument(
+        "--band",
+        choices=[b.value for b in FrequencyBandNames],
+        default=None,
+        help=(
+            "Optional standard frequency band; the tensor is sliced to it BEFORE the "
+            "fit, and plots get a '<band>_' prefix under 'bands/'."
+        ),
+    )
+    band_group.add_argument(
+        "--band_range",
+        nargs=2,
+        type=float,
+        metavar=("LOW", "HIGH"),
+        default=None,
+        help="An explicit frequency window in Hz, sliced exactly as --band is.",
+    )
+    parser.add_argument(
+        "--skip_onset_average",
+        action="store_true",
+        help="Skip the stimulus-averaged TF comparison (skipped anyway without onsets).",
+    )
+    parser.add_argument(
+        "--min_onsets",
+        type=int,
+        default=5,
+        help="Minimum stimulus epochs that must fit before averaging over them.",
+    )
+    parser.add_argument(
+        "--no_difference_row",
+        action="store_true",
+        help="Omit the between-condition difference row from the condition-mean grids.",
+    )
+    parser.add_argument(
+        "--save_dir",
+        type=Path,
+        default=None,
+        help="Base directory for output plots. Defaults to the project plots/ root.",
+    )
+    add_iva_store_args(parser)
+    parser.add_argument(
+        "--n_jobs",
+        type=int,
+        default=1,
+        help="Number of parallel jobs for data loading.",
+    )
+    parser.add_argument(
+        "--coordinate_system",
+        default=CoordinateSystems.HYDROGEL_257_NO_FIDUCIALS.value,
+        help="Montage the ASSR electrode mask is read for.",
+    )
+    parser.add_argument(
+        "--lenient_mask",
+        action="store_true",
+        help="Accept the intersection when anchor electrodes are missing.",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable DEBUG logging.",
+    )
+
+
+def anchor_corrca_signs(
+    corrca: CorrcaDecomposition,
+    channel_names: Sequence[str],
+    coordinate_system: CoordinateSystems,
+    *,
+    lenient_mask: bool,
+    label: str,
+    logger: logging.Logger,
+) -> tuple[CorrcaDecomposition, str, dict[str, np.ndarray]]:
+    """Orient each CorrCA component to the ASSR electrodes, once per component.
+
+    The stage-06b counterpart of the stage-06 per-``(recording, component)`` anchor:
+    same criterion (:func:`~src.analysis.assr_trials.polarity_flip`), read on the
+    shared pattern and applied to every recording alike — see
+    :func:`~src.analysis.corrca.anchor_component_signs`. A montage without any anchor
+    electrode keeps the fit's own orientation (largest pattern weight positive), which
+    is still one consistent sign per component, so no group mean cancels.
+
+    :return: ``(oriented, alignment_note, store_extras)``.
+    """
+    from src.analysis import assr_trials as at
+    from src.io.loading import assr_electrode_mask
+
+    try:
+        present = assr_electrode_mask(channel_names, coordinate_system, strict=False)
+    except FileNotFoundError:
+        present = np.zeros(len(channel_names), dtype=bool)
+    if not present.any():
+        logger.warning(
+            f"[{label}] no anchor electrode of {coordinate_system.value} in this "
+            "montage; components keep the fit's orientation (largest shared-pattern "
+            "weight positive). Check --coordinate_system."
+        )
+        return (
+            corrca,
+            CORRCA_ALIGNMENT_NOTE_NONE,
+            {"polarity_anchor": np.asarray("none")},
+        )
+
+    electrode_mask = assr_electrode_mask(
+        channel_names, coordinate_system, strict=not lenient_mask
+    )
+    oriented, flip, strength = anchor_component_signs(corrca, electrode_mask)
+    n_weak, n_anchors = at.polarity_weak_count(strength[None])
+    logger.info(
+        f"[{label}] ASSR-mask sign anchor (shared pattern): "
+        f"{int((flip < 0).sum())}/{flip.size} component(s) flipped; {n_weak}/"
+        f"{n_anchors} decided on |corr| < {at.POLARITY_CORR_FLOOR}"
+    )
+    return (
+        oriented,
+        CORRCA_ALIGNMENT_NOTE,
+        {
+            "polarity_anchor": np.asarray("assr_mask_corr_shared"),
+            "polarity_anchor_flip": flip,
+            "polarity_anchor_strength": strength,
+        },
+    )
+
+
+def corrca_store_extras(
+    model: CorrcaResult, group_isc: pd.DataFrame, conditions: Sequence[str]
+) -> dict[str, np.ndarray]:
+    """The CorrCA-specific arrays a stage-06b run keeps beside its components.
+
+    :param model: The oriented CorrCA fit.
+    :param group_isc: First frame of :func:`~src.analysis.corrca.condition_isc`.
+    :param conditions: Condition order of the ``corrca_condition_isc`` rows.
+    :return: Store extras: the filters, shared patterns and fit ISC, the
+        regularisation, and the ``(conditions, K)`` per-condition ISC.
+    """
+    per_condition = np.stack(
+        [
+            group_isc[group_isc["condition"] == c].sort_values("component")["isc"]
+            for c in conditions
+        ]
+    )
+    return {
+        "corrca_filters": model.filters,
+        "corrca_shared_patterns": model.patterns,
+        "corrca_fit_isc": model.isc,
+        "corrca_gamma": np.asarray(model.gamma),
+        "corrca_n_retained": np.asarray(model.n_retained),
+        "corrca_condition_isc": per_condition,
+        "corrca_condition_isc_conditions": np.asarray(list(conditions), dtype=str),
+    }
+
+
+def log_corrca_conditions(
+    group_isc: pd.DataFrame,
+    tests: pd.DataFrame | None,
+    *,
+    label: str,
+    logger: logging.Logger,
+) -> None:
+    """Log each component's per-condition ISC and paired test, one line each."""
+    for component, rows in group_isc.groupby("component"):
+        values = ", ".join(f"{r.condition} {r.isc:.4f}" for r in rows.itertuples())
+        line = f"[{label}] CC {component}: ISC {values}"
+        if tests is not None:
+            test = tests[tests["component"] == component].iloc[0]
+            line += (
+                f"; paired LOO-ISC Δmedian {test.median_difference:+.4f} over "
+                f"{int(test.n_pairs)} participant(s), Wilcoxon p {test.p_value:.3g} "
+                "(uncorrected)"
+            )
+        logger.info(line)
+
+
+def write_corrca_condition_report(
+    model: CorrcaResult,
+    group_isc: pd.DataFrame,
+    participant_isc: pd.DataFrame,
+    tests: pd.DataFrame | None,
+    conditions: Sequence[str],
+    info,
+    n_channels: int,
+    comp_indices: Sequence[int],
+    *,
+    label: str,
+    alignment_note: str | None,
+    out_dir: Path,
+    prefix: str,
+) -> None:
+    """Write the CorrCA-only products of a stage-06b run: the ISC tables and figures.
+
+    Three CSVs (group ISC per condition, per-participant leave-one-out ISC, the paired
+    test) and two figures (the shared topographies and the per-condition synchrony),
+    all in *out_dir* beside the condition grids.
+    """
+    import matplotlib.pyplot as plt
+
+    group_isc.to_csv(out_dir / f"{prefix}corrca_condition_isc.csv", index=False)
+    participant_isc.to_csv(out_dir / f"{prefix}corrca_participant_isc.csv", index=False)
+    if tests is not None:
+        tests.to_csv(out_dir / f"{prefix}corrca_condition_isc_test.csv", index=False)
+
+    plot_shared_topomaps(
+        model.patterns,
+        model.isc,
+        info,
+        n_channels,
+        comp_indices,
+        label=label,
+        alignment_note=alignment_note,
+        save_path=out_dir / f"{prefix}corrca_shared_topomaps.png",
+    )
+    plt.close("all")
+    plot_condition_isc(
+        group_isc,
+        participant_isc,
+        tests,
+        conditions,
+        comp_indices,
+        label=label,
+        fit_isc=model.isc,
+        save_path=out_dir / f"{prefix}corrca_condition_isc.png",
+    )
+    plt.close("all")
 
 
 def add_common_arguments(parser: argparse.ArgumentParser) -> None:

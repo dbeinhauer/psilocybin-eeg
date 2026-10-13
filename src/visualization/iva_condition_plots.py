@@ -305,6 +305,7 @@ def plot_condition_mean_topomaps(
     label: str,
     show_difference: bool = True,
     alignment_note: Optional[str] = None,
+    component_prefix: str = "IC",
     save_path: Optional[Path] = None,
 ):
     """Condition-mean channel topographies: rows = conditions, columns = components.
@@ -333,6 +334,7 @@ def plot_condition_mean_topomaps(
     :param show_difference: Add the difference row when exactly two conditions are
         given. Ignored otherwise.
     :param alignment_note: What resolved the per-recording sign, named in the title.
+    :param component_prefix: Component label, e.g. ``"IC"`` (IVA) or ``"CC"`` (CorrCA).
     :param save_path: Optional output path.
     :return: The figure, or ``None`` when *comp_indices* is empty.
     :raises ValueError: If the shapes and the bookkeeping disagree.
@@ -391,7 +393,9 @@ def plot_condition_mean_topomaps(
                 contours=4,
             )
             if i == 0:
-                axes[i, j].set_title(f"IC {k + 1}\n(|max| {vlims[k]:.3g})", fontsize=8)
+                axes[i, j].set_title(
+                    f"{component_prefix} {k + 1}\n(|max| {vlims[k]:.3g})", fontsize=8
+                )
             elif is_difference:
                 axes[i, j].set_title(f"|max| {vlim:.3g}", fontsize=6)
         row_label = (
@@ -426,6 +430,7 @@ def plot_condition_mean_tf_maps(
     freq_marks: Optional[Sequence[float]] = None,
     epoch_marks: Optional[Sequence[float]] = None,
     alignment_note: Optional[str] = None,
+    component_prefix: str = "IC",
     save_path: Optional[Path] = None,
 ):
     """Condition-mean component TF maps: rows = conditions, columns = components.
@@ -451,6 +456,7 @@ def plot_condition_mean_tf_maps(
     :param epoch_marks: Prominent times (s) to mark, e.g. ``[0.0, 0.5]`` for the
         stimulus onset and offset of an onset-averaged epoch.
     :param alignment_note: What resolved the per-recording sign, named in the title.
+    :param component_prefix: Component label, e.g. ``"IC"`` (IVA) or ``"CC"`` (CorrCA).
     :param save_path: Optional output path.
     :return: The figure, or ``None`` when *comp_indices* is empty.
     :raises ValueError: If the shapes and the bookkeeping disagree.
@@ -512,7 +518,9 @@ def plot_condition_mean_tf_maps(
                 epoch_marks=epoch_marks,
             )
             if i == 0:
-                axes[i, j].set_title(f"IC {k + 1}\n(|max| {vlims[k]:.3g})", fontsize=8)
+                axes[i, j].set_title(
+                    f"{component_prefix} {k + 1}\n(|max| {vlims[k]:.3g})", fontsize=8
+                )
             elif is_difference:
                 axes[i, j].set_title(f"|max| {vlim:.3g}", fontsize=6)
             if i == len(rows) - 1:
@@ -553,6 +561,7 @@ def plot_participant_condition_topomaps(
     prefix: str = "",
     show_condition_mean: bool = True,
     alignment_note: Optional[str] = None,
+    component_prefix: str = "IC",
 ) -> list[Path]:
     """One figure per component: every participant's topography, condition per row.
 
@@ -583,6 +592,7 @@ def plot_participant_condition_topomaps(
     :param prefix: Optional filename prefix (e.g. ``"alpha_"``).
     :param show_condition_mean: Append the per-condition mean column.
     :param alignment_note: What resolved the per-recording sign, named in the title.
+    :param component_prefix: Component label, e.g. ``"IC"`` (IVA) or ``"CC"`` (CorrCA).
     :return: One path per component, in *comp_indices* order.
     :raises ValueError: If the shapes and the bookkeeping disagree.
     """
@@ -684,7 +694,7 @@ def plot_participant_condition_topomaps(
             else f"one row ({conditions[0]}), column = participant (by ID)"
         )
         fig.suptitle(
-            f"IC {k + 1} — channel topography per participant — {label}\n"
+            f"{component_prefix} {k + 1} —channel topography per participant — {label}\n"
             f"{row_note}  |  "
             f"equal-weighted participants, shared |pattern| ≤ {vlim:.3g}"
             f"{'' if alignment_note is None else f'  |  sign: {alignment_note}'}",
@@ -692,7 +702,7 @@ def plot_participant_condition_topomaps(
         )
         path = (
             root_dir
-            / f"{prefix}condition_topomap_ic{k + 1:02d}_participants_{label}.png"
+            / f"{prefix}condition_topomap_{component_prefix.lower()}{k + 1:02d}_participants_{label}.png"
         )
         save_fig(fig, path)
         plt.close(fig)
@@ -721,6 +731,7 @@ def plot_participant_condition_tf_maps(
     freq_marks: Optional[Sequence[float]] = None,
     epoch_marks: Optional[Sequence[float]] = None,
     alignment_note: Optional[str] = None,
+    component_prefix: str = "IC",
 ) -> list[Path]:
     """One figure per component: every participant's TF map, condition per row.
 
@@ -747,6 +758,7 @@ def plot_participant_condition_tf_maps(
     :param epoch_marks: Prominent times (s) to mark, e.g. ``[0.0, 0.5]`` for the
         stimulus onset and offset of an onset-averaged epoch.
     :param alignment_note: What resolved the per-recording sign, named in the title.
+    :param component_prefix: Component label, e.g. ``"IC"`` (IVA) or ``"CC"`` (CorrCA).
     :return: One path per component, in *comp_indices* order.
     :raises ValueError: If the shapes and the bookkeeping disagree.
     """
@@ -859,13 +871,16 @@ def plot_participant_condition_tf_maps(
             else f"one row ({conditions[0]}), column = participant (by ID)"
         )
         fig.suptitle(
-            f"IC {k + 1} — component TF map per participant — {label}\n"
+            f"{component_prefix} {k + 1} —component TF map per participant — {label}\n"
             f"{row_note}  |  "
             f"equal-weighted participants, shared |source| ≤ {vlim:.3g}"
             f"{'' if alignment_note is None else f'  |  sign: {alignment_note}'}",
             fontsize=11,
         )
-        path = root_dir / f"{prefix}condition_tf_ic{k + 1:02d}_participants_{label}.png"
+        path = (
+            root_dir
+            / f"{prefix}condition_tf_{component_prefix.lower()}{k + 1:02d}_participants_{label}.png"
+        )
         save_fig(fig, path)
         plt.close(fig)
         written.append(path)

@@ -173,8 +173,22 @@ def plot_courses(
     plt.close(fig)
 
 
-def plot_cell(cell_tables, value, conditions, labels, ic_labels, alpha, title, path):
-    """The p-value summary (contrast + one versus panel per reference) for one grid cell."""
+def plot_cell(
+    cell_tables,
+    value,
+    conditions,
+    labels,
+    ic_labels,
+    alpha,
+    title,
+    path,
+    component_prefix="IC",
+):
+    """The p-value summary (contrast + one versus panel per reference) for one grid cell.
+
+    *component_prefix* names the learned rows on the axes: ``"IC"`` (IVA) or ``"CC"``
+    (CorrCA, stage 06b).
+    """
     rng = np.random.default_rng(42)
     contrast = cell_tables["contrast"].set_index("source")
     fig, axes = plt.subplots(
@@ -211,7 +225,7 @@ def plot_cell(cell_tables, value, conditions, labels, ic_labels, alpha, title, p
             ax,
             rows,
             alpha,
-            f"(IC - {mask}) contrast",
+            f"({component_prefix} - {mask}) contrast",
             f"Better than {mask}?\ntwo-sided; 0 = as good",
             rng,
         )
@@ -221,11 +235,21 @@ def plot_cell(cell_tables, value, conditions, labels, ic_labels, alpha, title, p
     plt.close(fig)
 
 
-def plot_snr(cell_tables, value, conditions, ic_labels, alpha, title, path):
+def plot_snr(
+    cell_tables,
+    value,
+    conditions,
+    ic_labels,
+    alpha,
+    title,
+    path,
+    component_prefix="IC",
+):
     """SNR-by-condition: one panel per reference, both conditions overlaid.
 
     Source columns of ``value[cond]`` are the IC rows first, then the two masks, so an
     IC row *i* is column *i* and a mask is ``len(ic_labels) + its offset``.
+    *component_prefix* names the learned rows on the x axis (``"IC"`` / ``"CC"``).
     """
     rng = np.random.default_rng(42)
     offsets = np.linspace(0.2, -0.2, len(conditions))
@@ -287,7 +311,7 @@ def plot_snr(cell_tables, value, conditions, ic_labels, alpha, title, path):
         ax.axvline(0.0, color="0.3", lw=1.3, zorder=1)
         ax.set_yticks(range(n_ic))
         ax.set_yticklabels(list(reversed(ic_labels)))
-        ax.set_xlabel(f"IC SNR - {mask} SNR")
+        ax.set_xlabel(f"{component_prefix} SNR - {mask} SNR")
         ax.set_title(f"vs {mask}", loc="left", fontsize=11)
     handles = [
         plt.Line2D([0], [0], marker="o", color=CONDITION_COLORS[c], lw=0, label=c)

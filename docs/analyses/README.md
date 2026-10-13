@@ -13,6 +13,7 @@ why — the reasoning that is too long to sit in a notebook cell or a docstring.
 | `04-wavelet-ica-analysis` | [README](04-wavelet-ica-analysis/README.md) |
 | `05-wavelet-iva-analysis` | [README](05-wavelet-iva-analysis/README.md) |
 | `06-iva-condition-comparison` | [README](06-iva-condition-comparison/README.md) |
+| `06b-corrca-condition-comparison` | [README](06b-corrca-condition-comparison/README.md) |
 | `07-ica-condition-comparison` | [README](07-ica-condition-comparison/README.md) |
 | `08-contrastive-synchrony` | [README](08-contrastive-synchrony/README.md) |
 

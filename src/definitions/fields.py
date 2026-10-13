@@ -252,6 +252,11 @@ class IvaVariants(Enum):
       (:attr:`ConditionVariants.JOINED_TRACKS`): one dataset per participant, whose
       time axis carries both condition tracks end to end, so the row is shared by
       the conditions and the split is a slice of the time axis.
+    * :attr:`CORRCA_CHANNEL_JOINED_SEPARATE` / :attr:`CORRCA_CHANNEL_JOINED_TRACKS` —
+      the same two joins decomposed by Correlated Component Analysis
+      (:mod:`src.analysis.corrca`) instead of IVA: one channel filter shared by every
+      recording, components ranked by inter-subject correlation. The products have
+      the :attr:`CHANNEL` shapes, so they share the store and the figures.
     """
 
     CHANNEL = "iva_channel"
@@ -259,6 +264,8 @@ class IvaVariants(Enum):
     TIME = "iva_time"
     CHANNEL_JOINED_SEPARATE = "iva_channel_joined_separate"
     CHANNEL_JOINED_TRACKS = "iva_channel_joined_tracks"
+    CORRCA_CHANNEL_JOINED_SEPARATE = "corrca_channel_joined_separate"
+    CORRCA_CHANNEL_JOINED_TRACKS = "corrca_channel_joined_tracks"
 
 
 class JicaVariants(Enum):

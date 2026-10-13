@@ -16,7 +16,8 @@ Two experiments, both live:
   `fam+` annotations, not a TAG channel, so it uses a different alignment path
   (`stimulus_alignment.py`, `marker_shift.py`).
 
-Analysis stages 00-07 are complete. Stage 08 (`src/models/`, a contrastive synchrony
+Analysis stages 00-07 are complete. Stage 06b (`06b-corrca-condition-comparison`) is
+the CorrCA counterpart of stage 06, on the same joins and figures. Stage 08 (`src/models/`, a contrastive synchrony
 model trained on the music wavelet power) opens the ML phase; it is a baseline meant to
 be iterated through its config, `config/models/contrastive_synchrony.yaml`. ASSR is its
 held-out validation set and is never trained on.
@@ -75,8 +76,9 @@ practice, by three CLI scripts too).
 - **`preprocessing/`** — `channel_prep` → `filtering` → `ica` → `time_alignment` for
   `psilo_music`; `stimulus_alignment` and `marker_shift` carry the ASSR path.
   `pipeline.py` orchestrates. Uses MNE `Raw`/`Epochs`.
-- **`analysis/`** — 12 modules: `isc.py`, `mean_variance.py`, `wavelet_ica.py` (time-axis
-  z-scoring + IVA polarity), `wavelet_jica.py`, `iva_quality.py`,
+- **`analysis/`** — 13 modules: `isc.py`, `mean_variance.py`, `wavelet_ica.py` (time-axis
+  z-scoring + IVA polarity), `corrca.py` (Correlated Component Analysis, stage 06b),
+  `wavelet_jica.py`, `iva_quality.py`,
   `iva_condition_comparison.py`, `condition_tracks.py`, `assr_trials.py`,
   `assr_variants.py`, `pca_polarity.py`, `data_representations.py` (`AnalysisData`), `summary.py`
   (`EEGSummarizedAnalyzer`). Input shape convention:
@@ -87,9 +89,10 @@ practice, by three CLI scripts too).
   wavelet store as frame-rate log power, `(subjects, features, frames)`),
   `encoders.py` (`@register_encoder` registry), `training.py` (InfoNCE, batch sampler,
   train loop, embedding), `synchrony.py` (group synchrony + time-shift null, numpy only).
-- **`visualization/`** — 10 modules: `preprocessing_plots`, `isc_plots`,
-  `mean_variance_plots`, `wavelet_plots`, `iva_quality_plots`, `iva_condition_plots`,
-  `jica_plots`, `assr_filter_plots`, `assr_snr_plots`, `contrastive_plots`. Seaborn for statistical plots, Matplotlib for
+- **`visualization/`** — 11 modules: `preprocessing_plots`, `isc_plots`,
+  `mean_variance_plots`, `wavelet_plots`, `iva_quality_plots`, `iva_condition_plots`
+  (also drawn by stage 06b, `component_prefix="CC"`), `corrca_plots`, `jica_plots`,
+  `assr_filter_plots`, `assr_snr_plots`, `contrastive_plots`. Seaborn for statistical plots, Matplotlib for
   topomaps. Most plot functions take an optional `save_path`, but this is not universal —
   `preprocessing_plots.py` uses `plot_path` / `save_fig` instead.
 - **`filtering/`** — `DatasetFilter`, metadata-level DataFrame filtering.
@@ -141,7 +144,8 @@ PBS job use, and the resulting figures. Three rules follow:
 - **Deep method prose lives in `docs/analyses/<stage>/`**, not in the notebook. The
   notebook explains a step briefly and links there.
 
-Stages 01-08 are drivers of about eight cells each; stage 00 is not yet converted.
+Stages 01-08 (and 06b) are drivers of about eight cells each; stage 00 is not yet
+converted.
 The notebooks are generated from templates, so siblings cannot drift apart.
 
 A notebook runs small through `--n_subjects`, `--n_channels` and `--n_times`, which every
@@ -186,7 +190,7 @@ but the order never changes. Band files are prefixed with the band name.
 
 ## HPC
 
-PBS job templates live in `jobs/metacentrum/{NN}-{analysis-name}/` (45 of them), which is
+PBS job templates live in `jobs/metacentrum/{NN}-{analysis-name}/` (49 of them), which is
 the only cluster target. Each template runs its script inside a container via a heredoc'd
 inner script. When adding one, copy an existing template's resource shape rather than inventing
 a new one, and keep the job in the stage directory matching its script.

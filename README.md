@@ -183,6 +183,7 @@ Notebooks, plots and PBS jobs are organised by the same stage numbering:
 | `04-wavelet-ica-analysis` | ICA on wavelet tensors, five axis variants |
 | `05-wavelet-iva-analysis` | IVA on wavelet tensors, plus component quality |
 | `06-iva-condition-comparison` | IVA across conditions (joined / joined-tracks) |
+| `06b-corrca-condition-comparison` | CorrCA across conditions, synchrony per condition |
 | `07-ica-condition-comparison` | Joint ICA across conditions |
 
 A notebook is for **parameter selection**: config, the grid being explored, a small-scale
