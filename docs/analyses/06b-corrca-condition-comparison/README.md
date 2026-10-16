@@ -18,9 +18,16 @@ compared panel for panel.
 The SNR jobs read the store the first two write (`--store_components`, same `--n_pca`,
 full channel set), so run them second.
 
+Every job has a `*_gamma.pbs` twin that decomposes only 30–50 Hz (`--band_range 30 50`,
+stored and plotted as `30-50hz`, under `bands/`). The gamma SNR jobs read the gamma
+store (`--band 30-50hz`).
+
 The notebooks in `notebooks/06b-corrca-condition-comparison/` select parameters at
-reduced scale. They call the same `run()` function the jobs do, and the script is the
-ground truth. The core is `src/analysis/corrca.py`.
+reduced scale: `corrca_channel_joined_*` for the decomposition (`BAND_RANGE = (30, 50)`
+for the gamma run) and `corrca_component_analysis_joined_*` for the SNR grid
+(`BAND = "30-50hz"`). They call the same `run()` function the jobs do, and the script is
+the ground truth. The SNR notebooks read the strip under `notebooks/cache/`, built by
+`scripts/run_build_notebook_cache.py`. The core is `src/analysis/corrca.py`.
 
 ---
 
@@ -62,10 +69,19 @@ central difference from IVA, and it has three consequences:
 
 - **Sign.** A component has the same polarity in every subject by construction, so no
   per-subject sign alignment exists or is needed. The one free sign per component is
-  fixed from the **shared** forward pattern against the ASSR electrode mask, using the
-  same correlation criterion as stage 06 (`assr_trials.polarity_flip`). It is applied
-  to every recording alike. Flipping a single recording would invert part of a
-  component the model fitted as one.
+  fixed so the **shared** forward pattern is positive on average over the ASSR
+  electrodes (`corrca.anchor_component_signs`). The topomaps then read positive over
+  that area, and more power there is a positive source. It is applied to every
+  recording alike. Flipping a single recording would invert part of a component the
+  model fitted as one.
+
+  This is not stage 06's criterion. Stage 06 flips on the correlation with the mask
+  (`assr_trials.polarity_flip`): is the area more positive *than the rest of the head*?
+  That leaves a component sitting on a global negative offset blue over the mask. The
+  relative test exists to keep IVA's per-recording flips from following each
+  recording's own offset. With one shared sign that risk doesn't arise, so 06b uses
+  the absolute one. The stored `polarity_anchor_strength` is
+  `|mask mean| / RMS of the pattern`; below 0.1 the sign is close to a coin toss.
 - **Topographies.** The model's own topography is the shared forward pattern
   `A = R_w W` (figure `corrca_shared_topomaps`). Each subject also gets a descriptive
   pattern, `A_s = R_ss W (Wᵀ R_ss W)⁻¹`: the shared component seen through that

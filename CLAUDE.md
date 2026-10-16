@@ -190,7 +190,7 @@ but the order never changes. Band files are prefixed with the band name.
 
 ## HPC
 
-PBS job templates live in `jobs/metacentrum/{NN}-{analysis-name}/` (49 of them), which is
+PBS job templates live in `jobs/metacentrum/{NN}-{analysis-name}/` (53 of them), which is
 the only cluster target. Each template runs its script inside a container via a heredoc'd
 inner script. When adding one, copy an existing template's resource shape rather than inventing
 a new one, and keep the job in the stage directory matching its script.

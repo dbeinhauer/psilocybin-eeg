@@ -1,0 +1,94 @@
+#!/bin/bash
+#PBS -N PSILO_CORRCA_SNR_TRACKS_06B_BAND
+#PBS -l walltime=1:00:00
+#PBS -l select=1:ncpus=4:mem=200gb:scratch_local=100gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-06b — full-recording ASSR SNR / condition-contrast GRID for the stored
+# CorrCA time-axis (JoinedTracks) run (scripts/run_corrca_snr_grid.py).
+#
+# The CorrCA companion of
+# jobs/metacentrum/06-iva-condition-comparison/run_snr_grid_tracks.pbs: same
+# trials, references, test families and figures. The stored sources are unsplit
+# (both conditions on one time axis); the grid slices each condition's segment
+# back out before cutting trials on that condition's own onsets. One shared
+# filter, so no per-recording polarity flip.
+#
+# PREREQUISITE: run_condition_tracks_gamma.pbs (this stage) with --store_components at
+# the same --n_pca, over the FULL channel set.
+#
+# Output:
+#   results/assr/assr_snr_grid__corrca_channel_joined_tracks__30-50hz__pca5.csv
+#   plots/06b-corrca-condition-comparison/JoinedTracks_ASSR/bands/
+#       corrca_snr_grid/pca_5/30-50hz_masked_filter_topomaps.png
+#       corrca_snr_grid/pca_5/<selection>/<window>/*.png
+# -------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+
+DATA_DIR="/mnt/data/processed"
+
+python /mnt/scripts/run_corrca_snr_grid.py \
+    --experiment assr \
+    --variant corrca_channel_joined_tracks \
+    --music_type ASSR \
+    --conditions Placebo Psilocybin \
+    --band 30-50hz \
+    --n_pca 5 \
+    --halfwidths 0 5 \
+    --stimulus_intervals 0:0.5 0.2:0.5 \
+    --signal_variants zscored prestim stored_prestim masked_prestim \
+    --contrast_alternative greater \
+    --snr_alternative less \
+    --store_dir "$DATA_DIR" \
+    --wavelet_data_dir "$DATA_DIR" \
+    --results_dir /mnt/results/assr \
+    --save_dir /mnt/plots
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch

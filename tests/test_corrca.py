@@ -6,11 +6,14 @@ common topography, buried in subject-specific noise. CorrCA's job is to find tha
 source, so most tests assert on recovering it rather than on particular numbers.
 """
 
+from dataclasses import replace
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from src.analysis.corrca import (
+    CorrcaDecomposition,
     anchor_component_signs,
     component_isc,
     condition_isc,
@@ -329,6 +332,21 @@ def test_anchor_makes_the_shared_pattern_positive_over_the_mask(decomposition):
     oriented, flip, strength = anchor_component_signs(decomposition, mask)
     assert flip.shape == strength.shape == (3,)
     assert flip[0] == -1.0
-    inside = oriented.model.patterns[:, mask].mean(axis=1)
-    outside = oriented.model.patterns[:, ~mask].mean(axis=1)
-    assert np.all(inside >= outside)
+    assert np.all(oriented.model.patterns[:, mask].mean(axis=1) >= 0.0)
+
+
+def test_anchor_reads_the_mask_mean_not_the_contrast(decomposition):
+    # A pattern negative everywhere but less so over the mask: the correlation anchor
+    # would keep it, the mask-mean anchor must flip it.
+    patterns = np.full_like(decomposition.model.patterns, -2.0)
+    mask = np.zeros(N_CHANNELS, dtype=bool)
+    mask[:3] = True
+    patterns[:, mask] = -1.0
+    shifted = CorrcaDecomposition(
+        model=replace(decomposition.model, patterns=patterns),
+        sources=decomposition.sources,
+        patterns=decomposition.patterns,
+    )
+    _oriented, flip, strength = anchor_component_signs(shifted, mask)
+    assert np.all(flip == -1.0)
+    assert np.all(strength > 0.0)

@@ -31,6 +31,20 @@ source in every dataset. What counts as "a dataset" is the choice the two varian
 
 `assr_variants.row_resolver` returns the right lookup for either.
 
+**Synchrony per condition.** The decomposition run also writes stage 06b's ISC read-out
+on the oriented sources: group ISC per condition, each participant's leave-one-out ISC
+(dots, paired by line) and a Wilcoxon test of the paired difference, uncorrected
+(`iva_condition_isc.png` plus three `iva_*isc*.csv` beside it). See the
+[06b README](../06b-corrca-condition-comparison/README.md#3-synchrony-per-condition) for
+the definitions. Two caveats specific to IVA:
+
+- IVA-G maximises dependence *across datasets*, with a separate demixing matrix per
+  dataset, so these ISCs are more inflated by the fit than CorrCA's (one shared filter).
+  Compare the conditions with each other, not the absolute level with stage 06b's.
+- Each recording carries its own sign (§6). A recording anchored the wrong way has a
+  negative leave-one-out ISC rather than a low one, so check a negative dot against its
+  anchor strength before reading it as anti-synchrony.
+
 ## 2. Filters, not patterns
 
 The store keeps forward patterns (topographies). For recording *s* the filter

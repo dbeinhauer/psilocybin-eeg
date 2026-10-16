@@ -20,11 +20,11 @@
 # the same --n_pca, over the FULL channel set.
 #
 # Output:
-#   results/assr/assr_snr_grid__corrca_channel_joined_tracks__broadband__pca10.csv
+#   results/assr/assr_snr_grid__corrca_channel_joined_tracks__broadband__pca5.csv
 #   plots/06b-corrca-condition-comparison/JoinedTracks_ASSR/broadband/
-#       corrca_snr_grid/pca_10/masked_filter_topomaps.png
-#       corrca_snr_grid/pca_10/<selection>/<window>/*.png
-# ---------------------------------------------------------------------------
+#       corrca_snr_grid/pca_5/masked_filter_topomaps.png
+#       corrca_snr_grid/pca_5/<selection>/<window>/*.png
+# -------------------------------------------------------------------
 
 set -e
 
@@ -67,7 +67,7 @@ python /mnt/scripts/run_corrca_snr_grid.py \
     --variant corrca_channel_joined_tracks \
     --music_type ASSR \
     --conditions Placebo Psilocybin \
-    --n_pca 10 \
+    --n_pca 5 \
     --halfwidths 0 5 \
     --stimulus_intervals 0:0.5 0.2:0.5 \
     --signal_variants zscored prestim stored_prestim masked_prestim \

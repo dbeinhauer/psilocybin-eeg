@@ -1,0 +1,117 @@
+#!/bin/bash
+#PBS -N PSILO_CORRCA_TRACKS_06B_BAND
+#PBS -l walltime=1:00:00
+#PBS -l select=1:ncpus=4:mem=200gb:scratch_local=80gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-06b CorrCA — condition comparison on the JOINED_TRACKS condition.
+#
+# Runs scripts/run_corrca_condition_tracks.py (the same code as
+# notebooks/06b-corrca-condition-comparison/corrca_channel_joined_tracks.ipynb)
+# on full data. Each matched participant is one subject whose Placebo track is
+# followed by their Psilocybin track; CorrCA fits ONE channel filter per
+# component over both, so a component is the same spatial combination in both
+# conditions by construction. The projected sources are then split back into
+# the two segments, and each component's ISC is measured per condition — the
+# cleanest inter-condition synchrony contrast CorrCA offers.
+#
+# GAMMA BAND: the frequency axis is cut to 30-50 Hz (--band_range 30 50) BEFORE
+# the fit, so the filter is chosen on gamma-band samples only and the 40 Hz
+# steady state is not blended with the low-frequency onset response. Stored and
+# plotted under the band token '30-50hz' (plots under bands/), beside the
+# broadband run rather than over it.
+#
+# Z-scoring is per condition before concatenation (--zscore_mode per_condition):
+# an overall power difference is normalised away. Use --zscore_mode joint to keep
+# the amplitude contrast.
+#
+# Plots (panels "CC <k>"):
+#   - shared_mean_topomaps              per-participant topographies, ONE row
+#   - condition_mean_tf_maps / ..._onset
+#   - participants/*
+#   - corrca_shared_topomaps
+#   - corrca_condition_isc (+ 3 CSVs)
+#
+# Output:
+#   plots/06b-corrca-condition-comparison/JoinedTracks_ASSR/
+#       bands/corrca_channel_joined_tracks/pca_<N>/
+#   data/processed/assr/iva_results/JoinedTracks/
+#       corrca_channel_joined_tracks__ASSR__30-50hz__pca<N>.npz   (unsplit)
+#
+# MEMORY. Same shape as the stage-06 tracks job (upper bound ~290 GB for the
+# full ASSR extent: per-condition tensors, standardised segments and the
+# concatenation coexist briefly). Do not reduce mem without also setting
+# --n_times, which here applies PER CONDITION.
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+
+WAVELET_DIR="/mnt/data/processed"
+STORE_DIR="/mnt/data/processed"
+
+COMMON_ARGS=(
+    --experiment assr
+    --conditions Placebo Psilocybin
+    --gamma 0.0
+    --wavelet_data_dir "$WAVELET_DIR"
+    --reuse_wavelets
+    --store_components
+    --store_dir "$STORE_DIR"
+    --n_jobs -1
+)
+
+echo "=== 30-50 Hz at $(date) ==="
+python /mnt/scripts/run_corrca_condition_tracks.py \
+    --n_pca 5 \
+    --band_range 30 50 \
+    --zscore_mode per_condition \
+    "${COMMON_ARGS[@]}"
+
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch

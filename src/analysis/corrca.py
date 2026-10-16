@@ -44,7 +44,6 @@ import numpy as np
 import pandas as pd
 from scipy.stats import wilcoxon
 
-from src.analysis.assr_trials import polarity_flip
 from src.analysis.wavelet_ica import zscore_by_time
 
 _logger = logging.getLogger(__name__)
@@ -52,6 +51,10 @@ _logger = logging.getLogger(__name__)
 #: Eigenvalues of ``R_w`` below this fraction of the largest are treated as zero
 #: when no explicit ``n_pca`` is given.
 RANK_RTOL: float = 1e-8
+
+#: Below this :func:`anchor_component_signs` strength the shared pattern's mean over the
+#: anchor sits within a tenth of its RMS of zero, so the sign is close to a coin toss.
+ANCHOR_STRENGTH_FLOOR: float = 0.1
 
 
 @dataclass(frozen=True)
@@ -398,18 +401,40 @@ def anchor_component_signs(
 ) -> tuple[CorrcaDecomposition, np.ndarray, np.ndarray]:
     """Orient each component so its **shared** pattern is positive over the anchor.
 
-    The CorrCA counterpart of the per-``(recording, component)`` anchor the IVA runs
-    use (:func:`~src.analysis.assr_trials.polarity_flip`, same criterion): read on the
-    one shared pattern and applied to every recording alike, because the filter is
-    shared and a recording-level flip would invert a component the model fitted as one.
+    Flips on the sign of the shared pattern's mean over the anchor electrodes, so the
+    topomap reads positive there and more power over the ASSR area is a positive
+    source. Read on the one shared pattern and applied to every recording alike: the
+    filter is shared, and a recording-level flip would invert a component the model
+    fitted as one.
+
+    This is deliberately not the IVA anchor
+    (:func:`~src.analysis.assr_trials.polarity_flip`), which asks whether the area is
+    more positive *than the rest of the head* and so leaves a component on a global
+    negative offset negative over the anchor. That relative criterion protects IVA's
+    per-recording flips from each recording's own offset; with one shared sign there is
+    no such risk to protect against.
 
     :param decomposition: Output of :func:`decompose_channel_corrca`.
     :param electrode_mask: Boolean mask over the channel axis.
-    :return: ``(oriented, flip, strength)`` — the oriented decomposition and the
-        ``(K,)`` signs applied and ``|corr(shared pattern, mask)|`` behind them.
+    :return: ``(oriented, flip, strength)`` — the oriented decomposition, the ``(K,)``
+        signs applied and ``|mean over the mask| / RMS over all channels`` of the shared
+        pattern, to be read against :data:`ANCHOR_STRENGTH_FLOOR`.
+    :raises ValueError: If the mask does not match the channel axis or selects no
+        channel.
     """
-    flip, strength = polarity_flip(decomposition.model.patterns[None], electrode_mask)
-    return decomposition.oriented(flip[0]), flip[0], strength[0]
+    patterns = decomposition.model.patterns
+    mask = np.asarray(electrode_mask, dtype=bool)
+    if mask.shape != (patterns.shape[1],) or not mask.any():
+        raise ValueError(
+            f"electrode_mask must be ({patterns.shape[1]},) and select at least one "
+            f"channel; got shape {mask.shape} selecting {int(mask.sum())}."
+        )
+    inside = patterns[:, mask].mean(axis=1)
+    rms = np.sqrt((patterns**2).mean(axis=1))
+    strength = np.divide(np.abs(inside), rms, out=np.zeros_like(inside), where=rms > 0)
+    # A zero mean keeps +1 rather than inventing a sign; the zero strength marks it.
+    flip = np.where(inside < 0.0, -1.0, 1.0)
+    return decomposition.oriented(flip), flip, strength
 
 
 def condition_isc(

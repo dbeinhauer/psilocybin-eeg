@@ -136,6 +136,7 @@ from scripts.analysis_common import (  # noqa: E402
     add_iva_store_args,
     add_wavelet_grid_args,
     resolve_wavelet_dir,
+    write_iva_condition_isc,
 )
 from scripts.notebook_helpers import (  # noqa: E402
     load_paired_condition_wavelets,
@@ -838,6 +839,17 @@ def run_condition_tracks(
         save_path=out_dir / f"{prefix}condition_mean_tf_maps.png",
     )
     plt.close("all")
+
+    # ── synchrony per condition, on the untrimmed segments ─────────────
+    write_iva_condition_isc(
+        sources_by_condition,
+        {c: participants for c in condition_rows},
+        comp_indices,
+        label=label,
+        out_dir=out_dir,
+        prefix=prefix,
+        logger=_logger,
+    )
 
     # ── per participant ────────────────────────────────────────────────
     written = plot_participant_condition_topomaps(

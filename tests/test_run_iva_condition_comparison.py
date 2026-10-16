@@ -530,6 +530,7 @@ class TestEndToEnd:
         assert sorted(p.name for p in bands.glob("*.png")) == [
             "gamma_condition_mean_tf_maps.png",
             "gamma_condition_mean_topomaps.png",
+            "gamma_iva_condition_isc.png",
         ]
         # The band prefix never leaks into the broadband tree.
         assert not any(p.name.startswith("gamma_") for p in broadband.rglob("*.png"))

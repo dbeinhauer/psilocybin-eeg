@@ -12,7 +12,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Mapping, Sequence
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -43,9 +43,12 @@ import pandas as pd
 from scipy.stats import circmean
 
 from src.analysis.corrca import (
+    ANCHOR_STRENGTH_FLOOR,
     CorrcaDecomposition,
     CorrcaResult,
     anchor_component_signs,
+    condition_isc,
+    paired_condition_test,
 )
 from src.analysis.data_representations import (
     subset as data_subset,
@@ -250,7 +253,7 @@ def add_iva_store_args(parser: argparse.ArgumentParser) -> None:
 
 #: Sign note printed on every stage-06b figure when the anchor was applied.
 CORRCA_ALIGNMENT_NOTE = (
-    "corr(shared topography, ASSR electrode mask), one sign per component"
+    "mean(shared topography over ASSR electrodes) > 0, one sign per component"
 )
 #: The same when the montage carries no anchor electrode.
 CORRCA_ALIGNMENT_NOTE_NONE = "fit orientation (no ASSR anchor electrode present)"
@@ -421,16 +424,15 @@ def anchor_corrca_signs(
 ) -> tuple[CorrcaDecomposition, str, dict[str, np.ndarray]]:
     """Orient each CorrCA component to the ASSR electrodes, once per component.
 
-    The stage-06b counterpart of the stage-06 per-``(recording, component)`` anchor:
-    same criterion (:func:`~src.analysis.assr_trials.polarity_flip`), read on the
-    shared pattern and applied to every recording alike — see
-    :func:`~src.analysis.corrca.anchor_component_signs`. A montage without any anchor
+    The shared pattern is made positive on average over the ASSR electrodes and the
+    sign applied to every recording alike — see
+    :func:`~src.analysis.corrca.anchor_component_signs` for why this differs from the
+    stage-06 correlation anchor. A montage without any anchor
     electrode keeps the fit's own orientation (largest pattern weight positive), which
     is still one consistent sign per component, so no group mean cancels.
 
     :return: ``(oriented, alignment_note, store_extras)``.
     """
-    from src.analysis import assr_trials as at
     from src.io.loading import assr_electrode_mask
 
     try:
@@ -453,17 +455,17 @@ def anchor_corrca_signs(
         channel_names, coordinate_system, strict=not lenient_mask
     )
     oriented, flip, strength = anchor_component_signs(corrca, electrode_mask)
-    n_weak, n_anchors = at.polarity_weak_count(strength[None])
+    n_weak = int((strength < ANCHOR_STRENGTH_FLOOR).sum())
     logger.info(
-        f"[{label}] ASSR-mask sign anchor (shared pattern): "
+        f"[{label}] ASSR-mask sign anchor (shared pattern mean over the mask): "
         f"{int((flip < 0).sum())}/{flip.size} component(s) flipped; {n_weak}/"
-        f"{n_anchors} decided on |corr| < {at.POLARITY_CORR_FLOOR}"
+        f"{flip.size} decided on |mask mean| / RMS < {ANCHOR_STRENGTH_FLOOR}"
     )
     return (
         oriented,
         CORRCA_ALIGNMENT_NOTE,
         {
-            "polarity_anchor": np.asarray("assr_mask_corr_shared"),
+            "polarity_anchor": np.asarray("assr_mask_mean_shared"),
             "polarity_anchor_flip": flip,
             "polarity_anchor_strength": strength,
         },
@@ -504,11 +506,12 @@ def log_corrca_conditions(
     *,
     label: str,
     logger: logging.Logger,
+    component_prefix: str = "CC",
 ) -> None:
     """Log each component's per-condition ISC and paired test, one line each."""
     for component, rows in group_isc.groupby("component"):
         values = ", ".join(f"{r.condition} {r.isc:.4f}" for r in rows.itertuples())
-        line = f"[{label}] CC {component}: ISC {values}"
+        line = f"[{label}] {component_prefix} {component}: ISC {values}"
         if tests is not None:
             test = tests[tests["component"] == component].iloc[0]
             line += (
@@ -567,6 +570,59 @@ def write_corrca_condition_report(
         label=label,
         fit_isc=model.isc,
         save_path=out_dir / f"{prefix}corrca_condition_isc.png",
+    )
+    plt.close("all")
+
+
+def write_iva_condition_isc(
+    sources_by_condition: Mapping[str, np.ndarray],
+    participants_by_condition: Mapping[str, Sequence[str]],
+    comp_indices: Sequence[int],
+    *,
+    label: str,
+    out_dir: Path,
+    prefix: str,
+    logger: logging.Logger,
+) -> None:
+    """Per-condition synchrony of the sign-anchored IVA sources, as stage 06b draws it.
+
+    The same group ISC, per-participant leave-one-out ISC and paired Wilcoxon test
+    (:func:`~src.analysis.corrca.condition_isc`), written as ``iva_condition_isc.png``
+    and three CSVs in *out_dir*. Unlike CorrCA, each recording has its own demixing
+    matrix and its own sign, so the scores depend on the per-recording mask anchor: a
+    recording flipped against the rest lands at a negative leave-one-out ISC.
+
+    :param sources_by_condition: Condition → ``(P_c, K, F, T)`` oriented sources.
+    :param participants_by_condition: Condition → participant label per row.
+    :param comp_indices: 0-based components to draw.
+    """
+    import matplotlib.pyplot as plt
+
+    conditions = list(sources_by_condition)
+    group_isc, participant_isc = condition_isc(
+        sources_by_condition, participants_by_condition
+    )
+    tests = (
+        paired_condition_test(participant_isc, conditions)
+        if len(conditions) == 2
+        else None
+    )
+    log_corrca_conditions(
+        group_isc, tests, label=label, logger=logger, component_prefix="IC"
+    )
+    group_isc.to_csv(out_dir / f"{prefix}iva_condition_isc.csv", index=False)
+    participant_isc.to_csv(out_dir / f"{prefix}iva_participant_isc.csv", index=False)
+    if tests is not None:
+        tests.to_csv(out_dir / f"{prefix}iva_condition_isc_test.csv", index=False)
+    plot_condition_isc(
+        group_isc,
+        participant_isc,
+        tests,
+        conditions,
+        comp_indices,
+        label=label,
+        component_prefix="IC",
+        save_path=out_dir / f"{prefix}iva_condition_isc.png",
     )
     plt.close("all")
 

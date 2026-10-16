@@ -408,6 +408,7 @@ class TestEndToEnd:
         bands = _out_dir(tmp_path, "bands")
         assert sorted(p.name for p in bands.glob("*.png")) == [
             "gamma_condition_mean_tf_maps.png",
+            "gamma_iva_condition_isc.png",
             "gamma_shared_mean_topomaps.png",
         ]
         assert not any(

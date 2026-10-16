@@ -9,7 +9,7 @@ drawn here, is what has no IVA counterpart:
   recording, so there is one group topography the model itself defines;
 * the **synchrony per condition** — the ISC of each component within each condition,
   from the same filters, with every participant's leave-one-out ISC paired across
-  conditions.
+  conditions. The stage-06 IVA runs draw it too, on their sign-anchored sources.
 """
 
 from __future__ import annotations
@@ -108,6 +108,7 @@ def plot_condition_isc(
     *,
     label: str,
     fit_isc: Optional[np.ndarray] = None,
+    component_prefix: str = COMPONENT_PREFIX,
     save_path: Optional[Path] = None,
 ):
     """Per-component synchrony in each condition, participants paired.
@@ -125,6 +126,8 @@ def plot_condition_isc(
     :param comp_indices: 0-based component indices, one panel each.
     :param label: Dataset label shown in the title.
     :param fit_isc: ``(K,)`` ISC of the pooled fit, shown in each title.
+    :param component_prefix: Component label prefix; ``"IC"`` when the stage-06 IVA
+        runs draw this figure.
     :param save_path: Optional output path.
     :return: The figure, or ``None`` when *comp_indices* is empty.
     """
@@ -181,7 +184,7 @@ def plot_condition_isc(
         ax.set_xticklabels(conditions, fontsize=8)
         ax.set_xlim(-0.5, len(conditions) - 0.5)
 
-        title = f"{COMPONENT_PREFIX} {component}"
+        title = f"{component_prefix} {component}"
         if fit_isc is not None:
             title += f"  (fit ISC {fit_isc[k]:.3f})"
         if tests is not None:
