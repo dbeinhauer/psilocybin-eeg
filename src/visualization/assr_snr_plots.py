@@ -82,14 +82,24 @@ def forest(ax, rows, alpha, xlabel, title, rng):
 
 
 def plot_courses(
-    course, times, window_interval, contrast, labels, conditions, alpha, title, path
+    course,
+    times,
+    window_interval,
+    contrast,
+    labels,
+    conditions,
+    alpha,
+    title,
+    path,
+    mask_labels=MASK_LABELS,
 ):
     """Per-source epoch trial course, both conditions overlaid.
 
     The line is the mean across participants of each participant's median-over-trials
     course; the band is +/- SEM ACROSS PARTICIPANTS (never across trials, which are
     correlated within a participant). The paradigm's stimulus interval is shaded grey and
-    the cell's test window gold, and each panel carries its 4b p-value.
+    the cell's test window gold, and each panel carries its 4b p-value. Rows named in
+    *mask_labels* are titled as references.
     """
     by_source = contrast.set_index("source")
     n_src = len(labels)
@@ -136,7 +146,7 @@ def plot_courses(
             )
             ax.plot(times, centre, color=colour, lw=1.8, zorder=3, label=cond)
         row = by_source.loc[source]
-        is_ref = source in MASK_LABELS
+        is_ref = source in mask_labels
         ax.set_title(
             f"{source}{'  (reference)' if is_ref else ''}",
             loc="left",
@@ -183,16 +193,17 @@ def plot_cell(
     title,
     path,
     component_prefix="IC",
+    mask_labels=MASK_LABELS,
 ):
     """The p-value summary (contrast + one versus panel per reference) for one grid cell.
 
     *component_prefix* names the learned rows on the axes: ``"IC"`` (IVA) or ``"CC"``
-    (CorrCA, stage 06b).
+    (CorrCA, stage 06b). *mask_labels* are the reference rows, one versus panel each.
     """
     rng = np.random.default_rng(42)
     contrast = cell_tables["contrast"].set_index("source")
     fig, axes = plt.subplots(
-        1, 1 + len(MASK_LABELS), figsize=(7.6 + 5.6 * len(MASK_LABELS), 5.0)
+        1, 1 + len(mask_labels), figsize=(7.6 + 5.6 * len(mask_labels), 5.0)
     )
     rows = [
         (
@@ -210,7 +221,7 @@ def plot_cell(
         f"Is {conditions[1]} lower than {conditions[0]}?",
         rng,
     )
-    for ax, mask in zip(axes[1:], MASK_LABELS):
+    for ax, mask in zip(axes[1:], mask_labels):
         table = cell_tables[f"discrimination:{mask}"].set_index("source")
         ref = labels.index(mask)
         rows = [
@@ -244,11 +255,12 @@ def plot_snr(
     title,
     path,
     component_prefix="IC",
+    mask_labels=MASK_LABELS,
 ):
     """SNR-by-condition: one panel per reference, both conditions overlaid.
 
-    Source columns of ``value[cond]`` are the IC rows first, then the two masks, so an
-    IC row *i* is column *i* and a mask is ``len(ic_labels) + its offset``.
+    Source columns of ``value[cond]`` are the IC rows first, then the *mask_labels*
+    rows, so an IC row *i* is column *i* and a mask is ``len(ic_labels) + its offset``.
     *component_prefix* names the learned rows on the x axis (``"IC"`` / ``"CC"``).
     """
     rng = np.random.default_rng(42)
@@ -256,12 +268,12 @@ def plot_snr(
     n_ic = len(ic_labels)
     fig, axes = plt.subplots(
         1,
-        len(MASK_LABELS),
-        figsize=(6.6 * len(MASK_LABELS), 0.8 + 0.7 * n_ic),
+        len(mask_labels),
+        figsize=(6.6 * len(mask_labels), 0.8 + 0.7 * n_ic),
         squeeze=False,
     )
-    for ax, mask in zip(axes[0], MASK_LABELS):
-        ref_col = n_ic + MASK_LABELS.index(mask)
+    for ax, mask in zip(axes[0], mask_labels):
+        ref_col = n_ic + mask_labels.index(mask)
         drawn, edges = [], []
         for ci, cond in enumerate(conditions):
             table = cell_tables[f"snr:{mask}:{cond}"].set_index("source")

@@ -1,0 +1,107 @@
+#!/bin/bash
+#PBS -N ASSR_ROI_TF_VARIANTS_00
+#PBS -l walltime=4:00:00
+#PBS -l select=1:ncpus=2:mem=200gb:scratch_local=100gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-00 ASSR channel-PCA TF maps before any joint decomposition (IVA, CorrCA),
+# Placebo vs Psilocybin (scripts/run_assr_roi_tf_variants.py).
+#
+# Four pipelines, each run on Placebo and Psilocybin separately, each keeping the
+# first N_COMPONENTS channel PCs:
+#   1_zscore_pca        z-score vs recording -> channel PCA (all channels)
+#   2_roi_zscore_pca    binary ASSR ROI -> z-score -> channel PCA
+#   3_pca_zscore        channel PCA (all channels) -> z-score of each PC
+#   4_roi_pca_zscore    binary ASSR ROI -> channel PCA -> z-score of each PC
+# One figure per pipeline (rows Placebo / Psilocybin / Placebo - Psilocybin,
+# one column per PC), the same per participant, and 06b's SNR / contrast grid in
+# its stored_prestim reading (40 Hz and 35-45 Hz, windows 0-0.5 s and 0.2-0.5 s;
+# exact Wilcoxon over the paired participants, uncorrected) with the binary ROI —
+# built exactly as 06b's "ASSR-mask (full)" — as the reference row.
+#
+# Every recording is read once, all 195 channels; the run is IO-bound (~6 GB
+# peak, single-threaded numpy apart from small BLAS calls — hence 2 CPUs).
+# Override the component count at submit time:
+#     qsub -v N_COMPONENTS=5 run_assr_roi_tf_variants.pbs
+#
+# Requires (both conditions), produced by the stimulus alignment + wavelet store:
+#   data/processed/assr/concatenated/<Condition>_ASSR.stimulus_onsets.npy
+#   data/processed/assr/concatenated/<Condition>_ASSR.metadata.csv
+#   data/processed/assr/wavelets/<Condition>_ASSR/<participant>__wavelet_power__*.npy
+#
+# Output:
+#   results/assr/assr_roi_tf_variants/ASSR/snr_grid__stored_prestim__pca<N>.csv
+#   plots/00-preprocessing/assr_roi_tf_variants/ASSR/pca_<N>/
+#       tf_maps__<pipeline>.png
+#       subjects/PSI<id>/tf_maps__<pipeline>.png
+#       snr/<selection>/<window>/{pvalue_summary,snr_by_condition,trial_course_by_source}__<pipeline>.png
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+export OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+N_COMPONENTS="${N_COMPONENTS:-3}"
+echo "Components: $N_COMPONENTS"
+
+# The runner heredoc below is quoted, so this is read from the container
+# environment at run time rather than substituted here.
+export SINGULARITYENV_N_COMPONENTS="$N_COMPONENTS"
+export APPTAINERENV_N_COMPONENTS="$N_COMPONENTS"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+
+python /mnt/scripts/run_assr_roi_tf_variants.py \
+    --experiment assr \
+    --conditions Placebo Psilocybin \
+    --n_components "${N_COMPONENTS:-3}" \
+    --halfwidths 0 5 \
+    --stimulus_intervals 0:0.5 0.2:0.5 \
+    --contrast_alternative greater \
+    --snr_alternative less \
+    --results_dir /mnt/results/assr \
+    --save_dir /mnt/plots
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch

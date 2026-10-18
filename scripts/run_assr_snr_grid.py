@@ -954,9 +954,20 @@ def resolve_ok(results, participant: str, condition: str, per_recording: bool) -
 
 
 def _accumulate_tests(
-    rows_out, cell, value, conditions, labels, ic_labels, contrast_alt, snr_alt
+    rows_out,
+    cell,
+    value,
+    conditions,
+    labels,
+    ic_labels,
+    contrast_alt,
+    snr_alt,
+    mask_labels=_MASK_LABELS,
 ) -> None:
-    """Append every test row for one grid cell to *rows_out*."""
+    """Append every test row for one grid cell to *rows_out*.
+
+    *mask_labels* are the reference rows of *labels* the learned rows are tested against.
+    """
     # 4b — condition contrast per source
     for s, source in enumerate(labels):
         rows_out.append(
@@ -972,7 +983,7 @@ def _accumulate_tests(
             }
         )
     # 4c — discrimination gain vs each reference
-    for mask in _MASK_LABELS:
+    for mask in mask_labels:
         ref = labels.index(mask)
         for source in ic_labels:
             s = labels.index(source)
@@ -992,7 +1003,7 @@ def _accumulate_tests(
                 }
             )
     # Step 12 — SNR magnitude vs each reference, PER CONDITION
-    for mask in _MASK_LABELS:
+    for mask in mask_labels:
         ref = labels.index(mask)
         for condition in conditions:
             m = value[condition]

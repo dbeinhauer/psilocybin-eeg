@@ -2,9 +2,10 @@
 
 Two different kinds of notebook live here, and they are read differently.
 
-**Driven analyses** — `assr_raw_pca_analysis.ipynb` and `assr_wavelet_pca_analysis.ipynb`
-call `scripts/run_assr_raw_pca.py` and `scripts/run_assr_wavelet_pca.py`, exactly as the
-later stages do. Their method is documented below.
+**Driven analyses** — `assr_raw_pca_analysis.ipynb`, `assr_wavelet_pca_analysis.ipynb` and
+`assr_roi_tf_variants.ipynb` call `scripts/run_assr_raw_pca.py`,
+`scripts/run_assr_wavelet_pca.py` and `scripts/run_assr_roi_tf_variants.py`, exactly as
+the later stages do. Their method is documented below.
 
 **Inspection notebooks** — everything else. They answer a question about the dataset
 rather than producing a result: whether the annotations line up, what the raw recordings
@@ -75,10 +76,38 @@ leakage-excluded noise floor. It is a different measure from
 `assr_trials.roi_channelwise_snr`, which is baseline-referenced; they are not
 interchangeable.
 
+### Channel PCA before any joint decomposition
+
+`run_assr_roi_tf_variants.py` (job `run_assr_roi_tf_variants.pbs`) asks what the
+recordings show around the onsets before IVA or CorrCA touch them, by four orders of the
+same three steps, each run on Placebo and Psilocybin **separately**:
+
+| Pipeline | Order |
+|---|---|
+| `1_zscore_pca` | z-score vs recording → channel PCA (all channels) — `run_assr_wavelet_pca.py` |
+| `2_roi_zscore_pca` | binary ASSR ROI → z-score → channel PCA |
+| `3_pca_zscore` | channel PCA (all channels) → z-score of each PC |
+| `4_roi_pca_zscore` | binary ASSR ROI → channel PCA → z-score of each PC |
+
+The PCA is fit as stage 00 fits it, on the onset-averaged stack; its loadings are then
+applied to the continuous recording, giving each PC a continuous source, and a PC's TF
+map is that source averaged over the onsets (zero = the recording's mean level). Signs
+are aligned across participants and both conditions in one pass, so the
+Placebo − Psilocybin row is not a sign artefact. Without the z-score first (3, 4) the PCA
+runs on raw power, which the low frequencies dominate: PC1 alone takes ~90% of the
+variance there.
+
+The SNR grid reads each source the way 06b reads `stored_prestim` (selection averaged,
+every trial referenced to its own pre-stimulus window, median over trials), against the
+binary ROI built exactly as 06b's `ASSR-mask (full)` — on the same 12 paired participants
+that row reproduces 06b's numbers to < 1e-8.
+
 ## Outputs
 
 ```
 plots/00-preprocessing/{label}/{analysis_type}/
+plots/00-preprocessing/assr_roi_tf_variants/ASSR/pca_{n}/      # both conditions in one tree
+results/assr/assr_roi_tf_variants/ASSR/
 ```
 
 ## Caveats
