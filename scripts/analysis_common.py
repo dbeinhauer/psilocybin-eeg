@@ -407,10 +407,132 @@ def add_corrca_condition_args(parser: argparse.ArgumentParser) -> None:
         help="Accept the intersection when anchor electrodes are missing.",
     )
     parser.add_argument(
+        "--skip_roi_fit",
+        action="store_true",
+        help=(
+            "Skip the second fit on the binary ASSR ROI alone (the channel axis cut to "
+            "the electrodes of config/assr_electrodes/ BEFORE the z-scoring), which "
+            "is otherwise stored and drawn as the '_roi' variant."
+        ),
+    )
+    parser.add_argument(
+        "--skip_roi_masked",
+        action="store_true",
+        help=(
+            "Skip the 'roi_masked_' TF maps: the fitted shared filter with every "
+            "weight outside the ASSR electrodes zeroed, on the z-scored signal."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable DEBUG logging.",
     )
+
+
+def restrict_to_assr_roi(
+    data_4d: np.ndarray,
+    info,
+    coordinate_system: CoordinateSystems,
+    *,
+    n_pca: int | None,
+    lenient_mask: bool,
+    label: str,
+    logger: logging.Logger,
+):
+    """The input of the ROI fit: a ``(S, C, F, T)`` tensor cut to the ASSR electrodes.
+
+    The cut comes before :func:`~src.analysis.corrca.decompose_channel_corrca`
+    z-scores the tensor, so the ROI is the whole channel space of the fit.
+
+    :param info: ``Info`` whose channels match the tensor's channel axis.
+    :param n_pca: The fit's subspace dimension, which the ROI must be able to hold.
+    :return: ``(data_4d, info)`` on the ROI electrodes, in montage order; ``None``
+        (with a warning) when the montage has no ASSR electrode or fewer than
+        *n_pca* of them.
+    """
+    import mne
+
+    from src.io.loading import assr_electrode_mask
+
+    names = list(info.ch_names)
+    try:
+        present = assr_electrode_mask(names, coordinate_system, strict=False)
+    except FileNotFoundError:
+        present = np.zeros(len(names), dtype=bool)
+    if not present.any():
+        logger.warning(f"[{label}] no ASSR electrode in this montage; no ROI fit.")
+        return None
+    mask = assr_electrode_mask(names, coordinate_system, strict=not lenient_mask)
+    keep = np.flatnonzero(mask)
+    if n_pca is not None and n_pca > keep.size:
+        logger.warning(
+            f"[{label}] --n_pca {n_pca} exceeds the {keep.size} ROI channel(s); no "
+            "ROI fit."
+        )
+        return None
+    logger.info(
+        f"[{label}] ROI fit: {keep.size}/{mask.size} channel(s), cut before the "
+        "z-scoring"
+    )
+    return data_4d[:, keep], mne.pick_info(info, keep)
+
+
+def roi_masked_corrca_sources(
+    data_4d: np.ndarray,
+    model: CorrcaResult,
+    channel_names: Sequence[str],
+    coordinate_system: CoordinateSystems,
+    *,
+    lenient_mask: bool,
+    label: str,
+    logger: logging.Logger,
+) -> np.ndarray | None:
+    """The fitted shared filter, restricted to the ASSR electrodes, on its own input.
+
+    Every filter weight outside the ROI is zeroed (not renormalised — the TF maps are
+    read for their structure, the SNR grid divides by each row's own baseline SD) and
+    the result applied to the tensor z-scored along time exactly as the fit z-scored
+    it. One subject at a time, so no second full z-scored copy is held.
+
+    :param data_4d: ``(S, C, F, T)`` the tensor the model was fitted on.
+    :param model: The oriented fit, so the masked sources carry its signs.
+    :return: ``(S, K, F, T)``, or ``None`` when the montage has no ASSR electrode.
+    """
+    from src.analysis.assr_trials import (
+        mask_weight_share,
+        project_channels,
+        restrict_filters_to_mask,
+    )
+    from src.analysis.wavelet_ica import zscore_by_time
+    from src.io.loading import assr_electrode_mask
+
+    try:
+        present = assr_electrode_mask(
+            list(channel_names), coordinate_system, strict=False
+        )
+    except FileNotFoundError:
+        present = np.zeros(len(channel_names), dtype=bool)
+    if not present.any():
+        logger.warning(
+            f"[{label}] no ASSR electrode in this montage; no ROI-masked TF maps."
+        )
+        return None
+    mask = assr_electrode_mask(
+        list(channel_names), coordinate_system, strict=not lenient_mask
+    )
+    filters = np.asarray(model.filters).T  # (K, C)
+    masked = restrict_filters_to_mask(filters, mask)
+    share = mask_weight_share(filters, mask)
+    logger.info(
+        f"[{label}] ROI-masked filter over {int(mask.sum())} electrode(s); |w| kept "
+        + ", ".join(f"CC {k + 1} {v:.0%}" for k, v in enumerate(share))
+    )
+    n_subjects, _n_channels, n_freqs, n_times = data_4d.shape
+    sources = np.empty((n_subjects, filters.shape[0], n_freqs, n_times))
+    for s in range(n_subjects):
+        sources[s] = project_channels(masked, zscore_by_time(data_4d[s : s + 1])[0])
+    return sources
 
 
 def anchor_corrca_signs(

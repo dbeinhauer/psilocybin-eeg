@@ -335,6 +335,16 @@ class TestDecompose:
             )
 
 
+def _trial_normalised(arr, onsets, pre, post, mask):
+    """By hand: every trial minus its own baseline mean, over the baseline SD pooled
+    across trials, then the median over trials."""
+    trials = np.stack([arr[..., o - pre : o + post] for o in onsets], axis=-2)
+    base = trials[..., mask]
+    centred = trials - base.mean(axis=-1, keepdims=True)
+    spread = np.sqrt((base.std(axis=-1, ddof=1) ** 2).mean(axis=-1, keepdims=True))
+    return np.median(centred / spread[..., None], axis=-2)
+
+
 class TestOnsetAverage:
     @pytest.fixture
     def sources(self):
@@ -358,7 +368,7 @@ class TestOnsetAverage:
         )
         assert onset_tf.shape[3] <= 315
 
-    def test_matches_a_hand_computed_mean(self, sources):
+    def test_matches_a_hand_computed_trial_normalised_map(self, sources):
         onset_tf, epoch_times, _ = _onset_average(
             sources, ONSETS, label="t", n_times=N_TIMES, sfreq=SFREQ, min_onsets=1
         )
@@ -367,20 +377,24 @@ class TestOnsetAverage:
         fitting = [
             int(o) for o in ONSETS if 0 <= int(o) - pre and int(o) + post <= N_TIMES
         ]
-        manual = np.mean([sources[..., o - pre : o + post] for o in fitting], axis=0)
-        # Each frequency is then referenced to its own pre-onset mean, so the hand
-        # computation has to do the same. Doing it per trial BEFORE the mean would give
-        # the identical answer — epoch_average is a plain mean and the mean is linear —
-        # which is exactly why the correction is applied once, afterwards.
-        manual -= manual[..., epoch_times < 0.0].mean(axis=-1, keepdims=True)
-        np.testing.assert_allclose(onset_tf, manual, rtol=1e-12, atol=1e-12)
+        manual = _trial_normalised(sources, fitting, pre, post, epoch_times < 0.0)
+        np.testing.assert_allclose(onset_tf, manual, rtol=1e-10, atol=1e-12)
 
-    def test_the_baseline_is_removed_per_frequency(self, sources):
-        onset_tf, epoch_times, _ = _onset_average(
+    def test_each_recordings_own_scale_cancels(self, sources):
+        """Every recording is one condition: its z-score must not reach the map."""
+        scale = np.array([3.0, 0.2, 1.0, 7.0])[:, None, None, None]
+        base, _t, _m = _onset_average(
             sources, ONSETS, label="t", n_times=N_TIMES, sfreq=SFREQ, min_onsets=1
         )
-        baseline = onset_tf[..., epoch_times < 0.0].mean(axis=-1)
-        assert np.allclose(baseline, 0.0, atol=1e-12)
+        scaled, _t, _m = _onset_average(
+            scale * sources + 2.0,
+            ONSETS,
+            label="t",
+            n_times=N_TIMES,
+            sfreq=SFREQ,
+            min_onsets=1,
+        )
+        np.testing.assert_allclose(scaled, base, rtol=1e-9, atol=1e-12)
 
     def test_no_onsets_returns_none(self, sources):
         assert (

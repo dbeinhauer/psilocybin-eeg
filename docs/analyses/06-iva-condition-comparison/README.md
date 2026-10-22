@@ -80,64 +80,40 @@ and a per-trial divisor would let a momentarily quiet channel plateau the whole 
 
 Being a projected quantity, the PCA rows are **signed** — see §6.
 
-## 4. The seven signal variants
+## 4. The two signal variants
 
-All differ in how the **learned** rows are read — which spatial filter, on which signal —
-and in nothing else. **The references never move**: every variant but `zscored` carries
-`prestim`'s reference columns verbatim, which is what makes the set one comparison rather
-than seven separate ones.
+Both differ only in how the **learned** rows are read. **The references never move**: both
+carry the same three reference columns (the masks projected through the raw cache, every
+trial referenced to its own pre-stimulus window, the full mask swapped for the
+equal-weight ROI row), which is what makes the pair one comparison rather than two.
 
 | Variant | Filter | Signal |
 |---|---|---|
-| `zscored` | each recording's own | the stored z-scored sources; no per-trial baseline |
-| `prestim` | each recording's own | raw cache, per-trial pre-stimulus baseline |
-| `stored_prestim` | — | the stored sources, given the same per-trial baseline |
-| `mean_prestim` | the cohort mean | raw cache |
-| `mean_stored_prestim` | the cohort mean | the IVA's own input, rebuilt as `PᵀP (z)` |
-| `masked_prestim` | each recording's own, restricted to the ASSR electrodes | z-scored cache |
-| `mean_masked_prestim` | the cohort mean, same restriction | z-scored cache |
+| `full` | — | the stored sources (the decomposition's own output), per-trial pre-stimulus baseline |
+| `roi_masked` | each recording's own, restricted to the ASSR electrodes | z-scored cache, same baseline |
 
-Why each pair exists:
+`roi_masked` sits between the two rows the grid already has. The binary reference reads
+the ASSR electrodes with equal weight; `full` reads the whole head with learned weights;
+`roi_masked` reads *only* those electrodes with learned weights. It is the only row that
+separates "the component weights the anchor area better" from "the component sees
+something outside it".
 
-- **`prestim` vs `stored_prestim`** — the model was fitted on data z-scored along time, so
-  the stored source is `U_s @ z_s`. Applying the same `U_s` to un-z-scored power drops that
-  per-channel rescaling, so `prestim` is an *approximation* of the source and the stored
-  array is the source itself.
-- **`prestim` vs `mean_prestim`** — one thing changes, the filter. Anything that differs is
-  the per-recording topography and nothing else.
-- **`masked_*`** — sits between the two rows the grid already has. The binary reference
-  reads the ASSR electrodes with equal weight; an unrestricted component reads the whole
-  head with learned weights; this reads *only* those electrodes with learned weights. It is
-  the only row that separates "the component weights the anchor area better" from "the
-  component sees something outside it".
+It reads the **z-scored** wavelet and **no PCA**. The filters were estimated on z-scored
+data and their weights presume that scaling; and `PᵀP` mixes every channel back into the
+retained subspace, which would defeat "read only these electrodes".
 
-The restricted pair reads the **z-scored** wavelet and **no PCA**. The filters were
-estimated on z-scored data and their weights presume that scaling; and `PᵀP` mixes every
-channel back into the retained subspace, which would defeat "read only these electrodes".
+`assr_variants.project_condition` builds both variants' inputs in one streaming pass over
+the cache.
 
-`assr_variants.project_condition` builds every variant's input in one streaming pass over
-the cache, so the extra operators cost one tensordot each rather than another pass over a
-~50 GB file.
+The grid used to run five more variants (`zscored`, `prestim` and the three cohort-mean
+`mean_*` rows); they were retired on 2026-10-18. `full` and `roi_masked` are the former
+`stored_prestim` and `masked_prestim`, with identical numbers.
 
-## 5. The cohort-mean filter
+## 5. The cohort-mean filter (retired)
 
-Three things must happen before averaging topographies means anything, in this order
-(`assr_trials.cohort_mean_pattern`):
-
-1. **Sign** — polarity is arbitrary per recording, so averaging raw patterns drives the
-   mean toward zero. Each topography is flipped to `corr(topography, ASSR mask) > 0`.
-2. **Scale** — amplitude is arbitrary too, so each topography is normalised to unit L2
-   norm and contributes its *shape* only.
-3. **Average the pattern, then invert** — `U_mean = pinv(A_mean)`. Averaging the filters
-   instead would average `Σ⁻¹`-reweighted backward operators, which is not the backward
-   operator of the average topography.
-
-Component *k* may be averaged across recordings at all because IVA aligns its sources
-across datasets by construction — which a per-dataset ICA would not license.
-
-The run writes `mean_filter_topomaps.png` as the check: a recognisable fronto-central mean
-map means the average survived; a diffuse one means the recordings disagreed and the
-`mean_*` rows are reading a filter that represents nobody.
+The grid no longer reads a cohort-mean filter; see §4. The construction
+(`assr_trials.cohort_mean_pattern`: sign, unit scale, average the patterns, then invert)
+stays in the library.
 
 ## 6. Polarity
 
@@ -151,10 +127,8 @@ This reads only the pattern, never the tested response. That matters: an anchor 
 the tested quantity inflates the one-sided false-positive rate to **~0.68** under a
 simulated null.
 
-The three `mean_*` variants read one shared operator whose sign was anchored once when the
-cohort mean was built, so **no** per-recording flip is applied to them — doing so would
-scramble a quantity that does not carry that sign. `masked_prestim` keeps the flip; zeroing
-channels does not change a component's sign. Reference rows are never flipped.
+`roi_masked` keeps the flip; zeroing channels does not change a component's sign.
+Reference rows are never flipped.
 
 ## 7. Trials and normalisation
 
@@ -188,6 +162,20 @@ two arms differently would confound exactly the comparison this stage exists for
 use `z`. `ASSR-mask (PCA)` behaves like a component here, not like the full mask.
 
 Note `baseline_normalise` returns `(z, rel, positive)` — in that order.
+
+**The onset-locked TF maps are read the same way, at every frequency**
+(`assr_trials.baseline_tf_map`): each trial of each frequency minus its own pre-onset
+mean, divided by that recording's pre-onset SD pooled over its trials, the median over
+trials kept. Every ASSR trial-locked TF figure uses it — `condition_mean_tf_maps_onset`
+and the `participants/*onset_*` grids here and in 06b, stage 07's
+`condition_tf_maps_onset`, stage 00's `tf_baseline__*` and inspection maps. A map is
+then an SNR in baseline SD, so it compares across conditions, components and methods;
+it is drawn without the per-participant equal weighting (`equalize=False`), which would
+undo that unit. The SD is per recording, hence per condition: every decomposition's
+sources are z-scored per condition upstream, and only a per-condition SD cancels that
+scale. A 100 ms baseline is short at the bottom of the map, but on CorrCA CC1 the pooled
+within-window SD is a near-constant fraction of the total baseline SD from 1 to 50 Hz
+(0.2–0.4), so the divisor does not single out the low frequencies.
 
 ## 8. The three test families
 
@@ -235,7 +223,7 @@ plots/06-iva-condition-comparison/<Condition>_<Music>/<spectrum>/assr_snr_grid/p
   condition; a 3000-sample cache yields ~9 trials. Extending that means re-projecting from
   a longer cache, not re-cutting the arrays. The script streams the full cache, so every
   variant there sees identical onsets and the asymmetry below does not arise.
-- **`stored_prestim` is not a like-for-like row in the notebook.** Its IC rows come from the
+- **`full` is not a like-for-like row in the notebook.** Its IC rows come from the
   whole recording (~148 trials) while the references come from the subset (~9), so its IC
   side is the less noisy of the two. Every other variant is a clean comparison.
 - **A within-epoch drift survives** the per-trial baseline, which only sets each trial's

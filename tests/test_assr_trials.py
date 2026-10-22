@@ -968,3 +968,54 @@ class TestReferenceSnrTests:
             at.reference_snr_tests(
                 np.zeros((3, 2)), ["a", "b", "c"], condition="Placebo"
             )
+
+
+class TestBaselineTfMap:
+    """Per-trial baseline reference, SD pooled over the recording's trials."""
+
+    def _recording(self, rng):
+        # 2 sources x 3 freqs, 40 trials of 10 samples (4 pre-stimulus) laid end to end.
+        n_trials, pre, post = 40, 4, 6
+        width = pre + post
+        sources = rng.normal(size=(2, 3, n_trials * width))
+        onsets = np.arange(n_trials) * width + pre
+        return sources, onsets, pre, post, np.arange(width) < pre
+
+    def test_matches_baseline_normalise_median(self):
+        rng = np.random.default_rng(0)
+        sources, onsets, pre, post, mask = self._recording(rng)
+        trials, _ = at.cut_trials(sources, onsets, pre, post)
+        z, _, _ = at.baseline_normalise(trials, mask)
+        result = at.baseline_tf_map(sources, onsets, pre, post, mask)
+        assert result.shape == (2, 3, pre + post)
+        np.testing.assert_allclose(result, np.median(z, axis=-2))
+
+    def test_recording_scale_and_offset_cancel(self):
+        rng = np.random.default_rng(1)
+        sources, onsets, pre, post, mask = self._recording(rng)
+        base = at.baseline_tf_map(sources, onsets, pre, post, mask)
+        rescaled = at.baseline_tf_map(7.0 * sources + 3.0, onsets, pre, post, mask)
+        np.testing.assert_allclose(rescaled, base)
+
+    def test_response_in_baseline_sd_units(self):
+        rng = np.random.default_rng(2)
+        sources, onsets, pre, post, mask = self._recording(rng)
+        trials, _ = at.cut_trials(sources, onsets, pre, post)
+        spread = np.sqrt((trials[..., mask].std(axis=-1, ddof=1) ** 2).mean(axis=-1))
+        for onset in onsets:
+            sources[..., onset : onset + post] += 5.0 * spread[..., None]
+        result = at.baseline_tf_map(sources, onsets, pre, post, mask)
+        # The added step is exactly 5 pooled baseline SDs; the trial median of the
+        # noise around it stays well inside 1.
+        assert np.all(np.abs(result[..., pre:].mean(axis=-1) - 5.0) < 1.0)
+
+    def test_recording_axis_is_looped_not_broadcast(self):
+        rng = np.random.default_rng(3)
+        sources, onsets, pre, post, mask = self._recording(rng)
+        stacked = np.stack([sources, 2.0 * sources[::-1]])  # (S, K, F, T)
+        result = at.baseline_tf_map(stacked, onsets, pre, post, mask)
+        expected = np.stack(
+            [at.baseline_tf_map(row, onsets, pre, post, mask) for row in stacked]
+        )
+        assert result.shape == (2, 2, 3, pre + post)
+        np.testing.assert_allclose(result, expected)

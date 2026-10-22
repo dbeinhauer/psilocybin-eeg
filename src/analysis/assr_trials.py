@@ -1003,6 +1003,41 @@ def baseline_normalise(
     return z, rel, positive[..., 0]
 
 
+def baseline_tf_map(
+    sources: np.ndarray,
+    onsets: np.ndarray,
+    pre: int,
+    post: int,
+    baseline_mask: np.ndarray,
+) -> np.ndarray:
+    """A recording's onset-locked TF map in units of its own pre-stimulus SD.
+
+    Every trial of every ``(source, frequency)`` row is put through
+    :func:`baseline_normalise` — its own pre-stimulus mean subtracted, divided by the
+    pre-stimulus SD pooled over this recording's trials — and the median over trials
+    is kept: the SNR courses' reading, at every frequency. A scale applied to the whole
+    recording upstream (a per-condition z-score) cancels, so two recordings' maps
+    compare as SNRs whatever their sources' scales.
+
+    Beyond ``(K, F, T)`` the leading axis is taken one entry at a time — a recording
+    each — so only one recording's trials are ever held at once.
+
+    :param sources: ``(..., F, T)`` continuous sources, time last.
+    :param onsets: Onset sample indices on that time axis.
+    :param pre: Samples kept before each onset.
+    :param post: Samples kept after each onset.
+    :param baseline_mask: ``(pre + post,)`` mask of the pre-stimulus samples.
+    :return: ``(..., F, pre + post)`` median-over-trials map.
+    """
+    if np.ndim(sources) > 3:
+        return np.stack(
+            [baseline_tf_map(row, onsets, pre, post, baseline_mask) for row in sources]
+        )
+    trials, _ = cut_trials(sources, onsets, pre, post)  # (..., F, N, W)
+    z, _rel, _positive = baseline_normalise(trials, baseline_mask)
+    return np.median(z, axis=-2)
+
+
 # ---------------------------------------------------------------------------
 # Paired tests over participants
 # ---------------------------------------------------------------------------

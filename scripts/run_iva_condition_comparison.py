@@ -395,14 +395,17 @@ def _onset_average(
     sfreq: float,
     min_onsets: int,
 ) -> tuple[np.ndarray, np.ndarray, list[float]] | None:
-    """Average a fixed epoch around every stimulus onset.
+    """The trial-normalised map of a fixed epoch around every stimulus onset.
 
     The epoch is the paradigm window from
     :class:`~src.definitions.constants.AssrEpoch` via
     :func:`~src.analysis.iva_quality.onset_window` — the same call the notebook and
     the ``--quality`` path make, so no onset-locked ASSR figure is cut on a different
-    window than another. No baseline subtraction: ``zscore_by_time`` already zeroed
-    each series' time-mean, so the pre-onset interval reads ≈ 0 by construction.
+    window than another. Every trial of every frequency is referenced to its own
+    pre-onset window and put in units of its recording's pre-onset SD, pooled over its
+    trials; the median over trials is kept
+    (:func:`~src.analysis.assr_trials.baseline_tf_map`). Each recording is one
+    condition here, so that SD is per condition, as the SNR courses take it.
 
     :param sources: ``(S, K, F, T)`` whole-recording component maps.
     :param onsets: Stimulus onset sample indices, or ``None`` when the experiment has
@@ -411,7 +414,7 @@ def _onset_average(
     :param n_times: Length of the usable time axis.
     :param sfreq: Sampling frequency in Hz.
     :param min_onsets: Minimum epochs that must fit before averaging is worthwhile.
-    :return: ``(onset_tf, epoch_times, epoch_marks)`` — the ``(S, K, F, W)`` average,
+    :return: ``(onset_tf, epoch_times, epoch_marks)`` — the ``(S, K, F, W)`` map,
         its time axis in seconds with ``0`` at the onset, and the onset/offset times to
         mark. ``None`` when there is nothing to average.
     """
@@ -434,19 +437,17 @@ def _onset_average(
         )
         return None
 
-    onset_tf, n_used = iva_quality.epoch_average(sources, onsets_in, pre, post)
     epoch_times = np.arange(-pre, post) / sfreq
-    # Each frequency referenced to its own pre-onset mean. The z-scoring puts the
-    # pre-onset interval near 0 over the WHOLE recording but not within any one epoch,
-    # so this is what makes the map a change rather than a level. Mean only — see
-    # subtract_epoch_baseline for why no divisor.
-    onset_tf = iva_quality.subtract_epoch_baseline(onset_tf, epoch_times < 0.0)
+    onset_tf = at.baseline_tf_map(
+        sources[..., :n_times], onsets_in, pre, post, epoch_times < 0.0
+    )
+    n_used = n_fitting
     # Onset (dashed) then the stimulus offset (dotted), clamped into the epoch.
     marks = [0.0, min(AssrEpoch.STIMULUS_DURATION_S, float(epoch_times[-1]))]
     _logger.info(
-        f"[{label}] Onset-averaged {onset_tf.shape} from {n_used} epoch(s); window "
-        f"[{epoch_times[0]:.3f}, {epoch_times[-1]:.3f}] s, each frequency referenced "
-        "to its own pre-onset mean"
+        f"[{label}] Onset-locked {onset_tf.shape} from {n_used} trial(s); window "
+        f"[{epoch_times[0]:.3f}, {epoch_times[-1]:.3f}] s, each trial in its "
+        "pre-onset SD, median over trials"
     )
     if post < int(round(AssrEpoch.POST_ONSET_S * sfreq)):
         _logger.info(
@@ -812,6 +813,7 @@ def run_condition_comparison(
                 epoch_marks=epoch_marks,
                 alignment_note=alignment_note,
                 save_path=out_dir / f"{prefix}condition_mean_tf_maps_onset.png",
+                equalize=False,
             )
             plt.close("all")
             written += plot_participant_condition_tf_maps(
@@ -825,6 +827,7 @@ def run_condition_comparison(
                 label=label,
                 root_dir=participants_dir,
                 prefix=f"{prefix}onset_",
+                equalize=False,
                 freq_marks=_TF_FREQ_MARKS,
                 epoch_marks=epoch_marks,
                 alignment_note=alignment_note,

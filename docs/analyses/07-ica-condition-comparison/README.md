@@ -71,6 +71,9 @@ carrying one block alone.
 - `plot_pvalue_summary` — the contrast forest, plus one panel per reference row showing
   `IC − reference`.
 - `plot_snr_vs_reference` — the magnitude comparison, per condition.
+- `plot_global_tf_grid` — the components' TF maps; `condition_tf_maps_onset` is the
+  onset-locked one, trial-normalised as every ASSR trial-locked map is (each trial in its
+  own pre-onset SD, median over trials; see stage 06, §7).
 
 ## Outputs
 

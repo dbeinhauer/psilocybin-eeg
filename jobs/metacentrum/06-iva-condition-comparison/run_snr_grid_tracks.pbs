@@ -21,14 +21,9 @@
 #     ASSR-mask (PCA) read only through each recording's PCA subspace on the raw
 #     cache; and ASSR-mask (PCA, z), the same operator on the z-scored cache —
 #     the signal the decomposition was handed, before the unmixing.
-#   - THREE signal variants: zscored (the stored per-recording z-scored sources
-#     for the ICs, plus the masks on the z-scored cache), prestim (the raw cache
-#     projected, then every trial referenced to its own pre-stimulus baseline) and
-#     stored_prestim (the stored sources for the IC rows, given that same per-trial
-#     baseline, on prestim's reference rows unchanged). Streaming the full cache
-#     means all three see identical onsets and identical references, so the only
-#     thing that differs between prestim and stored_prestim is how the component
-#     itself was read.
+#   - TWO signal variants, full and roi_masked (below), on identical onsets
+#     and identical references, so the only thing that differs is how the
+#     component itself was read.
 #   - THREE test families, participants as the unit, exact Wilcoxon: contrast
 #     (Placebo - Psilocybin per source), discrimination (does an IC separate the
 #     conditions better than a reference, the interaction, vs each reference) and
@@ -37,23 +32,17 @@
 # THE GRID this job runs at once:
 #   --halfwidths 0 5            -> 40 Hz single bin AND 35-45 Hz band mean
 #   --stimulus_intervals        -> 0-500 ms AND 200-500 ms test windows
-# crossed with all seven signal variants -> 2 x 2 x 7 = 28 cells, all in one CSV.
+# crossed with both signal variants -> 2 x 2 x 2 = 8 cells, all in one CSV.
 #
-# WHAT THE SEVEN VARIANTS ARE. The references never move — every variant but zscored
-# carries prestim's three reference columns verbatim — so the whole set is ONE
-# comparison in which only the learned rows change:
-#   zscored / prestim / stored_prestim   how the participant's OWN filter is read
-#   mean_prestim / mean_stored_prestim   the same, through the ONE cohort-mean filter,
-#                                        so the difference from the pair above IS the
-#                                        per-participant topography and nothing else
-#   masked_prestim / mean_masked_prestim both filters with every weight OUTSIDE the
-#                                        ASSR electrodes zeroed, which separates a
-#                                        better weighting inside that area from access
-#                                        to signal outside it
-# None of them costs another pass over the cache: the extra operators ride the same
-# streamed block, and stored_prestim reuses the stored IC rows zscored already reads.
-# In THIS variant the mixing matrix is shared across the conditions, so the cohort mean
-# averages one topography per participant rather than one per recording.
+# WHAT THE TWO VARIANTS ARE. Both carry the same three reference columns, so the pair
+# is ONE comparison in which only the learned rows change:
+#   full         the stored z-scored sources (the decomposition's own output), every
+#                trial referenced to its own pre-stimulus window
+#   roi_masked   each filter with every weight OUTSIDE the ASSR electrodes zeroed, on
+#                the z-scored cache — separates a better weighting inside that area
+#                from access to signal outside it
+# Neither costs another pass over the cache: the masked operator rides the same
+# streamed block, and full reuses the stored sources.
 #
 # RESOURCES. Like run_trial_stats.pbs this is I/O bound: the cost is one pass over
 # each participant's wavelets per condition (measured ~13 min per condition on the
@@ -71,6 +60,7 @@
 #
 # WRITES:
 #   results/assr/assr_snr_grid__iva_channel_joined_tracks__broadband__pca<N>.csv
+#   results/assr/assr_snr_grid__iva_channel_joined_tracks__broadband__pca<N>__values.npz
 #   plots/06-iva-condition-comparison/JoinedTracks_ASSR/broadband/assr_snr_grid/
 #       pca_<N>/<sel>/<window>/{pvalue_summary,snr_by_condition,trial_course_by_source}__<variant>.png
 #       pca_<N>/{mean,mean_masked}_filter_topomaps.png    the spatial-filter check
@@ -127,9 +117,7 @@ python /mnt/scripts/run_assr_snr_grid.py \
    --n_pca 5 \
    --halfwidths 0 5 \
    --stimulus_intervals 0:0.5 0.2:0.5 \
-   --signal_variants prestim stored_prestim \
-                     mean_prestim mean_stored_prestim \
-                     masked_prestim mean_masked_prestim \
+   --signal_variants full roi_masked \
    --contrast_alternative greater \
    --snr_alternative less \
    --store_dir "$DATA_DIR" \

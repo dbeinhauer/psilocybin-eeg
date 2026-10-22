@@ -10,10 +10,10 @@ per-participant outliers:
 * raw stimulus-locked broadband GFP (global field power of the evoked response;
   overlay + one panel per participant) and channel-mean evoked response (signed
   mean across channels; overlay + one panel per participant);
-* wavelet time-frequency power maps (per participant + group, z-scored per freq
-  against the whole recording);
+* wavelet time-frequency power maps (per participant + group, trial-normalised per
+  freq: every trial against its own pre-onset window, in baseline SD);
 * 40 Hz ASSR-band power time course (per participant + group);
-* stimulus-locked z-scored wavelet-power topomaps (per participant + group).
+* stimulus-locked trial-normalised wavelet-power topomaps (per participant + group).
 
 Inputs (produced by stimulus alignment + the wavelet store jobs)::
 
@@ -24,7 +24,7 @@ Inputs (produced by stimulus alignment + the wavelet store jobs)::
 
 The wavelets are tens of GB, so they are read **lazily**, one memory-mapped
 participant at a time: every channel block is read once and immediately reduced
-(channel-mean TF map + a signed per-channel z-scored-power topomap value), keeping
+(channel-mean TF map + a signed per-channel normalised-power topomap value), keeping
 peak memory at one block.
 
 Output plots::
@@ -44,10 +44,10 @@ import matplotlib.pyplot as plt  # noqa: E402
 import mne  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
-from scipy.stats import zscore  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from src.analysis import assr_trials as at  # noqa: E402
 from src.definitions.constants import ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
     ConditionVariants,
@@ -122,15 +122,16 @@ def stream_wavelet_reduce(
     (~tens of MB) rather than the full multi-GB tensor.
 
     For each subject it accumulates two reductions, both built from the power
-    **z-scored per frequency against the whole recording** (``zscore(block,
-    axis=1)``) — which removes the 1/f tilt and references every frequency to the
-    most stable baseline available:
+    **trial-normalised per frequency**
+    (:func:`~src.analysis.assr_trials.baseline_tf_map`): every trial referenced to its
+    own pre-onset window and put in units of the pre-onset SD pooled over the
+    recording's trials, the median over trials kept. That removes the 1/f tilt and
+    makes every channel and participant an SNR:
 
-    * the **channel-mean stimulus-locked TF map** ``(n_freqs, win)`` — the
-      z-scored power epoch-averaged over onsets, then averaged across channels
-      (for the time-frequency plots);
-    * a **per-channel topomap scalar** — the same z-scored, epoch-averaged map
-      mean-collapsed over ``topo_freq_mask`` and ``topo_post_mask`` (signed).
+    * the **channel-mean stimulus-locked TF map** ``(n_freqs, win)`` — that map,
+      averaged across channels (for the time-frequency plots);
+    * a **per-channel topomap scalar** — the same map mean-collapsed over
+      ``topo_freq_mask`` and ``topo_post_mask`` (signed).
 
     Args:
         wavelet_set: The condition's stored wavelets.
@@ -147,6 +148,7 @@ def stream_wavelet_reduce(
         ``n_times`` is the wavelet time length.
     """
     win = pre + post
+    baseline_mask = np.arange(-pre, post) < 0
     n_subj = len(participants)
     n_channels, n_freqs = wavelet_set.n_channels, wavelet_set.n_freqs
     power_maps = np.zeros((n_subj, n_freqs, win), dtype=np.float64)
@@ -158,12 +160,10 @@ def stream_wavelet_reduce(
         tf_sum = np.zeros((n_freqs, win), dtype=np.float64)
         for chan in range(n_channels):
             block = np.asarray(subject[chan], dtype=np.float64)
-            # Z-score each frequency against the whole recording, then epoch-average:
-            # the per-channel stimulus-locked TF map in units of SD relative to the
-            # recording baseline.
-            ev_z, _ = epoch_average(zscore(block, axis=1), onsets, pre, post)
+            # The per-channel stimulus-locked TF map in pre-onset SD, per frequency.
+            ev_z = at.baseline_tf_map(block, onsets, pre, post, baseline_mask)
             tf_sum += ev_z  # channel-mean TF map
-            # Topomap scalar: collapse the same z-scored map over freq/time.
+            # Topomap scalar: collapse the same map over freq/time.
             topo[subj, chan] = ev_z[topo_freq_mask][:, topo_post_mask].mean()
         power_maps[subj] = tf_sum / n_channels
         print(f"  reduced subject {subj + 1}/{n_subj} ({participant})", flush=True)
@@ -313,7 +313,7 @@ def plot_tf_per_participant(
     title_suffix: str,
     plots_dir: Path,
 ) -> None:
-    """Grid of per-participant time-frequency maps (z-scored vs whole recording)."""
+    """Grid of per-participant time-frequency maps (trial-normalised, baseline SD)."""
     n_subj = power_maps.shape[0]
     vmax = float(np.abs(power_maps).max())
     extent = [epoch_times[0], epoch_times[-1], freqs[0], freqs[-1]]
@@ -338,9 +338,9 @@ def plot_tf_per_participant(
         ax.set_title(labels[subj], fontsize=9)
     for ax in flat[n_subj:]:
         ax.axis("off")
-    fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.6, label="z-scored power")
+    fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.6, label="power (baseline SD)")
     fig.suptitle(
-        f"Per-participant stimulus-locked wavelet power (z-scored per freq) — "
+        f"Per-participant stimulus-locked wavelet power (trial-normalised) — "
         f"{title_suffix}",
         y=1.0,
     )
@@ -358,7 +358,7 @@ def plot_tf_group(
     title_suffix: str,
     plots_dir: Path,
 ) -> None:
-    """Group-average time-frequency map (z-scored vs whole recording)."""
+    """Group-average time-frequency map (trial-normalised, baseline SD)."""
     group_tf = power_maps.mean(axis=0)
     vmax = float(np.abs(group_tf).max())
     extent = [epoch_times[0], epoch_times[-1], freqs[0], freqs[-1]]
@@ -376,12 +376,12 @@ def plot_tf_group(
     ax.axhline(assr_freq, color="green", ls=":", lw=1.2, label=f"{assr_freq:.0f} Hz")
     ax.set_title(
         f"Stimulus-locked wavelet power, averaged over participants "
-        f"(z-scored per freq)\n{title_suffix}"
+        f"(trial-normalised)\n{title_suffix}"
     )
     ax.set_xlabel("Time relative to onset (s)")
     ax.set_ylabel("Frequency (Hz)")
     ax.legend(loc="upper right", fontsize=8)
-    fig.colorbar(im, ax=ax, shrink=0.9, label="z-scored power")
+    fig.colorbar(im, ax=ax, shrink=0.9, label="power (baseline SD)")
     fig.tight_layout()
     fig.savefig(plots_dir / "wavelet_tf_group_average.png", dpi=150)
     plt.close(fig)
@@ -396,10 +396,10 @@ def plot_assr_band(
     title_suffix: str,
     plots_dir: Path,
 ) -> None:
-    """Per-participant + group ASSR-band power time course (z-scored vs recording)."""
+    """Per-participant + group ASSR-band power time course (trial-normalised)."""
     band = (freqs >= assr_freq - 2) & (freqs <= assr_freq + 2)
     n_subj = power_maps.shape[0]
-    # power_maps is already z-scored vs the whole recording; just average the band.
+    # power_maps is already in baseline SD; just average the band.
     curves = np.stack([power_maps[s, band].mean(axis=0) for s in range(n_subj)])
     fig, ax = plt.subplots(figsize=(12, 6))
     for subj in range(n_subj):
@@ -409,11 +409,10 @@ def plot_assr_band(
     )
     ax.axvline(0.0, color="red", ls="--", lw=1, label="onset")
     ax.set_title(
-        f"Stimulus-locked {assr_freq:.0f} Hz power (z-scored vs recording) — "
-        f"{title_suffix}"
+        f"Stimulus-locked {assr_freq:.0f} Hz power (trial-normalised) — {title_suffix}"
     )
     ax.set_xlabel("Time relative to onset (s)")
-    ax.set_ylabel("z-scored ASSR-band power")
+    ax.set_ylabel("ASSR-band power (baseline SD)")
     ax.legend(loc="upper right", fontsize=7, ncol=3)
     fig.tight_layout()
     fig.savefig(plots_dir / "wavelet_assr_band_timecourse.png", dpi=150)
@@ -430,7 +429,7 @@ def plot_topomaps(
     title_suffix: str,
     plots_dir: Path,
 ) -> None:
-    """Per-participant + group signed z-scored-power topomaps (nb05 convention)."""
+    """Per-participant + group signed normalised-power topomaps (nb05 convention)."""
     n_subj = topo.shape[0]
     panels = [(labels[s], topo[s][info_order]) for s in range(n_subj)]
     panels.append(("group average", topo.mean(axis=0)[info_order]))
@@ -457,9 +456,9 @@ def plot_topomaps(
         ax.set_title(label, fontsize=9)
     for ax in flat[len(panels) :]:
         ax.axis("off")
-    fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.6, label="z-scored power")
+    fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.6, label="power (baseline SD)")
     fig.suptitle(
-        f"Stimulus-locked z-scored wavelet power topography "
+        f"Stimulus-locked trial-normalised wavelet power topography "
         f"({freq_range[0]:.0f}-{freq_range[1]:.0f} Hz, "
         f"[{window[0]}, {window[1]}] s) — {title_suffix}",
         y=1.0,

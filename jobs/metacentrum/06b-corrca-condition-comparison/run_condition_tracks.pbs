@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N PSILO_CORRCA_TRACKS_06B
-#PBS -l walltime=1:00:00
+#PBS -l walltime=2:00:00
 #PBS -l select=1:ncpus=4:mem=400gb:scratch_local=80gb
 #PBS -m ae
 #PBS -j oe
@@ -27,6 +27,12 @@
 #   - participants/*
 #   - corrca_shared_topomaps
 #   - corrca_condition_isc (+ 3 CSVs)
+#
+# ROI FIT. Every run also fits a second time on the binary ASSR ROI alone
+# (ROI -> z-score -> PCA -> CorrCA), from the same loaded tensor, stored and drawn
+# as the '_roi' variant beside the full-montage one; the full fit also draws
+# 'roi_masked_*' TF maps (its filter restricted to the ROI). --skip_roi_fit /
+# --skip_roi_masked drop them. Walltime allows for the second fit and figure set.
 #
 # Output:
 #   plots/06b-corrca-condition-comparison/JoinedTracks_ASSR/
@@ -90,7 +96,7 @@ COMMON_ARGS=(
 
 echo "=== full extent at $(date) ==="
 python /mnt/scripts/run_corrca_condition_tracks.py \
-    --n_pca 5 \
+    --n_pca 1   \
     --zscore_mode per_condition \
     "${COMMON_ARGS[@]}"
 

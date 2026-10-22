@@ -79,3 +79,65 @@ class TestSaveDataFile:
         )
         # Should not call save since CONCATENATED isn't in RAW_DATA_VARIANTS or IC types
         mock_data.save.assert_not_called()
+
+
+class TestSnrCourses:
+    """save_snr_courses / load_snr_courses round trip."""
+
+    def test_round_trip(self, tmp_path):
+        from src.io.loading import load_snr_courses
+        from src.io.saving import save_snr_courses
+
+        rng = np.random.default_rng(0)
+        courses = {
+            ("2_roi_zscore_pca", "40hz"): {
+                "Placebo": rng.standard_normal((3, 2, 5)).astype(np.float32),
+                "Psilocybin": rng.standard_normal((3, 2, 5)).astype(np.float32),
+            },
+            ("full", "35-45hz"): {
+                "Placebo": rng.standard_normal((3, 2, 5)).astype(np.float32)
+            },
+        }
+        times = np.linspace(-0.1, 0.3, 5)
+        path = tmp_path / "snr_courses.npz"
+        save_snr_courses(path, courses, ["019", "023", "026"], ["PC 1", "ROI"], times)
+
+        participants, sources, loaded_times, loaded = load_snr_courses(path)
+        assert participants == ["019", "023", "026"]
+        assert sources == ["PC 1", "ROI"]
+        np.testing.assert_array_equal(loaded_times, times)
+        assert loaded.keys() == courses.keys()
+        for key, by_condition in courses.items():
+            for condition, course in by_condition.items():
+                np.testing.assert_array_equal(loaded[key][condition], course)
+        assert [p.name for p in tmp_path.iterdir()] == ["snr_courses.npz"]
+
+
+class TestSnrValues:
+    """save_snr_values / load_snr_values round trip."""
+
+    def test_round_trip(self, tmp_path):
+        from src.io.loading import load_snr_values
+        from src.io.saving import save_snr_values
+
+        rng = np.random.default_rng(0)
+        values = {
+            ("2_roi_zscore_pca", "40hz", "0-0.5s"): {
+                "Placebo": rng.standard_normal((3, 2)),
+                "Psilocybin": rng.standard_normal((3, 2)),
+            },
+            ("full", "35-45hz", "0-0.500 s (paradigm default)"): {
+                "Placebo": rng.standard_normal((3, 2))
+            },
+        }
+        path = tmp_path / "snr_values.npz"
+        save_snr_values(path, values, ["019", "023", "026"], ["PC 1", "ROI"])
+
+        participants, sources, loaded = load_snr_values(path)
+        assert participants == ["019", "023", "026"]
+        assert sources == ["PC 1", "ROI"]
+        assert loaded.keys() == values.keys()
+        for key, by_condition in values.items():
+            for condition, value in by_condition.items():
+                np.testing.assert_array_equal(loaded[key][condition], value)
+        assert [p.name for p in tmp_path.iterdir()] == ["snr_values.npz"]

@@ -23,15 +23,20 @@ from scripts.analysis_common import (
     participant_label,
     participant_labels,
     resolve_wavelet_dir,
+    restrict_to_assr_roi,
+    roi_masked_corrca_sources,
     run_wavelet_workflow,
     subject_conditions,
     wavelet_transform,
 )
+from src.analysis.corrca import CorrcaResult
 from src.analysis.data_representations import AnalysisData, DataRepresentation
+from src.analysis.wavelet_ica import zscore_by_time
 from src.definitions.constants import ProjectPaths
 from src.definitions.fields import (
     AnalysisVariants,
     ConditionVariants,
+    CoordinateSystems,
     ExperimentNames,
     SingleDataMetadata,
 )
@@ -695,3 +700,76 @@ class TestSubjectConditionHelpers:
         df = pd.DataFrame({SingleDataMetadata.PARTICIPANT_ID: ["019", "024"]})
         with pytest.raises(ValueError, match="no CONDITION column"):
             subject_conditions(df, 2)
+
+
+class TestAssrRoiCorrca:
+    """The ROI cut before a CorrCA fit, and the fitted filter restricted to the ROI."""
+
+    # E4 and E5 are ASSR electrodes, E1-E3 are not.
+    CHANNELS = ["E1", "E4", "E2", "E5", "E3"]
+    ROI = [1, 3]
+
+    @pytest.fixture
+    def data(self):
+        return np.random.default_rng(0).gamma(2.0, size=(3, 5, 4, 50))
+
+    @staticmethod
+    def _kwargs(**extra):
+        import logging
+
+        return {
+            "coordinate_system": CoordinateSystems.HYDROGEL_257_NO_FIDUCIALS,
+            "lenient_mask": True,
+            "label": "test",
+            "logger": logging.getLogger("test"),
+            **extra,
+        }
+
+    def test_roi_cut_keeps_the_assr_electrodes_in_montage_order(self, data):
+        import mne
+
+        info = mne.create_info(self.CHANNELS, 250.0, "eeg")
+        cut, roi_info = restrict_to_assr_roi(data, info, **self._kwargs(n_pca=2))
+        assert roi_info.ch_names == ["E4", "E5"]
+        np.testing.assert_array_equal(cut, data[:, self.ROI])
+
+    def test_no_roi_fit_when_the_roi_cannot_hold_n_pca(self, data):
+        import mne
+
+        info = mne.create_info(self.CHANNELS, 250.0, "eeg")
+        assert restrict_to_assr_roi(data, info, **self._kwargs(n_pca=3)) is None
+
+    def test_no_roi_fit_without_an_assr_electrode(self, data):
+        import mne
+
+        info = mne.create_info(["Fz", "Cz", "Pz", "Oz", "T7"], 250.0, "eeg")
+        assert restrict_to_assr_roi(data, info, **self._kwargs(n_pca=1)) is None
+
+    def test_masked_sources_are_the_masked_filter_on_the_zscored_input(self, data):
+        rng = np.random.default_rng(1)
+        filters = rng.standard_normal((5, 2))
+        model = CorrcaResult(
+            filters=filters,
+            patterns=filters.T,
+            isc=np.array([0.5, 0.2]),
+            n_retained=2,
+            gamma=0.0,
+        )
+        sources = roi_masked_corrca_sources(
+            data, model, self.CHANNELS, **self._kwargs()
+        )
+        masked = np.zeros_like(filters)
+        masked[self.ROI] = filters[self.ROI]
+        expected = np.einsum("ck,scft->skft", masked, zscore_by_time(data))
+        np.testing.assert_allclose(sources, expected)
+
+    def test_no_masked_sources_without_an_assr_electrode(self, data):
+        model = CorrcaResult(
+            filters=np.ones((5, 1)),
+            patterns=np.ones((1, 5)),
+            isc=np.array([0.1]),
+            n_retained=1,
+            gamma=0.0,
+        )
+        names = ["Fz", "Cz", "Pz", "Oz", "T7"]
+        assert roi_masked_corrca_sources(data, model, names, **self._kwargs()) is None

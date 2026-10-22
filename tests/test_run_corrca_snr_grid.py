@@ -58,11 +58,29 @@ def test_masked_filters_read_only_the_anchor(ops, mask):
 def test_cli_defaults_and_variants():
     args = _build_arg_parser().parse_args([])
     assert args.variant == "corrca_channel_joined_separate"
-    assert args.signal_variants == [
-        "zscored",
-        "prestim",
-        "stored_prestim",
-        "masked_prestim",
-    ]
+    assert args.signal_variants == ["full", "roi_masked", "non_roi_masked"]
+    assert args.masked_tf_maps is False
+    assert args.skip_roi is False
+    # The ROI store is read after its join's full one, not named on its own.
+    with pytest.raises(SystemExit):
+        _build_arg_parser().parse_args(
+            ["--variant", "corrca_channel_joined_separate_roi"]
+        )
+    with pytest.raises(SystemExit):
+        _build_arg_parser().parse_args(["--signal_variants", "stored_prestim"])
     with pytest.raises(SystemExit):
         _build_arg_parser().parse_args(["--variant", "iva_channel_joined_separate"])
+
+
+def test_the_complement_reads_everything_but_the_anchor(ops, mask):
+    assert np.all(ops["outside"][:, mask] == 0)
+    np.testing.assert_allclose(ops["masked"] + ops["outside"], ops["filters"])
+    # Disjoint supports, so the two L2 shares are the legs of one right triangle.
+    np.testing.assert_allclose(ops["masked_share"] ** 2 + ops["outside_share"] ** 2, 1)
+
+
+def test_an_roi_store_has_no_complement(shared_filters):
+    everything = np.ones(N_CHANNELS, dtype=bool)
+    ops = corrca_operators(shared_filters, everything / N_CHANNELS, everything)
+    assert not ops["outside"].any()
+    assert not ops["outside_share"].any()

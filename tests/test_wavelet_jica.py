@@ -27,8 +27,7 @@ from src.analysis.wavelet_jica import (
     DEFAULT_SIGNAL_VARIANTS,
     IDENTITY_TOLERANCE,
     SIGNAL_VARIANTS,
-    VARIANT_RECIPE,
-    VARIANT_REFERENCE_FROM,
+    VARIANT_FILTER,
     VARIANT_UNITS,
     assemble_join,
     bootstrap_median_ci,
@@ -540,71 +539,9 @@ class TestSharedUtilities:
         with pytest.raises(ValueError, match="'sem' or 'iqr'"):
             participant_spread(np.zeros((2, 3)), "stderr")
 
-    def test_every_signal_variant_has_units_and_a_recipe(self):
-        assert set(SIGNAL_VARIANTS) <= set(VARIANT_UNITS)
-        assert set(SIGNAL_VARIANTS) == set(VARIANT_RECIPE)
+    def test_every_signal_variant_has_units_and_a_filter(self):
+        assert set(SIGNAL_VARIANTS) == set(VARIANT_UNITS) == set(VARIANT_FILTER)
         assert set(DEFAULT_SIGNAL_VARIANTS) <= set(SIGNAL_VARIANTS)
-
-    def test_the_default_grid_covers_every_filter_by_signal_cell_that_exists(self):
-        """Three spatial filters x (raw | z-scored), minus the two cells that do not.
-
-        A restricted filter's weights presume the scaling they were fitted on, so the
-        masked pair reads the z-scored signal only — applying them to raw power would
-        weight each electrode by its own power level on top, which is the artefact the
-        equal-weight reference row exists to remove.
-        """
-        cells = {
-            (VARIANT_RECIPE[v]["filter"], VARIANT_RECIPE[v]["zscore"])
-            for v in DEFAULT_SIGNAL_VARIANTS
-        }
-        assert cells == {
-            ("own", False),
-            ("own", True),
-            ("mean", False),
-            ("mean", True),
-            ("masked", True),
-            ("mean_masked", True),
-        }
-
-    def test_every_default_cell_is_per_trial_baselined(self):
-        """That is what puts all four in the reference's units, so they compare."""
-        assert all(VARIANT_RECIPE[v]["baseline"] for v in DEFAULT_SIGNAL_VARIANTS)
-        # And the one variant that is not baselined is the one kept out of the default.
-        assert not VARIANT_RECIPE["zscored"]["baseline"]
-        assert "zscored" not in DEFAULT_SIGNAL_VARIANTS
-
-    def test_zscored_is_the_exact_component_and_prestim_is_not(self):
-        """The z-scored route applies the filter to the signal the fit actually saw."""
-        assert VARIANT_RECIPE["zscored"]["zscore"] is True
-        assert VARIANT_RECIPE["zscored_prestim"]["zscore"] is True
-        assert VARIANT_RECIPE["prestim"]["zscore"] is False
-
-    def test_every_baselined_variant_borrows_prestim_s_reference(self):
-        """The invariant the grid rests on: only the component moves between cells.
-
-        For a raw-signal variant the borrow is a no-op — the fixed rows do not depend
-        on the learned filter, so ``mean_prestim`` would recompute the identical
-        numbers — and it is declared anyway so the rule is stated once instead of
-        inferred per variant. ``zscored`` is excluded because it has no per-trial
-        baseline to put the borrowed rows in.
-        """
-        assert VARIANT_REFERENCE_FROM == {
-            "zscored_prestim": "prestim",
-            "mean_prestim": "prestim",
-            "mean_zscored_prestim": "prestim",
-            "masked_prestim": "prestim",
-            "mean_masked_prestim": "prestim",
-        }
-        assert set(VARIANT_REFERENCE_FROM) == {
-            v
-            for v in SIGNAL_VARIANTS
-            if VARIANT_RECIPE[v]["baseline"] and v != "prestim"
-        }
-        for variant, source in VARIANT_REFERENCE_FROM.items():
-            assert variant in SIGNAL_VARIANTS
-            assert source in SIGNAL_VARIANTS
-            assert VARIANT_RECIPE[variant]["baseline"]
-            assert not VARIANT_RECIPE[source]["zscore"]
 
 
 class TestCohortFilter:

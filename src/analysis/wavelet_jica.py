@@ -78,138 +78,39 @@ from src.definitions.fields import ConditionVariants
 
 _logger = logging.getLogger(__name__)
 
-#: Read-out variants the stage-07 workflows run side by side, keyed by a **(spatial
-#: filter, signal)** pair — the same organising idea the stage-06 IVA notebooks use.
-#: Every default variant applies a per-trial pre-stimulus baseline, so all four land in
-#: the same units (that trial's own pre-stimulus SD) and are directly comparable:
+#: Read-out variants the stage-07 workflows run side by side — the same two the stage-06
+#: and 06b grids run, under the same names. Both read the **z-scored** signal, so a
+#: block's filter is applied to exactly what the decomposition saw and the per-block
+#: terms ``u_{b,k} . x_b^z`` **are** the component, and both reference every trial to
+#: its own pre-stimulus window, so they land in the units the fixed reference is in:
 #:
-#: .. code-block:: text
-#:
-#:                          | raw wavelet power | z-scored (what the fit saw)
-#:     ---------------------+-------------------+----------------------------
-#:     that block's filter  | "prestim"         | "zscored_prestim"
-#:     cohort-mean filter   | "mean_prestim"    | "mean_zscored_prestim"
-#:
-#: Down the **signal** axis:
-#:
-#: * raw power — applying the filter to un-z-scored power drops the per-channel
-#:   ``1/sd`` weighting the fit folded in, so the result *approximates* the component.
-#: * z-scored — the filter is applied to exactly the signal the decomposition saw, so
-#:   the per-block terms ``u_{b,k} . x_b^z`` **are** the component; they sum over
-#:   blocks to the global TF map. Referenced to each trial's own pre-stimulus window
-#:   afterwards so it shares an axis with the fixed reference. The counterpart of the
-#:   IVA stage's ``stored_prestim``.
-#:
-#: Down the **filter** axis:
-#:
-#: * ``"own"`` — that block's own row of the unmixing matrix
+#: * ``"full"`` — that block's own row of the unmixing matrix
 #:   (:meth:`JointIcaResult.recording_filters`), i.e. that recording's contribution to
-#:   the shared source. One operator per recording, ``C`` free parameters each.
-#: * ``"mean"`` — one cohort-mean operator shared by everybody
-#:   (:func:`cohort_mean_pattern` then :func:`cohort_mean_filter`). The point of
-#:   carrying it: a per-recording filter spends ``C`` parameters rediscovering a
-#:   stereotyped topography, and the variance of that estimate can exceed the bias it
-#:   removes. The cohort filter is the same comparison the fixed electrode mask
-#:   already makes — a single group-level spatial weighting — but learned rather than
-#:   drawn.
+#:   the shared source. The IVA stage's ``full``.
+#: * ``"roi_masked"`` — the same filter with every weight **outside the ASSR electrodes
+#:   zeroed** (:func:`~src.analysis.assr_trials.restrict_filters_to_mask`). It sits
+#:   between the binary reference, which reads the anchor electrodes with *equal*
+#:   weight, and ``full``, which reads the *whole head* with learned weights, and so
+#:   separates a better weighting *inside* the anchor area from access to signal
+#:   *outside* it. The IVA stage's ``roi_masked``.
 #:
-#: ``"zscored"`` (z-scored signal, **no** baseline) stays a legal choice for
-#: back-compatibility, but it is not part of the default grid: without a per-trial
-#: baseline it is not in the reference's units, which is exactly what the grid is for.
-#:
-#: **The reference row is held fixed across variants** — see
-#: :data:`VARIANT_REFERENCE_FROM`. Unlike the IVA stage there is no trial-count
-#: asymmetry between variants: every route reads the same cached extent, so all of
-#: them carry the same trials and the same participants.
-#: * ``"masked"`` / ``"mean_masked"`` — either of the two above with every weight
-#:   **outside the ASSR electrodes zeroed** (:func:`~src.analysis.assr_trials.
-#:   restrict_filters_to_mask`). These sit between the two things the grid already has:
-#:   the binary reference reads the anchor electrodes with *equal* weight, an
-#:   unrestricted component reads the *whole head* with learned weights, and these read
-#:   only those electrodes with learned weights — which is what separates a better
-#:   weighting *inside* the anchor area from access to signal *outside* it, a
-#:   distinction no other row can make. Both read the **z-scored** signal, because the
-#:   weights were estimated on it: a weighted average of raw power carries each
-#:   electrode's own power level on top, the very artefact
-#:   :func:`~src.analysis.assr_trials.roi_channelwise_snr` removes from the binary row.
-#:   The IVA stage's ``masked_prestim`` / ``mean_masked_prestim``.
-SIGNAL_VARIANTS = (
-    "prestim",
-    "zscored_prestim",
-    "mean_prestim",
-    "mean_zscored_prestim",
-    "masked_prestim",
-    "mean_masked_prestim",
-    "zscored",
-)
+#: **The reference rows are held fixed across variants**: they are built once per
+#: frequency selection and carried into both, so a difference between the two cells is a
+#: difference of spatial filters and nothing else.
+SIGNAL_VARIANTS = ("full", "roi_masked")
 
-#: The grid the stage-07 workflows run unless told otherwise: the six
-#: (filter x signal) cells, all per-trial baselined, matching the IVA stage's grid
-#: cell for cell. ``"zscored"`` is deliberately excluded — see :data:`SIGNAL_VARIANTS`.
-DEFAULT_SIGNAL_VARIANTS = (
-    "prestim",
-    "zscored_prestim",
-    "mean_prestim",
-    "mean_zscored_prestim",
-    "masked_prestim",
-    "mean_masked_prestim",
-)
+#: The grid the stage-07 workflows run unless told otherwise.
+DEFAULT_SIGNAL_VARIANTS = SIGNAL_VARIANTS
 
-#: What each variant name means, as a ``filter`` / ``zscore`` / ``baseline`` triple.
-#: Read by both the notebook and ``scripts/run_wavelet_jica.py`` so they cannot
-#: disagree about it.
-VARIANT_RECIPE = {
-    "prestim": {"filter": "own", "zscore": False, "baseline": True},
-    "zscored_prestim": {"filter": "own", "zscore": True, "baseline": True},
-    "mean_prestim": {"filter": "mean", "zscore": False, "baseline": True},
-    "mean_zscored_prestim": {"filter": "mean", "zscore": True, "baseline": True},
-    "masked_prestim": {"filter": "masked", "zscore": True, "baseline": True},
-    "mean_masked_prestim": {"filter": "mean_masked", "zscore": True, "baseline": True},
-    "zscored": {"filter": "own", "zscore": True, "baseline": False},
-}
-
-#: Which variants read ONE operator shared by the whole cohort rather than each
-#: recording's own. A shared operator carries a single sign, resolved once when it was
-#: built, so a per-recording flip must never be applied to these rows. (jICA resolves
-#: one sign per component for every row, so this is bookkeeping the figures read rather
-#: than a second convention — see :func:`component_polarity`.)
-SHARED_FILTER_VARIANTS = ("mean_prestim", "mean_zscored_prestim", "mean_masked_prestim")
-
-#: Variants whose fixed-reference rows are taken from another variant rather than
-#: recomputed, mapped to the variant they come from.
-#:
-#: **Every per-trial-baselined variant borrows from** ``"prestim"``, which is the
-#: invariant the whole grid rests on: the reference is what a component is *judged
-#: against*, so holding it still is what makes a difference between two cells a
-#: difference of spatial filters and nothing else. The same rule the IVA stage applies
-#: (``run_assr_snr_grid.py`` carries ``prestim``'s reference columns verbatim into every
-#: other variant).
-#:
-#: For a variant that reads raw power the borrow is a no-op — it would recompute the
-#: identical numbers — and it is listed anyway so the invariant is stated once rather
-#: than inferred per variant. For a z-scored one it is load-bearing: the mask on
-#: z-scored data is a different quantity.
-#:
-#: ``"zscored"`` is absent on purpose: with no per-trial baseline there is nothing to
-#: put it in the borrowed rows' units, so it keeps the mask read on exactly the signal
-#: its components were read on.
-VARIANT_REFERENCE_FROM = {
-    "zscored_prestim": "prestim",
-    "mean_prestim": "prestim",
-    "mean_zscored_prestim": "prestim",
-    "masked_prestim": "prestim",
-    "mean_masked_prestim": "prestim",
-}
+#: Which filter each variant applies: the block's own, or that one restricted to the
+#: ASSR electrodes. Read by both the notebook and ``scripts/run_wavelet_jica.py`` so they
+#: cannot disagree about it.
+VARIANT_FILTER = {"full": "own", "roi_masked": "masked"}
 
 #: Units each variant's response is in, for figure axes.
 VARIANT_UNITS = {
-    "prestim": "pre-stimulus SD",
-    "zscored_prestim": "pre-stimulus SD, exact component",
-    "mean_prestim": "pre-stimulus SD, cohort filter",
-    "mean_zscored_prestim": "pre-stimulus SD, cohort filter, exact component",
-    "masked_prestim": "pre-stimulus SD, ASSR electrodes only",
-    "mean_masked_prestim": "pre-stimulus SD, cohort filter, ASSR electrodes only",
-    "zscored": "z-scored over time",
+    "full": "pre-stimulus SD, exact component",
+    "roi_masked": "pre-stimulus SD, ASSR electrodes only",
 }
 
 #: Residual tolerance on ``components_ @ mixing_ - I``. Expect 1e-7 to 1e-5, not
@@ -788,8 +689,7 @@ def cohort_mean_pattern(
 ) -> CohortPattern:
     """Average the per-block forward patterns into one topography per component.
 
-    The operator behind the ``mean_*`` variants (:data:`SIGNAL_VARIANTS`), and the
-    thing :func:`component_polarity` anchors the component sign to.
+    The thing :func:`component_polarity` anchors the component sign to.
 
     Averaged over **every** block, both conditions pooled. Never per condition: a
     condition-specific filter would break the exchangeability the paired contrast rests
@@ -881,8 +781,7 @@ def cohort_mean_filter(
     The forward pattern says how a source projects onto the channels; the **filter** is
     what recovers it from them, and the two are not interchangeable (Haufe et al., 2014,
     NeuroImage 87:96-110). This is the same ``pinv`` composition the stage-06 IVA
-    notebooks use for their cohort filter, so the two stages' ``mean_*`` rows are the
-    same kind of operator.
+    notebooks use for their cohort filter.
 
     The round trip is checked rather than trusted: averaging patterns can leave a
     rank-deficient forward model — most easily when two components' cohort topographies
@@ -942,9 +841,7 @@ def component_polarity(
     And it reads only a spatial property, never the tested response.
 
     :param mean_pattern: ``(K, C)`` cohort forward model, from
-        :func:`cohort_mean_pattern`. The anchor is deliberately the same object the
-        ``mean_*`` variants filter with, so the sign convention and that filter cannot
-        disagree about which way a component points.
+        :func:`cohort_mean_pattern`.
     :param electrode_mask: Boolean ``(C,)`` anchor selection.
     :return: ``(flip, strength)`` — ``flip`` is ``(K,)`` of +-1, ``strength`` is
         ``(K,)`` of ``|corr(pattern, mask)|``, to be read against

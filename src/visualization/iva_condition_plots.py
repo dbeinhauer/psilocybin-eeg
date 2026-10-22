@@ -201,6 +201,14 @@ def _column_limits(
     }
 
 
+def _weighting_note(equalize: bool) -> str:
+    return (
+        "equal-weighted participants"
+        if equalize
+        else "trial-normalised participants (baseline SD)"
+    )
+
+
 def _scale_note(n_conditions: int) -> str:
     """The suptitle clause describing the per-column colour limit.
 
@@ -431,6 +439,8 @@ def plot_condition_mean_tf_maps(
     epoch_marks: Optional[Sequence[float]] = None,
     alignment_note: Optional[str] = None,
     component_prefix: str = "IC",
+    scale_indices: Optional[Sequence[int]] = None,
+    equalize: bool = True,
     save_path: Optional[Path] = None,
 ):
     """Condition-mean component TF maps: rows = conditions, columns = components.
@@ -457,6 +467,12 @@ def plot_condition_mean_tf_maps(
         stimulus onset and offset of an onset-averaged epoch.
     :param alignment_note: What resolved the per-recording sign, named in the title.
     :param component_prefix: Component label, e.g. ``"IC"`` (IVA) or ``"CC"`` (CorrCA).
+    :param scale_indices: Components each participant's equal-weighting scale is
+        measured over; ``None`` uses *comp_indices*. Pass every fitted component to
+        draw a subset of columns with the same group means as the full grid.
+    :param equalize: Rescale each participant to equal weight first. ``False`` for
+        maps already in a common unit (trial-normalised, baseline SD), which the
+        rescaling would undo.
     :param save_path: Optional output path.
     :return: The figure, or ``None`` when *comp_indices* is empty.
     :raises ValueError: If the shapes and the bookkeeping disagree.
@@ -475,7 +491,10 @@ def plot_condition_mean_tf_maps(
         return None
 
     conditions = list(conditions)
-    sources = equalize_subject_influence(sources, comp_indices)
+    if equalize:
+        sources = equalize_subject_influence(
+            sources, comp_indices if scale_indices is None else list(scale_indices)
+        )
     means = condition_component_means(sources, subject_conditions, conditions)
     rows = list(conditions)
     with_difference = show_difference and len(conditions) == 2
@@ -534,7 +553,7 @@ def plot_condition_mean_tf_maps(
 
     fig.suptitle(
         f"Condition-mean component TF maps — {label}\n"
-        f"{_scale_note(len(conditions))}  |  equal-weighted participants"
+        f"{_scale_note(len(conditions))}  |  {_weighting_note(equalize)}"
         f"{'' if alignment_note is None else f'  |  sign: {alignment_note}'}",
         fontsize=11,
     )
@@ -732,6 +751,7 @@ def plot_participant_condition_tf_maps(
     epoch_marks: Optional[Sequence[float]] = None,
     alignment_note: Optional[str] = None,
     component_prefix: str = "IC",
+    equalize: bool = True,
 ) -> list[Path]:
     """One figure per component: every participant's TF map, condition per row.
 
@@ -759,6 +779,8 @@ def plot_participant_condition_tf_maps(
         stimulus onset and offset of an onset-averaged epoch.
     :param alignment_note: What resolved the per-recording sign, named in the title.
     :param component_prefix: Component label, e.g. ``"IC"`` (IVA) or ``"CC"`` (CorrCA).
+    :param equalize: Rescale each participant to equal weight first; ``False`` for maps
+        already in a common unit (trial-normalised, baseline SD).
     :return: One path per component, in *comp_indices* order.
     :raises ValueError: If the shapes and the bookkeeping disagree.
     """
@@ -776,7 +798,8 @@ def plot_participant_condition_tf_maps(
         return []
 
     conditions = list(conditions)
-    sources = equalize_subject_influence(sources, comp_indices)
+    if equalize:
+        sources = equalize_subject_influence(sources, comp_indices)
     participants, grid = participant_grid(
         subject_participants, subject_conditions, conditions
     )
@@ -863,7 +886,11 @@ def plot_participant_condition_tf_maps(
                 ax=axes.ravel().tolist(),
                 fraction=0.03,
                 pad=0.02,
-                label="source (a.u., per-participant scale)",
+                label=(
+                    "source (a.u., per-participant scale)"
+                    if equalize
+                    else "baseline SD"
+                ),
             )
         row_note = (
             "row = condition, column = participant (by ID)"
@@ -873,7 +900,7 @@ def plot_participant_condition_tf_maps(
         fig.suptitle(
             f"{component_prefix} {k + 1} —component TF map per participant — {label}\n"
             f"{row_note}  |  "
-            f"equal-weighted participants, shared |source| ≤ {vlim:.3g}"
+            f"{_weighting_note(equalize)}, shared |source| ≤ {vlim:.3g}"
             f"{'' if alignment_note is None else f'  |  sign: {alignment_note}'}",
             fontsize=11,
         )

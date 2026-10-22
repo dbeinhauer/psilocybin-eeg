@@ -45,12 +45,22 @@ Figures (panels labelled ``CC <k>``):
   - ``corrca_shared_topomaps`` — the model's shared forward pattern per component
   - ``corrca_condition_isc`` and the three ``corrca_*.csv`` tables — synchrony per
     condition
+  - ``roi_masked_condition_mean_tf_maps`` (+ ``_onset``, + ``participants/roi_masked_*``)
+    — the same TF maps with the fitted filter restricted to the ASSR electrodes (every
+    other weight zeroed) on the z-scored signal. ``--skip_roi_masked`` drops them.
+
+Every run then fits a second time on the binary ASSR ROI alone, from the same
+loaded tensor: the channel axis is cut to the ROI BEFORE the z-scoring (ROI → z-score →
+PCA → CorrCA), and that fit is stored and drawn as ``corrca_channel_joined_tracks_roi``
+beside the full-montage one. It is skipped, with a warning, when the montage holds no
+ASSR electrode or fewer than ``--n_pca`` of them; ``--skip_roi_fit`` skips it outright.
 
 Output::
 
     plots/06b-corrca-condition-comparison/JoinedTracks_<MusicType>/
         broadband/corrca_channel_joined_tracks/pca_<n_pca>/
         bands/corrca_channel_joined_tracks/pca_<n_pca>/      # --band / --band_range
+        broadband/corrca_channel_joined_tracks_roi/pca_<n_pca>/  # the ROI fit
 
 ``--n_times`` is applied per condition, so the concatenated sample axis is
 ``n_freqs × 2 × n_times``. ``--store_components`` keeps the components **unsplit**,
@@ -91,6 +101,8 @@ from scripts.analysis_common import (  # noqa: E402
     corrca_store_extras,
     log_corrca_conditions,
     resolve_wavelet_dir,
+    restrict_to_assr_roi,
+    roi_masked_corrca_sources,
     write_corrca_condition_report,
 )
 from scripts.notebook_helpers import load_paired_condition_wavelets  # noqa: E402
@@ -140,6 +152,8 @@ _STAGE_DIR = "06b-corrca-condition-comparison"
 #: Store variant, and the analysis-type subdirectory named after it.
 _VARIANT = IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS
 _ANALYSIS_DIR = _VARIANT.value
+#: The same join fitted on the ASSR electrodes alone, the second fit of every run.
+_VARIANT_ROI = IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS_ROI
 
 #: Frequency (Hz) marked on every TF panel — the ASSR stimulation frequency.
 _TF_FREQ_MARKS = [iva_quality.ASSR_FREQ]
@@ -209,254 +223,322 @@ def run_corrca_condition_tracks(
     band = tuple(args.band_range) if args.band_range is not None else args.band
     band_name = band_token(band)
     data_4d, freqs = slice_to_band(paired.data.data, freqs_full, band)
-    _n_subj, n_ch, _n_freqs, n_total = data_4d.shape
-    _logger.info(
-        f"[{label}] concatenated {data_4d.shape} (participants × channels × freqs × "
-        f"times), segments {paired.segment_lengths}, zscore_mode={args.zscore_mode}"
+    coordinate_system = CoordinateSystems(args.coordinate_system)
+    topo_info = topo_info_subset(
+        condition_analyzers[paired.conditions[0]].info, data_4d.shape[1]
     )
-
-    corrca = decompose_channel_corrca(
-        data_4d, label=label, n_pca=args.n_pca, gamma=args.gamma
-    )
-    topo_info = topo_info_subset(condition_analyzers[paired.conditions[0]].info, n_ch)
-    channel_names = list(topo_info.ch_names)
-    corrca, alignment_note, extras = anchor_corrca_signs(
-        corrca,
-        channel_names,
-        CoordinateSystems(args.coordinate_system),
-        lenient_mask=args.lenient_mask,
-        label=label,
-        logger=_logger,
-    )
-    sources, patterns = corrca.sources, corrca.patterns
-
-    # Split the projected sources back into the conditions — the filters are shared,
-    # so each segment is the same component seen under one condition.
-    condition_rows = [c.value for c in paired.conditions]
-    participants = list(paired.participants)
-    sources_by_condition = {
-        c.value: paired.condition_track(sources, c) for c in paired.conditions
-    }
-    group_isc, participant_isc = condition_isc(
-        sources_by_condition, {c: participants for c in condition_rows}
-    )
-    tests = (
-        paired_condition_test(participant_isc, condition_rows)
-        if len(condition_rows) == 2
-        else None
-    )
-    log_corrca_conditions(group_isc, tests, label=label, logger=_logger)
-
-    if args.store_components:
-        stored_onsets: dict[str, np.ndarray] = {}
-        for condition, length in zip(paired.conditions, paired.segment_lengths):
-            onsets_c = paired.condition_onsets(condition, absolute=False)
-            if onsets_c is not None:
-                stored_onsets[f"stimulus_onsets_{condition.value}"] = onsets_c[
-                    onsets_c < length
-                ].astype(np.int64)
-        save_iva_components(
-            experiment=experiment_name,
-            condition=ConditionVariants.JOINED_TRACKS,
-            variant=_VARIANT,
-            music_type=music_type,
-            band=band_name,
+    # The full montage, then the binary ASSR ROI alone from the SAME loaded tensor —
+    # one load, two fits, each stored and drawn under its own variant.
+    fits = [(_VARIANT, data_4d, topo_info)]
+    if not args.skip_roi_fit:
+        roi_input = restrict_to_assr_roi(
+            data_4d,
+            topo_info,
+            coordinate_system,
             n_pca=args.n_pca,
-            sfreq=sfreq,
-            participants=participants,
-            arrays={
-                IvaComponentArrays.TF_MAP: sources,
-                IvaComponentArrays.CHANNEL_PATTERN: patterns,
-            },
-            freqs=freqs,
-            times=np.arange(n_total) / sfreq,
-            channel_names=channel_names,
-            segment_conditions=condition_rows,
-            segment_lengths=list(paired.segment_lengths),
-            extras={
-                "zscore_mode": np.asarray(args.zscore_mode),
-                **extras,
-                **corrca_store_extras(corrca.model, group_isc, condition_rows),
-                **stored_onsets,
-            },
-            dtype=args.store_dtype,
-            processed_data_dir=(
-                Path(args.store_dir)
-                if args.store_dir is not None
-                else ProjectPaths.PROCESSED_DATA_DIR
-            ),
+            lenient_mask=args.lenient_mask,
+            label=label,
             logger=_logger,
         )
-
-    n_components = corrca.model.n_components
-    comp_indices = (
-        list(range(n_components))
-        if args.components is None
-        else [k - 1 for k in args.components]
-    )
-    out_of_range = [k + 1 for k in comp_indices if not 0 <= k < n_components]
-    if out_of_range:
-        raise ValueError(f"--components {out_of_range} are outside 1..{n_components}.")
-
-    sources_stacked, subject_participants, subject_conditions = (
-        stack_conditions_on_subject_axis(
-            sources_by_condition, condition_rows, participants
+        if roi_input is not None:
+            fits.append((_VARIANT_ROI, *roi_input))
+    for variant, data_4d, topo_info in fits:
+        roi = variant == _VARIANT_ROI
+        _logger.info(f"[{label}] === {variant.value} ===")
+        _n_subj, n_ch, _n_freqs, n_total = data_4d.shape
+        _logger.info(
+            f"[{label}] concatenated {data_4d.shape} (participants × channels × freqs × "
+            f"times), segments {paired.segment_lengths}, zscore_mode={args.zscore_mode}"
         )
-    )
-    n_split = sources_stacked.shape[-1]
-    times = np.arange(n_split) / sfreq
-    ref_onsets = paired.condition_onsets(paired.conditions[0], absolute=False)
-    onset_times = (
-        np.array([]) if ref_onsets is None else ref_onsets[ref_onsets < n_split] / sfreq
-    )
 
-    spectrum = (
-        SpectrumTypeVariants.BROADBAND.value
-        if band_name is None
-        else SpectrumTypeVariants.BANDS.value
-    )
-    out_dir = ProjectPaths.analysis_plots_dir(
-        _STAGE_DIR,
-        label,
-        spectrum=spectrum,
-        analysis_type=_ANALYSIS_DIR,
-        n_pca=args.n_pca,
-        root=args.save_dir if args.save_dir is not None else ProjectPaths.PLOTS_PATH,
-    )
-    out_dir.mkdir(parents=True, exist_ok=True)
-    participants_dir = out_dir / "participants"
-    prefix = "" if band_name is None else f"{band_name}_"
-    show_difference = not args.no_difference_row
-    shared = {
-        "label": label,
-        "alignment_note": alignment_note,
-        "component_prefix": COMPONENT_PREFIX,
-    }
-    _logger.info(f"[{label}] writing figures to {out_dir}")
-
-    # The per-participant topographies span both tracks: ONE row, not a fabricated
-    # comparison.
-    shared_row = " + ".join(condition_rows) + " (shared)"
-    plot_condition_mean_topomaps(
-        patterns,
-        participants,
-        [shared_row] * len(participants),
-        [shared_row],
-        topo_info,
-        n_ch,
-        comp_indices,
-        save_path=out_dir / f"{prefix}shared_mean_topomaps.png",
-        **shared,
-    )
-    plt.close("all")
-    plot_condition_mean_tf_maps(
-        sources_stacked,
-        subject_participants,
-        subject_conditions,
-        condition_rows,
-        freqs,
-        times,
-        comp_indices,
-        show_difference=show_difference,
-        time_marks=onset_times,
-        freq_marks=_TF_FREQ_MARKS,
-        save_path=out_dir / f"{prefix}condition_mean_tf_maps.png",
-        **shared,
-    )
-    plt.close("all")
-    written = plot_participant_condition_topomaps(
-        patterns,
-        participants,
-        [shared_row] * len(participants),
-        [shared_row],
-        topo_info,
-        n_ch,
-        comp_indices,
-        root_dir=participants_dir,
-        prefix=f"{prefix}shared_",
-        **shared,
-    )
-    written += plot_participant_condition_tf_maps(
-        sources_stacked,
-        subject_participants,
-        subject_conditions,
-        condition_rows,
-        freqs,
-        times,
-        comp_indices,
-        root_dir=participants_dir,
-        prefix=prefix,
-        time_marks=onset_times,
-        freq_marks=_TF_FREQ_MARKS,
-        **shared,
-    )
-
-    averaged = (
-        None
-        if args.skip_onset_average
-        else _onset_average_per_condition(
-            sources_by_condition,
-            {
-                c.value: paired.condition_onsets(c, absolute=False)
-                for c in paired.conditions
-            },
-            participants,
-            condition_rows,
+        corrca = decompose_channel_corrca(
+            data_4d, label=label, n_pca=args.n_pca, gamma=args.gamma
+        )
+        channel_names = list(topo_info.ch_names)
+        corrca, alignment_note, extras = anchor_corrca_signs(
+            corrca,
+            channel_names,
+            coordinate_system,
+            lenient_mask=args.lenient_mask,
             label=label,
-            sfreq=sfreq,
-            min_onsets=args.min_onsets,
+            logger=_logger,
         )
-    )
-    if averaged is not None:
-        onset_stacked, onset_parts, onset_conds, epoch_times, marks = averaged
-        plot_condition_mean_tf_maps(
-            onset_stacked,
-            onset_parts,
-            onset_conds,
-            condition_rows,
-            freqs,
-            epoch_times,
+        sources, patterns = corrca.sources, corrca.patterns
+        # On an ROI fit every weight is already inside the ROI, so the masked maps would
+        # repeat the plain ones.
+        masked_sources = (
+            None
+            if roi or args.skip_roi_masked
+            else roi_masked_corrca_sources(
+                data_4d,
+                corrca.model,
+                channel_names,
+                coordinate_system,
+                lenient_mask=args.lenient_mask,
+                label=label,
+                logger=_logger,
+            )
+        )
+
+        # Split the projected sources back into the conditions — the filters are shared,
+        # so each segment is the same component seen under one condition.
+        condition_rows = [c.value for c in paired.conditions]
+        participants = list(paired.participants)
+        sources_by_condition = {
+            c.value: paired.condition_track(sources, c) for c in paired.conditions
+        }
+        group_isc, participant_isc = condition_isc(
+            sources_by_condition, {c: participants for c in condition_rows}
+        )
+        tests = (
+            paired_condition_test(participant_isc, condition_rows)
+            if len(condition_rows) == 2
+            else None
+        )
+        log_corrca_conditions(group_isc, tests, label=label, logger=_logger)
+
+        if args.store_components:
+            stored_onsets: dict[str, np.ndarray] = {}
+            for condition, length in zip(paired.conditions, paired.segment_lengths):
+                onsets_c = paired.condition_onsets(condition, absolute=False)
+                if onsets_c is not None:
+                    stored_onsets[f"stimulus_onsets_{condition.value}"] = onsets_c[
+                        onsets_c < length
+                    ].astype(np.int64)
+            save_iva_components(
+                experiment=experiment_name,
+                condition=ConditionVariants.JOINED_TRACKS,
+                variant=variant,
+                music_type=music_type,
+                band=band_name,
+                n_pca=args.n_pca,
+                sfreq=sfreq,
+                participants=participants,
+                arrays={
+                    IvaComponentArrays.TF_MAP: sources,
+                    IvaComponentArrays.CHANNEL_PATTERN: patterns,
+                },
+                freqs=freqs,
+                times=np.arange(n_total) / sfreq,
+                channel_names=channel_names,
+                segment_conditions=condition_rows,
+                segment_lengths=list(paired.segment_lengths),
+                extras={
+                    "zscore_mode": np.asarray(args.zscore_mode),
+                    **extras,
+                    **corrca_store_extras(corrca.model, group_isc, condition_rows),
+                    **stored_onsets,
+                },
+                dtype=args.store_dtype,
+                processed_data_dir=(
+                    Path(args.store_dir)
+                    if args.store_dir is not None
+                    else ProjectPaths.PROCESSED_DATA_DIR
+                ),
+                logger=_logger,
+            )
+
+        n_components = corrca.model.n_components
+        comp_indices = (
+            list(range(n_components))
+            if args.components is None
+            else [k - 1 for k in args.components]
+        )
+        out_of_range = [k + 1 for k in comp_indices if not 0 <= k < n_components]
+        if out_of_range:
+            raise ValueError(
+                f"--components {out_of_range} are outside 1..{n_components}."
+            )
+
+        # The length stack_conditions_on_subject_axis trims every condition to.
+        n_split = min(track.shape[-1] for track in sources_by_condition.values())
+        condition_onsets = {
+            c.value: paired.condition_onsets(c, absolute=False)
+            for c in paired.conditions
+        }
+        times = np.arange(n_split) / sfreq
+        ref_onsets = paired.condition_onsets(paired.conditions[0], absolute=False)
+        onset_times = (
+            np.array([])
+            if ref_onsets is None
+            else ref_onsets[ref_onsets < n_split] / sfreq
+        )
+
+        spectrum = (
+            SpectrumTypeVariants.BROADBAND.value
+            if band_name is None
+            else SpectrumTypeVariants.BANDS.value
+        )
+        out_dir = ProjectPaths.analysis_plots_dir(
+            _STAGE_DIR,
+            label,
+            spectrum=spectrum,
+            analysis_type=variant.value,
+            n_pca=args.n_pca,
+            root=args.save_dir
+            if args.save_dir is not None
+            else ProjectPaths.PLOTS_PATH,
+        )
+        out_dir.mkdir(parents=True, exist_ok=True)
+        participants_dir = out_dir / "participants"
+        prefix = "" if band_name is None else f"{band_name}_"
+        show_difference = not args.no_difference_row
+        shared = {
+            "label": label,
+            "alignment_note": alignment_note,
+            "component_prefix": COMPONENT_PREFIX,
+        }
+        _logger.info(f"[{label}] writing figures to {out_dir}")
+
+        # The per-participant topographies span both tracks: ONE row, not a fabricated
+        # comparison.
+        shared_row = " + ".join(condition_rows) + " (shared)"
+        plot_condition_mean_topomaps(
+            patterns,
+            participants,
+            [shared_row] * len(participants),
+            [shared_row],
+            topo_info,
+            n_ch,
             comp_indices,
-            show_difference=show_difference,
-            freq_marks=_TF_FREQ_MARKS,
-            epoch_marks=marks,
-            save_path=out_dir / f"{prefix}condition_mean_tf_maps_onset.png",
+            save_path=out_dir / f"{prefix}shared_mean_topomaps.png",
             **shared,
         )
         plt.close("all")
-        written += plot_participant_condition_tf_maps(
-            onset_stacked,
-            onset_parts,
-            onset_conds,
-            condition_rows,
-            freqs,
-            epoch_times,
+        written = plot_participant_condition_topomaps(
+            patterns,
+            participants,
+            [shared_row] * len(participants),
+            [shared_row],
+            topo_info,
+            n_ch,
             comp_indices,
             root_dir=participants_dir,
-            prefix=f"{prefix}onset_",
-            freq_marks=_TF_FREQ_MARKS,
-            epoch_marks=marks,
+            prefix=f"{prefix}shared_",
             **shared,
         )
 
-    write_corrca_condition_report(
-        corrca.model,
-        group_isc,
-        participant_isc,
-        tests,
-        condition_rows,
-        topo_info,
-        n_ch,
-        comp_indices,
-        label=label,
-        alignment_note=alignment_note,
-        out_dir=out_dir,
-        prefix=prefix,
-    )
-    _logger.info(
-        f"[{label}] done: {len(written)} per-participant figure(s), condition grids "
-        f"and the synchrony report in {out_dir}"
-    )
+        def _draw_tf_maps(
+            tf_by_condition: dict[str, np.ndarray], tf_prefix: str, tf_shared: dict
+        ) -> list:
+            """The whole-recording and stimulus-averaged TF grids, group and participant."""
+            tf_stacked, tf_participants, tf_conditions = (
+                stack_conditions_on_subject_axis(
+                    tf_by_condition, condition_rows, participants
+                )
+            )
+            plot_condition_mean_tf_maps(
+                tf_stacked,
+                tf_participants,
+                tf_conditions,
+                condition_rows,
+                freqs,
+                times,
+                comp_indices,
+                show_difference=show_difference,
+                time_marks=onset_times,
+                freq_marks=_TF_FREQ_MARKS,
+                save_path=out_dir / f"{tf_prefix}condition_mean_tf_maps.png",
+                **tf_shared,
+            )
+            plt.close("all")
+            drawn = plot_participant_condition_tf_maps(
+                tf_stacked,
+                tf_participants,
+                tf_conditions,
+                condition_rows,
+                freqs,
+                times,
+                comp_indices,
+                root_dir=participants_dir,
+                prefix=tf_prefix,
+                time_marks=onset_times,
+                freq_marks=_TF_FREQ_MARKS,
+                **tf_shared,
+            )
+            averaged = (
+                None
+                if args.skip_onset_average
+                else _onset_average_per_condition(
+                    tf_by_condition,
+                    condition_onsets,
+                    participants,
+                    condition_rows,
+                    label=label,
+                    sfreq=sfreq,
+                    min_onsets=args.min_onsets,
+                )
+            )
+            if averaged is not None:
+                onset_stacked, onset_parts, onset_conds, epoch_times, marks = averaged
+                plot_condition_mean_tf_maps(
+                    onset_stacked,
+                    onset_parts,
+                    onset_conds,
+                    condition_rows,
+                    freqs,
+                    epoch_times,
+                    comp_indices,
+                    show_difference=show_difference,
+                    freq_marks=_TF_FREQ_MARKS,
+                    epoch_marks=marks,
+                    save_path=out_dir / f"{tf_prefix}condition_mean_tf_maps_onset.png",
+                    equalize=False,
+                    **tf_shared,
+                )
+                plt.close("all")
+                drawn += plot_participant_condition_tf_maps(
+                    onset_stacked,
+                    onset_parts,
+                    onset_conds,
+                    condition_rows,
+                    freqs,
+                    epoch_times,
+                    comp_indices,
+                    root_dir=participants_dir,
+                    prefix=f"{tf_prefix}onset_",
+                    equalize=False,
+                    freq_marks=_TF_FREQ_MARKS,
+                    epoch_marks=marks,
+                    **tf_shared,
+                )
+            return drawn
+
+        written += _draw_tf_maps(sources_by_condition, prefix, shared)
+        if masked_sources is not None:
+            written += _draw_tf_maps(
+                {
+                    c.value: paired.condition_track(masked_sources, c)
+                    for c in paired.conditions
+                },
+                f"{prefix}roi_masked_",
+                {
+                    **shared,
+                    "alignment_note": "ROI-masked filter (weights outside the ASSR "
+                    f"electrodes zeroed); {alignment_note}",
+                },
+            )
+
+        write_corrca_condition_report(
+            corrca.model,
+            group_isc,
+            participant_isc,
+            tests,
+            condition_rows,
+            topo_info,
+            n_ch,
+            comp_indices,
+            label=label,
+            alignment_note=alignment_note,
+            out_dir=out_dir,
+            prefix=prefix,
+        )
+        _logger.info(
+            f"[{label}] done: {len(written)} per-participant figure(s), condition grids "
+            f"and the synchrony report in {out_dir}"
+        )
+        # Free this fit's arrays before the next one is computed.
+        del corrca, sources, sources_by_condition, patterns, masked_sources
 
 
 def run(args: argparse.Namespace) -> None:

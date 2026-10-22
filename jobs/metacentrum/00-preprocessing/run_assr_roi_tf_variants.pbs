@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N ASSR_ROI_TF_VARIANTS_00
-#PBS -l walltime=4:00:00
+#PBS -l walltime=0:40:00
 #PBS -l select=1:ncpus=2:mem=200gb:scratch_local=100gb
 #PBS -m ae
 #PBS -j oe
@@ -17,7 +17,7 @@
 #   4_roi_pca_zscore    binary ASSR ROI -> channel PCA -> z-score of each PC
 # One figure per pipeline (rows Placebo / Psilocybin / Placebo - Psilocybin,
 # one column per PC), the same per participant, and 06b's SNR / contrast grid in
-# its stored_prestim reading (40 Hz and 35-45 Hz, windows 0-0.5 s and 0.2-0.5 s;
+# its 'full' reading (40 Hz and 35-45 Hz, windows 0-0.5 s and 0.2-0.5 s;
 # exact Wilcoxon over the paired participants, uncorrected) with the binary ROI —
 # built exactly as 06b's "ASSR-mask (full)" — as the reference row.
 #
@@ -32,10 +32,14 @@
 #   data/processed/assr/wavelets/<Condition>_ASSR/<participant>__wavelet_power__*.npy
 #
 # Output:
-#   results/assr/assr_roi_tf_variants/ASSR/snr_grid__stored_prestim__pca<N>.csv
+#   results/assr/assr_roi_tf_variants/ASSR/snr_grid__full__pca<N>.csv
+#   results/assr/assr_roi_tf_variants/ASSR/snr_values__full__pca<N>.npz
+#   results/assr/assr_roi_tf_variants/ASSR/snr_courses__full__pca<N>.npz
+#   results/assr/assr_roi_tf_variants/ASSR/tf_maps__pca<N>.npz  # tf_maps__*, tf_baseline__*
 #   plots/00-preprocessing/assr_roi_tf_variants/ASSR/pca_<N>/
 #       tf_maps__<pipeline>.png
-#       subjects/PSI<id>/tf_maps__<pipeline>.png
+#       tf_baseline__<pipeline>.png      # trial-normalised, in baseline SD
+#       subjects/PSI<id>/{tf_maps,tf_baseline}__<pipeline>.png
 #       snr/<selection>/<window>/{pvalue_summary,snr_by_condition,trial_course_by_source}__<pipeline>.png
 # ---------------------------------------------------------------------------
 
@@ -89,6 +93,7 @@ python /mnt/scripts/run_assr_roi_tf_variants.py \
     --stimulus_intervals 0:0.5 0.2:0.5 \
     --contrast_alternative greater \
     --snr_alternative less \
+    --store_tf_maps \
     --results_dir /mnt/results/assr \
     --save_dir /mnt/plots
 EOF

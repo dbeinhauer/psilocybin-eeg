@@ -432,7 +432,7 @@ def _onset_average_per_condition(
     sfreq: float,
     min_onsets: int,
 ) -> tuple[np.ndarray, list[str], list[str], np.ndarray, list[float]] | None:
-    """Epoch each condition on **its own** onsets and stack the averages.
+    """Epoch each condition on **its own** onsets and stack the trial-normalised maps.
 
     The one place the stimulus average genuinely differs from the subject-axis variant.
     The tracks keep their own time bases here, so there is no single onset list covering
@@ -444,11 +444,12 @@ def _onset_average_per_condition(
     :func:`~src.analysis.iva_quality.onset_window`, taking the **shorter** post-onset
     span of the two so the two averages share one epoch axis and can be stacked.
 
-    Each frequency is then referenced to its own pre-onset mean
-    (:func:`~src.analysis.iva_quality.subtract_epoch_baseline`). The z-scoring puts the
-    pre-onset interval near 0 over the WHOLE recording, but not within any one epoch —
-    the local level still drifts — so this is what makes the map a change rather than a
-    level. Only the mean is removed; see that function for why no divisor is applied.
+    Every trial of every frequency is referenced to its own pre-onset window and put in
+    units of that recording's pre-onset SD, pooled over its trials; the median over
+    trials is kept (:func:`~src.analysis.assr_trials.baseline_tf_map`, the SNR courses'
+    reading at every frequency). A map is then an SNR whatever the source's scale, so
+    the two conditions, and two methods, compare directly; the z-scoring alone puts the
+    pre-onset interval near 0 over the whole recording but not within any one epoch.
 
     :param sources_by_condition: Condition name → ``(P, K, F, T_c)`` split sources.
     :param onsets_by_condition: Condition name → onset samples local to that segment,
@@ -493,16 +494,14 @@ def _onset_average_per_condition(
     averaged: dict[str, np.ndarray] = {}
     for condition in conditions:
         onsets_in, _pre, _post = geometry[condition]
-        averaged[condition], n_used = iva_quality.epoch_average(
-            sources_by_condition[condition], onsets_in, pre, post
-        )
-        averaged[condition] = iva_quality.subtract_epoch_baseline(
-            averaged[condition], baseline_mask
+        n_times = sources_by_condition[condition].shape[-1]
+        n_used = int(((onsets_in - pre >= 0) & (onsets_in + post <= n_times)).sum())
+        averaged[condition] = at.baseline_tf_map(
+            sources_by_condition[condition], onsets_in, pre, post, baseline_mask
         )
         _logger.info(
-            f"[{label}] {condition}: averaged {n_used} epoch(s) -> "
-            f"{averaged[condition].shape}, each frequency referenced to its own "
-            "pre-onset mean"
+            f"[{label}] {condition}: {n_used} trial(s) -> {averaged[condition].shape}, "
+            "each trial in its pre-onset SD, median over trials"
         )
 
     stacked, subject_participants, subject_conditions = (
@@ -908,6 +907,7 @@ def run_condition_tracks(
                 epoch_marks=marks,
                 alignment_note=alignment_note,
                 save_path=out_dir / f"{prefix}condition_mean_tf_maps_onset.png",
+                equalize=False,
             )
             plt.close("all")
             written += plot_participant_condition_tf_maps(
@@ -921,6 +921,7 @@ def run_condition_tracks(
                 label=label,
                 root_dir=participants_dir,
                 prefix=f"{prefix}onset_",
+                equalize=False,
                 freq_marks=_TF_FREQ_MARKS,
                 epoch_marks=marks,
                 alignment_note=alignment_note,

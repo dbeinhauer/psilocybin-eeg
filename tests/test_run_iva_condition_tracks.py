@@ -224,6 +224,16 @@ class TestCliDefaults:
         assert args.n_times is None
 
 
+def _trial_normalised(arr, onsets, pre, post, mask):
+    """By hand: every trial minus its own baseline mean, over the baseline SD pooled
+    across trials, then the median over trials."""
+    trials = np.stack([arr[..., o - pre : o + post] for o in onsets], axis=-2)
+    base = trials[..., mask]
+    centred = trials - base.mean(axis=-1, keepdims=True)
+    spread = np.sqrt((base.std(axis=-1, ddof=1) ** 2).mean(axis=-1, keepdims=True))
+    return np.median(centred / spread[..., None], axis=-2)
+
+
 class TestOnsetAveragePerCondition:
     """Each condition is epoched on its own onsets: the tracks keep their own bases."""
 
@@ -279,7 +289,7 @@ class TestOnsetAveragePerCondition:
         )
         assert stacked.shape[-1] == len(epoch_times)
 
-    def test_matches_a_hand_computed_per_condition_mean(
+    def test_matches_a_hand_computed_trial_normalised_map(
         self, sources_by_condition, onsets_by_condition
     ):
         stacked, _p, _c, epoch_times, _m = self._run(
@@ -294,25 +304,23 @@ class TestOnsetAveragePerCondition:
                 for o in ONSETS
                 if int(o) - pre >= 0 and int(o) + post <= arr.shape[-1]
             ]
-            manual = np.mean([arr[..., o - pre : o + post] for o in fitting], axis=0)
-            # Each frequency is then referenced to its own pre-onset mean, so the hand
-            # computation has to do the same. Doing it per trial BEFORE the mean would
-            # give the identical answer — epoch_average is a plain mean and the mean is
-            # linear — which is why the correction is applied once, afterwards.
-            manual -= manual[..., epoch_times < 0.0].mean(axis=-1, keepdims=True)
+            manual = _trial_normalised(arr, fitting, pre, post, epoch_times < 0.0)
             rows = slice(
                 block * len(self.PARTICIPANTS), (block + 1) * len(self.PARTICIPANTS)
             )
-            np.testing.assert_allclose(stacked[rows], manual, rtol=1e-12, atol=1e-12)
+            np.testing.assert_allclose(stacked[rows], manual, rtol=1e-10, atol=1e-12)
 
-    def test_the_baseline_is_removed_per_frequency(
+    def test_each_conditions_own_scale_cancels(
         self, sources_by_condition, onsets_by_condition
     ):
-        stacked, _p, _c, epoch_times, _m = self._run(
-            sources_by_condition, onsets_by_condition
-        )
-        baseline = stacked[..., epoch_times < 0.0].mean(axis=-1)
-        assert np.allclose(baseline, 0.0, atol=1e-12)
+        """A per-condition z-score upstream must not reach the condition contrast."""
+        rescaled = {
+            "Placebo": 3.0 * sources_by_condition["Placebo"] + 2.0,
+            "Psilocybin": 0.2 * sources_by_condition["Psilocybin"] - 1.0,
+        }
+        base, *_ = self._run(sources_by_condition, onsets_by_condition)
+        scaled, *_ = self._run(rescaled, onsets_by_condition)
+        np.testing.assert_allclose(scaled, base, rtol=1e-9, atol=1e-12)
 
     def test_no_onsets_for_one_condition_skips_everything(
         self, sources_by_condition, onsets_by_condition

@@ -19,10 +19,28 @@
 # PREREQUISITE: run_condition_tracks.pbs (this stage) with --store_components at
 # the same --n_pca, over the FULL channel set.
 #
+# ROI STORE. The grid then reads the join's '_roi' store (the fit job's second,
+# ROI-only decomposition) the same way: CSV assr_snr_grid__<variant>_roi__*.csv,
+# figures under corrca_snr_grid_roi/. A missing ROI store is skipped with a
+# warning; --skip_roi skips it. Walltime allows for the second pass over the cache.
+#
+# MASKED VARIANTS. roi_masked reads CC filters on the ASSR electrodes only,
+# non_roi_masked on every other electrode; the two add up to the full filter.
+# --masked_tf_maps also stores their full trial-normalised TF maps, which
+# reads the cache at all 50 bins instead of the 11 around 40 Hz (the reason
+# for the longer walltime). The ROI store has no non-ROI electrode and skips
+# non_roi_masked.
+#
 # Output:
 #   results/assr/assr_snr_grid__corrca_channel_joined_tracks__broadband__pca5.csv
+#   results/assr/assr_snr_grid__corrca_channel_joined_tracks__broadband__pca5__values.npz
+#   results/assr/assr_snr_grid__corrca_channel_joined_tracks__broadband__pca5__courses.npz
+#   results/assr/assr_snr_grid__corrca_channel_joined_tracks__broadband__pca5__tf_baseline.npz
 #   plots/06b-corrca-condition-comparison/JoinedTracks_ASSR/broadband/
 #       corrca_snr_grid/pca_5/masked_filter_topomaps.png
+#       corrca_snr_grid/pca_5/non_roi_masked_filter_topomaps.png
+#       corrca_snr_grid/pca_5/tf_baseline_maps.png   # trial-normalised, baseline SD
+#       corrca_snr_grid/pca_5/tf_baseline_maps__{roi_masked,non_roi_masked}.png
 #       corrca_snr_grid/pca_5/<selection>/<window>/*.png
 # -------------------------------------------------------------------
 
@@ -56,6 +74,15 @@ cd "$DATADIR" || {
 
 cd "$SCRATCHDIR"
 
+# qsub -v N_PCA=5 ... reads another stored fit.
+N_PCA="${N_PCA:-20}"
+echo "PCA dimensions: $N_PCA"
+
+# The runner heredoc below is quoted, so this is read from the container
+# environment at run time rather than substituted here.
+export SINGULARITYENV_N_PCA="$N_PCA"
+export APPTAINERENV_N_PCA="$N_PCA"
+
 cat << 'EOF' > run_inside.sh
 #!/bin/bash
 source /opt/myproject/.venv/bin/activate
@@ -67,10 +94,11 @@ python /mnt/scripts/run_corrca_snr_grid.py \
     --variant corrca_channel_joined_tracks \
     --music_type ASSR \
     --conditions Placebo Psilocybin \
-    --n_pca 5 \
+    --n_pca "${N_PCA:-20}" \
     --halfwidths 0 5 \
     --stimulus_intervals 0:0.5 0.2:0.5 \
-    --signal_variants zscored prestim stored_prestim masked_prestim \
+    --signal_variants full roi_masked non_roi_masked \
+    --masked_tf_maps \
     --contrast_alternative greater \
     --snr_alternative less \
     --store_dir "$DATA_DIR" \

@@ -251,3 +251,46 @@ def concatenated_dir(experiment: ExperimentNames, root: Path | None = None) -> P
     """
     base = ProjectPaths.PROCESSED_DATA_DIR if root is None else Path(root)
     return base / experiment.value / PreprocessedDataVariants.CONCATENATED.value
+
+
+def load_snr_values(
+    path: Path,
+) -> tuple[list[str], list[str], dict[tuple[str, str, str], dict[str, np.ndarray]]]:
+    """Read what :func:`src.io.saving.save_snr_values` wrote.
+
+    :return: ``(participants, sources, values)``, ``values`` keyed
+        ``(variant, selection, window)`` → condition → ``(P, S)``.
+    """
+    values: dict[tuple[str, str, str], dict[str, np.ndarray]] = {}
+    with np.load(path) as stored:
+        for key in stored.files:
+            if not key.startswith("value__"):
+                continue
+            _, variant, selection, window, condition = key.split("__")
+            values.setdefault((variant, selection, window), {})[condition] = stored[key]
+        participants = [str(p) for p in stored["participants"]]
+        sources = [str(s) for s in stored["sources"]]
+    return participants, sources, values
+
+
+def load_snr_courses(
+    path: Path,
+) -> tuple[
+    list[str], list[str], np.ndarray, dict[tuple[str, str], dict[str, np.ndarray]]
+]:
+    """Read what :func:`src.io.saving.save_snr_courses` wrote.
+
+    :return: ``(participants, sources, times, courses)``, ``courses`` keyed
+        ``(variant, selection)`` → condition → ``(P, S, W)``.
+    """
+    courses: dict[tuple[str, str], dict[str, np.ndarray]] = {}
+    with np.load(path) as stored:
+        for key in stored.files:
+            if not key.startswith("course__"):
+                continue
+            _, variant, selection, condition = key.split("__")
+            courses.setdefault((variant, selection), {})[condition] = stored[key]
+        participants = [str(p) for p in stored["participants"]]
+        sources = [str(s) for s in stored["sources"]]
+        times = stored["times"]
+    return participants, sources, times, courses

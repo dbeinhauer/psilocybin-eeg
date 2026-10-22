@@ -212,7 +212,7 @@ def plot_masked_filter_topomaps(
             fontsize=10,
         )
     fig.suptitle(
-        "Cohort-mean spatial FILTER restricted to the ASSR electrodes — the operator "
+        "Cohort-mean spatial FILTER after the electrode restriction — the operator "
         f"'{variant}' applies ({n_mask_channels} electrode(s) kept)",
         y=1.02,
         fontsize=12.5,

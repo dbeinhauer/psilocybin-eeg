@@ -9,7 +9,7 @@
 # Stage-06 ASSR SNR grid, read off the 30-50 Hz BAND-RESTRICTED store.
 #
 # Identical to run_snr_grid_joined.pbs except for --band 30-50hz. See that
-# file for what the grid sweeps, what the three references are, what the seven
+# file for what the grid sweeps, what the three references are, what the two
 # signal variants read and what each figure shows; only what the band changes
 # is documented here.
 #
@@ -86,9 +86,7 @@ python /mnt/scripts/run_assr_snr_grid.py \
     --n_pca 5 \
     --halfwidths 0 5 \
     --stimulus_intervals 0:0.5 0.2:0.5 \
-    --signal_variants prestim stored_prestim \
-                      mean_prestim mean_stored_prestim \
-                      masked_prestim mean_masked_prestim \
+    --signal_variants full roi_masked \
     --contrast_alternative greater \
     --snr_alternative less \
     --store_dir "$DATA_DIR" \

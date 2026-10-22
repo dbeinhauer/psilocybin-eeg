@@ -38,7 +38,7 @@ from src.analysis.data_representations import (  # noqa: E402
     AnalysisData,
     DataRepresentation,
 )
-from src.analysis.wavelet_jica import VARIANT_RECIPE  # noqa: E402
+from src.analysis.wavelet_jica import VARIANT_FILTER  # noqa: E402
 from src.definitions.constants import ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
     ConditionVariants,
@@ -256,37 +256,11 @@ class TestCliDefaults:
         # to recover less than a fixed selection aimed at the response.
         assert args.snr_alternative == "less"
 
-    def test_the_filter_by_signal_grid_runs_by_default(self):
-        """Six cells, every one per-trial baselined so all six share units.
-
-        The IVA stage's grid cell for cell, which is what makes a row of either CSV
-        readable against the other. ``zscored`` is deliberately absent: without a
-        baseline it is not in the reference's units, which is the whole point of
-        running a grid.
-        """
+    def test_both_signal_variants_run_by_default(self):
+        """The IVA and CorrCA stages' two, under the same names."""
         variants = _build_arg_parser().parse_args([]).signal_variants
-        assert variants == [
-            "prestim",
-            "zscored_prestim",
-            "mean_prestim",
-            "mean_zscored_prestim",
-            "masked_prestim",
-            "mean_masked_prestim",
-        ]
-        assert "zscored" not in variants
-        assert all(VARIANT_RECIPE[v]["baseline"] for v in variants)
-        # Three spatial filters x (raw | z-scored), minus the two cells a restricted
-        # filter does not have: the weights presume the scaling they were fitted on, so
-        # the masked pair reads the z-scored signal only.
-        assert sorted(VARIANT_RECIPE[v]["filter"] for v in variants) == [
-            "masked",
-            "mean",
-            "mean",
-            "mean_masked",
-            "own",
-            "own",
-        ]
-        assert sum(VARIANT_RECIPE[v]["zscore"] for v in variants) == 4
+        assert variants == ["full", "roi_masked"]
+        assert [VARIANT_FILTER[v] for v in variants] == ["own", "masked"]
 
     def test_the_cohort_filter_is_not_pre_aligned_by_default(self):
         """A jICA block's sign is a result, so aligning before averaging invents one."""
@@ -294,31 +268,25 @@ class TestCliDefaults:
         assert args.mean_filter_align is False
         assert args.mean_filter_raw_patterns is False
 
-    def test_a_variant_that_borrows_its_reference_needs_the_source_variant(self):
-        """Holding the reference fixed is what isolates how the component was derived."""
-        with pytest.raises(ValueError, match="fixed-reference row"):
-            main(["--signal_variants", "zscored_prestim", "--skip_analysis"])
+    def test_a_retired_variant_is_refused(self):
+        with pytest.raises(SystemExit):
+            _build_arg_parser().parse_args(["--signal_variants", "zscored_prestim"])
 
-    def test_a_raw_signal_variant_may_still_run_on_its_own(
-        self, stub_loaders, tmp_path
-    ):
-        """It borrows too, but the borrow is a no-op, so requiring `prestim` would be
-        an obstacle rather than a safeguard: the fixed rows do not depend on the
-        learned filter, so recomputing them gives the identical numbers.
-        """
+    def test_a_variant_may_run_on_its_own(self, stub_loaders, tmp_path):
+        """The reference rows are built once per selection, not borrowed from a cell."""
         results_dir = tmp_path / "results"
         main(
             _argv(
                 tmp_path / "plots",
                 results_dir,
                 "--signal_variants",
-                "mean_prestim",
+                "roi_masked",
             )
         )
         frame = pd.read_csv(
             results_dir / f"jica_tests__joined_tracks__ASSR__ica{N_ICA}.csv"
         )
-        assert set(frame["variant"]) == {"mean_prestim"}
+        assert set(frame["variant"]) == {"roi_masked"}
 
     def test_a_single_condition_is_refused(self):
         with pytest.raises(ValueError, match="exactly two distinct conditions"):
@@ -375,27 +343,16 @@ class TestEndToEnd:
         assert (decomposition / "loading_bars_within_component.png").is_file()
 
         analysis = _analysis_dir(save_dir, join)
-        # One course figure per cell of the (filter x signal) grid.
-        for variant in (
-            "prestim",
-            "zscored_prestim",
-            "mean_prestim",
-            "mean_zscored_prestim",
-            "masked_prestim",
-            "mean_masked_prestim",
-        ):
+        # One course figure per signal variant.
+        for variant in ("full", "roi_masked"):
             assert (
                 analysis / f"trial_course_by_source_40hz_{variant}.png"
             ).is_file(), variant
         # ...and one p-value / SNR figure per REFERENCE row, because "better than the
         # reference?" is a different question for each of the three.
         for slug in MASK_SLUGS.values():
-            assert (analysis / f"pvalue_summary_40hz_prestim_{slug}.png").is_file(), (
-                slug
-            )
+            assert (analysis / f"pvalue_summary_40hz_full_{slug}.png").is_file(), slug
             assert (analysis / f"snr_vs_reference_40hz_{slug}.png").is_file(), slug
-        # Off by default, so it must not have been drawn.
-        assert not (analysis / "trial_course_by_source_40hz_zscored.png").exists()
 
     def test_the_shared_side_gets_the_shared_figure_name(
         self, join, stub_loaders, tmp_path
@@ -429,14 +386,7 @@ class TestEndToEnd:
         # Both --halfwidths are carried through, so a result can be checked against
         # the other frequency window without a second run.
         assert set(frame["selection"]) == {"40hz", "35-45hz"}
-        assert set(frame["variant"]) == {
-            "prestim",
-            "zscored_prestim",
-            "mean_prestim",
-            "mean_zscored_prestim",
-            "masked_prestim",
-            "mean_masked_prestim",
-        }
+        assert set(frame["variant"]) == {"full", "roi_masked"}
         # Both reference-taking families name which of the three they were judged
         # against, so a row is never ambiguous about what it was compared to.
         for family in ("vs_reference", "snr"):
@@ -476,23 +426,14 @@ class TestEndToEnd:
         by_variant = contrast.set_index(["variant", "source"])["median"]
 
         for reference in MASK_LABELS:
-            baseline = by_variant[("prestim", reference)]
-            for variant in (
-                "zscored_prestim",
-                "mean_prestim",
-                "mean_zscored_prestim",
-                "masked_prestim",
-                "mean_masked_prestim",
-            ):
-                assert by_variant[(variant, reference)] == pytest.approx(baseline), (
-                    variant,
-                    reference,
-                )
+            assert by_variant[("roi_masked", reference)] == pytest.approx(
+                by_variant[("full", reference)]
+            ), reference
 
-    def test_each_axis_of_the_grid_actually_moves_the_components(
+    def test_the_roi_restriction_actually_moves_the_components(
         self, join, stub_loaders, tmp_path
     ):
-        """Otherwise a cell is a relabelling rather than a different read-out."""
+        """Otherwise the second variant is a relabelling, not a different read-out."""
         results_dir = tmp_path / "results"
         main(_argv(tmp_path / "plots", results_dir, "--join", join))
         frame = pd.read_csv(results_dir / f"jica_tests__{join}__ASSR__ica{N_ICA}.csv")
@@ -501,13 +442,8 @@ class TestEndToEnd:
         ]
         by_variant = contrast.set_index(["variant", "source"])["median"]
 
-        # Signal axis: raw power drops the per-channel 1/sd weighting the fit folded in.
-        assert by_variant[("zscored_prestim", "IC 1")] != pytest.approx(
-            by_variant[("prestim", "IC 1")]
-        )
-        # Filter axis: one cohort operator for everybody is not each block's own row.
-        assert by_variant[("mean_prestim", "IC 1")] != pytest.approx(
-            by_variant[("prestim", "IC 1")]
+        assert by_variant[("roi_masked", "IC 1")] != pytest.approx(
+            by_variant[("full", "IC 1")]
         )
 
     def test_the_reference_row_is_tested_alongside_the_components(
@@ -609,13 +545,13 @@ class TestComponentPolarity:
         flip = flip_spy[0]["flip"]
         for k in range(N_ICA):
             source = f"IC {k + 1}"
-            assert on[("prestim", source)] == pytest.approx(
-                flip[k] * off[("prestim", source)]
+            assert on[("full", source)] == pytest.approx(
+                flip[k] * off[("full", source)]
             ), source
         # The reference is never flipped under either setting: it is a non-negative
         # electrode average, so "higher = more power there" already holds for it.
-        assert on[("prestim", FULL_MASK_LABEL)] == pytest.approx(
-            off[("prestim", FULL_MASK_LABEL)]
+        assert on[("full", FULL_MASK_LABEL)] == pytest.approx(
+            off[("full", FULL_MASK_LABEL)]
         )
 
 
@@ -739,7 +675,7 @@ class TestStageSelection:
         assert not _decomposition_dir(save_dir, "joined_tracks").exists()
         assert (
             _analysis_dir(save_dir, "joined_tracks")
-            / "trial_course_by_source_40hz_prestim.png"
+            / "trial_course_by_source_40hz_full.png"
         ).is_file()
 
     def test_one_variant_writes_one_pair_of_readout_figures(
@@ -751,13 +687,13 @@ class TestStageSelection:
                 save_dir,
                 tmp_path / "results",
                 "--signal_variants",
-                "prestim",
+                "full",
                 "--skip_decomposition_plots",
             )
         )
         out = _analysis_dir(save_dir, "joined_tracks")
-        assert (out / "trial_course_by_source_40hz_prestim.png").is_file()
-        assert not (out / "trial_course_by_source_40hz_zscored.png").exists()
+        assert (out / "trial_course_by_source_40hz_full.png").is_file()
+        assert not (out / "trial_course_by_source_40hz_roi_masked.png").exists()
 
     def test_participant_grids_are_opt_in(self, stub_loaders, tmp_path):
         save_dir = tmp_path / "plots"

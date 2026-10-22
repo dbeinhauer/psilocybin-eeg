@@ -187,6 +187,7 @@
 #       ica_channel_joined_tracks/ica_<N>/*.png
 #       ica_component_analysis/ica_<N>/*.png
 #   results/assr/jica_tests__joined_tracks__ASSR__ica<N>.csv
+#   results/assr/jica_tests__joined_tracks__ASSR__ica<N>__values.npz
 #
 # THE CSV is the durable product: one row per test, with the family (contrast /
 # vs_reference / snr), the source, the median, a robust effect size, how many
@@ -262,7 +263,7 @@ COMMON_ARGS=(
 # effects from everything downstream.
 echo "=== jICA time-join, FULL extent, 5 components at $(date) ==="
 python /mnt/scripts/run_wavelet_jica.py \
-    --n_ica 10 \
+    --n_ica 5 \
     "${COMMON_ARGS[@]}"
 
 # --- Component-count sweep -------------------------------------------------

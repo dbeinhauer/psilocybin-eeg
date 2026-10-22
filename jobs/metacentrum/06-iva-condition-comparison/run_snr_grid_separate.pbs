@@ -18,27 +18,23 @@
 # Placebo and Psilocybin rows do NOT share a filter, a topography or a PCA subspace.
 # run_assr_snr_grid.py handles that: it resolves the filter, the PCA-mask operator
 # AND the polarity anchor per (participant, condition) through results.row. Everything
-# else — the three references, the seven signal variants, the three test families, the
+# else — the three references, the two signal variants, the three test families, the
 # grid — is identical.
 #
 # THE GRID this job runs at once:
 #   --halfwidths 0 5            -> 40 Hz single bin AND 35-45 Hz band mean
 #   --stimulus_intervals        -> 0-500 ms AND 200-500 ms test windows
-# crossed with all seven signal variants -> 2 x 2 x 7 = 28 cells, all in one CSV.
+# crossed with both signal variants -> 2 x 2 x 2 = 8 cells, all in one CSV.
 #
-# WHAT THE SEVEN VARIANTS ARE. The references never move — every variant but zscored
-# carries prestim's three reference columns verbatim — so the whole set is ONE
-# comparison in which only the learned rows change:
-#   zscored / prestim / stored_prestim   how the recording's OWN filter is read
-#   mean_prestim / mean_stored_prestim   the same, through the ONE cohort-mean filter,
-#                                        so the difference from the pair above IS the
-#                                        per-recording topography and nothing else
-#   masked_prestim / mean_masked_prestim both filters with every weight OUTSIDE the
-#                                        ASSR electrodes zeroed, which separates a
-#                                        better weighting inside that area from access
-#                                        to signal outside it
-# None of them costs another pass over the cache: the extra operators ride the same
-# streamed block, and stored_prestim reuses the stored IC rows zscored already reads.
+# WHAT THE TWO VARIANTS ARE. Both carry the same three reference columns, so the pair
+# is ONE comparison in which only the learned rows change:
+#   full         the stored z-scored sources (the decomposition's own output), every
+#                trial referenced to its own pre-stimulus window
+#   roi_masked   each filter with every weight OUTSIDE the ASSR electrodes zeroed, on
+#                the z-scored cache — separates a better weighting inside that area
+#                from access to signal outside it
+# Neither costs another pass over the cache: the masked operator rides the same
+# streamed block, and full reuses the stored sources.
 #
 # RESOURCES. I/O bound, one pass over each participant's wavelets per condition
 # (measured ~13 min per condition on the old compressed cache; the per-subject
@@ -111,9 +107,7 @@ python /mnt/scripts/run_assr_snr_grid.py \
     --n_pca 5 \
     --halfwidths 0 5 \
     --stimulus_intervals 0:0.5 0.2:0.5 \
-    --signal_variants prestim stored_prestim \
-                      mean_prestim mean_stored_prestim \
-                      masked_prestim mean_masked_prestim \
+    --signal_variants full roi_masked \
     --contrast_alternative greater \
     --snr_alternative less \
     --store_dir "$DATA_DIR" \

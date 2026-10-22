@@ -22,6 +22,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from src.visualization.assr_snr_plots import CONDITION_COLORS
 from src.visualization.iva_quality_plots import (
     _grid_shape,
     safe_vlim,
@@ -31,10 +32,6 @@ from src.visualization.iva_quality_plots import (
 
 #: Component label prefix ("correlated component"), used instead of IVA's "IC".
 COMPONENT_PREFIX = "CC"
-
-#: One colour per condition, in condition order — a blue/orange pair that stays
-#: distinguishable under the common colour-vision deficiencies.
-CONDITION_COLORS = ("#3b75af", "#d9780f")
 
 
 def plot_shared_topomaps(
@@ -47,6 +44,9 @@ def plot_shared_topomaps(
     label: str,
     alignment_note: Optional[str] = None,
     save_path: Optional[Path] = None,
+    image_interp: str = "cubic",
+    contours: int = 4,
+    cmap="RdBu_r",
 ):
     """One row of shared forward patterns, one column per component.
 
@@ -61,6 +61,11 @@ def plot_shared_topomaps(
     :param label: Dataset label shown in the title.
     :param alignment_note: What fixed each component's sign, named in the title.
     :param save_path: Optional output path.
+    :param image_interp: Interpolation between electrodes (``mne.viz.plot_topomap``);
+        ``"nearest"`` keeps a two-valued map, such as an electrode mask, two-valued.
+    :param contours: Number of contour lines; ``0`` for none.
+    :param cmap: Colour map (a name or a ``Colormap``), on each panel's symmetric
+        scale.
     :return: The figure, or ``None`` when *comp_indices* is empty.
     """
     from mne.viz import plot_topomap
@@ -83,9 +88,10 @@ def plot_shared_topomaps(
             topo_info,
             axes=axes[0, j],
             show=False,
-            cmap="RdBu_r",
+            cmap=cmap,
             vlim=(-vlim, vlim),
-            contours=4,
+            contours=contours,
+            image_interp=image_interp,
         )
         axes[0, j].set_title(
             f"{COMPONENT_PREFIX} {k + 1}\nISC {isc[k]:.3f}  (|max| {vlim:.3g})",
@@ -135,9 +141,7 @@ def plot_condition_isc(
     if not comp_indices:
         return None
     conditions = list(conditions)
-    colors = {
-        c: CONDITION_COLORS[i % len(CONDITION_COLORS)] for i, c in enumerate(conditions)
-    }
+    colors = {c: CONDITION_COLORS.get(c, "0.4") for c in conditions}
     xs = np.arange(len(conditions))
 
     n_rows, n_cols = _grid_shape(len(comp_indices))

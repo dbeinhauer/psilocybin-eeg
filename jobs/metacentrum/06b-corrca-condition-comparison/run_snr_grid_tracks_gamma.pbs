@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N PSILO_CORRCA_SNR_TRACKS_06B_BAND
-#PBS -l walltime=1:00:00
+#PBS -l walltime=2:00:00
 #PBS -l select=1:ncpus=4:mem=200gb:scratch_local=100gb
 #PBS -m ae
 #PBS -j oe
@@ -18,6 +18,11 @@
 #
 # PREREQUISITE: run_condition_tracks_gamma.pbs (this stage) with --store_components at
 # the same --n_pca, over the FULL channel set.
+#
+# ROI STORE. The grid then reads the join's '_roi' store (the fit job's second,
+# ROI-only decomposition) the same way: CSV assr_snr_grid__<variant>_roi__*.csv,
+# figures under corrca_snr_grid_roi/. A missing ROI store is skipped with a
+# warning; --skip_roi skips it. Walltime allows for the second pass over the cache.
 #
 # Output:
 #   results/assr/assr_snr_grid__corrca_channel_joined_tracks__30-50hz__pca5.csv
@@ -71,7 +76,7 @@ python /mnt/scripts/run_corrca_snr_grid.py \
     --n_pca 5 \
     --halfwidths 0 5 \
     --stimulus_intervals 0:0.5 0.2:0.5 \
-    --signal_variants zscored prestim stored_prestim masked_prestim \
+    --signal_variants full roi_masked \
     --contrast_alternative greater \
     --snr_alternative less \
     --store_dir "$DATA_DIR" \

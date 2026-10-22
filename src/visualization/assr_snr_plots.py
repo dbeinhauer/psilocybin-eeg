@@ -13,9 +13,11 @@ script's originals.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.colors import LinearSegmentedColormap
 
 from src.analysis import assr_trials as at
 from src.definitions.constants import AssrEpoch
@@ -26,11 +28,108 @@ _logger = logging.getLogger(__name__)
 #: The reference rows every figure keeps distinct from the learned ones.
 MASK_LABELS = at.MASK_LABELS
 
-#: One colour per condition, so a course and its forest marker agree across figures.
+#: One colour per condition, shared by every condition figure in the project: the
+#: Okabe-Ito blue and vermillion, which stay apart under all three colour-vision
+#: deficiencies (simulated OKLab distance >= 0.2) and hold 3:1 contrast on white.
 CONDITION_COLORS = {
-    ConditionVariants.PLACEBO.value: "#0F6E8C",
-    ConditionVariants.PSILOCYBIN.value: "#A6357F",
+    ConditionVariants.PLACEBO.value: "#0072B2",
+    ConditionVariants.PSILOCYBIN.value: "#D55E00",
 }
+
+#: Diverging map between the same two hues through a neutral near-white, for signed maps
+#: (TF maps, topographies). Both ends sit at the same OKLab lightness (0.42 -> 0.97 ->
+#: 0.42), so neither sign reads as the stronger one.
+DIVERGING_CMAP = LinearSegmentedColormap.from_list(
+    "okabe_ito_diverging",
+    [
+        "#015181",
+        "#0771B0",
+        "#3D93D3",
+        "#7FB4E0",
+        "#BBD5EB",
+        "#F5F5F5",
+        "#F0C7B3",
+        "#E79870",
+        "#D9661D",
+        "#AC4B01",
+        "#7D3502",
+    ],
+)
+
+
+def plot_condition_tf_grid(
+    maps: dict[str, np.ndarray],
+    notes: dict[str, list[str]],
+    conditions: list[str],
+    epoch_times: np.ndarray,
+    freqs: np.ndarray,
+    assr_freq: float,
+    title: str,
+    save_path: Path | None,
+    *,
+    show_difference: bool = True,
+    dpi: int = 150,
+    close: bool = True,
+    component_prefix: str = "PC",
+    colorbar_label: str = "z vs recording",
+) -> plt.Figure:
+    """One column per component: each condition's TF map, then their difference.
+
+    The two conditions of a column share one symmetric scale, so their intensities
+    compare directly; the difference has its own.
+
+    :param maps: condition → ``(K, F, W)``.
+    :param notes: condition → per-component panel-title suffix.
+    :param save_path: Output path, its extension picking the format; ``None`` skips
+        saving.
+    :param show_difference: Add the difference row.
+    :param dpi: Resolution of the saved figure.
+    :param close: Close the figure once drawn; ``False`` keeps it open for the caller.
+    :param component_prefix: Names the columns (``"PC"``, ``"CC"``, ``"IC"``).
+    :param colorbar_label: The maps' unit, on every colour bar.
+    :return: The figure.
+    """
+    first, second = conditions
+    n_components = maps[first].shape[0]
+    n_rows = 2 + show_difference
+    extent = [epoch_times[0], epoch_times[-1], freqs[0], freqs[-1]]
+    fig, axes = plt.subplots(
+        n_rows, n_components, figsize=(4.6 * n_components, 3.3 * n_rows), squeeze=False
+    )
+    for k in range(n_components):
+        shared = max(float(np.nanmax(np.abs(maps[c][k]))) for c in conditions)
+        panels = [(f"{c}{notes[c][k]}", maps[c][k], shared) for c in conditions]
+        if show_difference:
+            diff = maps[first][k] - maps[second][k]
+            panels.append((f"{first} − {second}", diff, float(np.nanmax(np.abs(diff)))))
+        for row, (label, grid, vmax) in enumerate(panels):
+            ax = axes[row, k]
+            vmax = vmax if vmax > 0 else 1e-12
+            im = ax.imshow(
+                grid,
+                aspect="auto",
+                origin="lower",
+                extent=extent,
+                cmap="RdBu_r",
+                vmin=-vmax,
+                vmax=vmax,
+            )
+            ax.axvline(0.0, color="k", ls="--", lw=0.7)
+            ax.axvline(AssrEpoch.STIMULUS_DURATION_S, color="k", ls=":", lw=0.7)
+            ax.axhline(assr_freq, color="green", ls=":", lw=0.9)
+            ax.set_title(f"{component_prefix}{k + 1} — {label}", fontsize=9)
+            fig.colorbar(im, ax=ax, shrink=0.85, label=colorbar_label)
+            if k == 0:
+                ax.set_ylabel("Frequency (Hz)")
+            if row == n_rows - 1:
+                ax.set_xlabel("Time rel. onset (s)")
+    fig.suptitle(title, y=1.0)
+    fig.tight_layout()
+    if save_path is not None:
+        fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
+    if close:
+        plt.close(fig)
+    return fig
 
 
 def bootstrap_ci(values: np.ndarray, alpha: float, rng) -> tuple[float, float]:
@@ -81,6 +180,27 @@ def forest(ax, rows, alpha, xlabel, title, rng):
     ax.set_title(title, loc="left", fontsize=11)
 
 
+def _contrast_box(ax, row, conditions, alpha):
+    """The condition-contrast p-value box in a course panel's top-right corner."""
+    ax.text(
+        0.985,
+        0.955,
+        f"{conditions[0]} > {conditions[1]}\np = {row['p']:.3f}   {row['same sign']}",
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=8.5,
+        family="monospace",
+        color="0.25" if row["p"] > alpha else "black",
+        bbox=dict(
+            boxstyle="round,pad=0.3",
+            facecolor="white",
+            edgecolor="0.75" if row["p"] > alpha else "black",
+            alpha=0.85,
+        ),
+    )
+
+
 def plot_courses(
     course,
     times,
@@ -92,6 +212,8 @@ def plot_courses(
     title,
     path,
     mask_labels=MASK_LABELS,
+    close=True,
+    colors=None,
 ):
     """Per-source epoch trial course, both conditions overlaid.
 
@@ -99,9 +221,15 @@ def plot_courses(
     course; the band is +/- SEM ACROSS PARTICIPANTS (never across trials, which are
     correlated within a participant). The paradigm's stimulus interval is shaded grey and
     the cell's test window gold, and each panel carries its 4b p-value. Rows named in
-    *mask_labels* are titled as references.
+    *mask_labels* are titled as references. A ``None`` *path* skips saving;
+    ``close=False`` keeps the returned figure open.
+
+    The overlaid series are the keys of *course* named in *conditions*, coloured by
+    *colors* (default :data:`CONDITION_COLORS`), so other series — methods, say — can
+    be overlaid instead. A ``None`` *contrast* drops the p-value box.
     """
-    by_source = contrast.set_index("source")
+    colors = CONDITION_COLORS if colors is None else colors
+    by_source = None if contrast is None else contrast.set_index("source")
     n_src = len(labels)
     ncols = min(4, n_src)
     nrows = int(np.ceil(n_src / ncols))
@@ -134,7 +262,7 @@ def plot_courses(
             centre = np.nanmean(vals, axis=0)
             n = np.sum(~np.isnan(vals), axis=0)
             half = np.nanstd(vals, axis=0, ddof=1) / np.sqrt(np.maximum(n, 1))
-            colour = CONDITION_COLORS.get(cond, "0.3")
+            colour = colors.get(cond, "0.3")
             ax.fill_between(
                 times,
                 centre - half,
@@ -145,7 +273,6 @@ def plot_courses(
                 zorder=2,
             )
             ax.plot(times, centre, color=colour, lw=1.8, zorder=3, label=cond)
-        row = by_source.loc[source]
         is_ref = source in mask_labels
         ax.set_title(
             f"{source}{'  (reference)' if is_ref else ''}",
@@ -153,23 +280,8 @@ def plot_courses(
             fontsize=11,
             fontweight="bold" if is_ref else "normal",
         )
-        ax.text(
-            0.985,
-            0.955,
-            f"{conditions[0]} > {conditions[1]}\np = {row['p']:.3f}   {row['same sign']}",
-            transform=ax.transAxes,
-            ha="right",
-            va="top",
-            fontsize=8.5,
-            family="monospace",
-            color="0.25" if row["p"] > alpha else "black",
-            bbox=dict(
-                boxstyle="round,pad=0.3",
-                facecolor="white",
-                edgecolor="0.75" if row["p"] > alpha else "black",
-                alpha=0.85,
-            ),
-        )
+        if by_source is not None:
+            _contrast_box(ax, by_source.loc[source], conditions, alpha)
         if s + ncols >= n_src:
             ax.set_xlabel("Time from onset (s)")
         if s % ncols == 0:
@@ -179,8 +291,11 @@ def plot_courses(
     axflat[0].legend(loc="lower right", frameon=True, fontsize=9)
     fig.suptitle(title, y=1.0, fontsize=12.5)
     fig.tight_layout()
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    if path is not None:
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+    if close:
+        plt.close(fig)
+    return fig
 
 
 def plot_cell(

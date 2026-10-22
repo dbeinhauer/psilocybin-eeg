@@ -200,6 +200,8 @@ class TestIvaVariants:
             "iva_channel_joined_tracks",
             "corrca_channel_joined_separate",
             "corrca_channel_joined_tracks",
+            "corrca_channel_joined_separate_roi",
+            "corrca_channel_joined_tracks_roi",
         }
 
     def test_every_value_is_filename_and_path_safe(self):

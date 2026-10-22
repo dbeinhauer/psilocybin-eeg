@@ -3,6 +3,7 @@ This module provides functions for saving processed EEG data outputs.
 """
 
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
@@ -53,3 +54,62 @@ def save_data_file(
     else:
         log.warning(f"Wrong datatype: '{data_type.value}' to store. Skipping!")
     log.info("Data saved successfully!")
+
+
+def save_npz_atomic(path: Path, **arrays: np.ndarray) -> None:
+    """``np.savez`` to a temporary name, then renamed into place, so a full disk never
+    leaves a truncated file."""
+    partial = path.with_name(f"{path.stem}.partial.npz")
+    np.savez(partial, **arrays)
+    os.replace(partial, path)
+
+
+def save_snr_values(
+    path: Path,
+    values: dict[tuple[str, str, str], dict[str, np.ndarray]],
+    participants: list[str],
+    sources: list[str],
+) -> None:
+    """Write the per-participant values an ASSR read-out's tests are run on.
+
+    Keys ``value__<variant>__<selection>__<window>__<condition>`` hold ``(P, S)``;
+    ``participants`` and ``sources`` are the axes. Read back with
+    :func:`src.io.loading.load_snr_values`.
+
+    :param values: ``(variant, selection, window)`` → condition → ``(P, S)``, each
+        participant's median over trials of each source's window mean.
+    """
+    arrays = {"participants": np.asarray(participants), "sources": np.asarray(sources)}
+    for (variant, selection, window), by_condition in values.items():
+        for condition, value in by_condition.items():
+            arrays[f"value__{variant}__{selection}__{window}__{condition}"] = value
+    save_npz_atomic(path, **arrays)
+
+
+def save_snr_courses(
+    path: Path,
+    courses: dict[tuple[str, str], dict[str, np.ndarray]],
+    participants: list[str],
+    sources: list[str],
+    times: np.ndarray,
+) -> None:
+    """Write the per-participant trial courses behind an ASSR SNR grid's course figure.
+
+    Keys ``course__<variant>__<selection>__<condition>`` hold ``(P, S, W)``;
+    ``participants``, ``sources`` and ``times`` are the axes. Read back with
+    :func:`src.io.loading.load_snr_courses`.
+
+    :param courses: ``(variant, selection)`` → condition → ``(P, S, W)``, each
+        participant's median over trials of each source's baseline-referenced course.
+    """
+    arrays = {
+        "participants": np.asarray(participants),
+        "sources": np.asarray(sources),
+        "times": np.asarray(times),
+    }
+    for (variant, selection), by_condition in courses.items():
+        for condition, course in by_condition.items():
+            arrays[f"course__{variant}__{selection}__{condition}"] = course.astype(
+                np.float32
+            )
+    save_npz_atomic(path, **arrays)

@@ -23,7 +23,7 @@ pipeline (in 1 that differs from ``run_assr_wavelet_pca.py``'s map by one consta
 Signs are aligned per component across participants AND both conditions in one pass, so
 the Placebo − Psilocybin row is not a sign artefact.
 
-**SNR grid.** Each pipeline's sources are read the way 06b reads its ``stored_prestim``
+**SNR grid.** Each pipeline's sources are read the way 06b reads its ``full``
 variant: the selection's bins averaged, trials cut, every trial referenced to its own
 pre-stimulus window, the median over trials. The reference row is the binary ROI built
 exactly as 06b builds ``ASSR-mask (full)``
@@ -34,10 +34,14 @@ Psilocybin per source), ``discrimination`` and ``snr`` (each PC against the ROI)
 
 Outputs::
 
-    results/<experiment>/assr_roi_tf_variants/ASSR/snr_grid__stored_prestim__pca<N>.csv
+    results/<experiment>/assr_roi_tf_variants/ASSR/snr_grid__full__pca<N>.csv
+    results/<experiment>/assr_roi_tf_variants/ASSR/snr_values__full__pca<N>.npz
+    results/<experiment>/assr_roi_tf_variants/ASSR/snr_courses__full__pca<N>.npz
+    results/<experiment>/assr_roi_tf_variants/ASSR/tf_maps__pca<N>.npz  # --store_tf_maps
     plots/00-preprocessing/assr_roi_tf_variants/ASSR/pca_<N>/
         tf_maps__<pipeline>.png                  # Placebo / Psilocybin / diff x PCs
-        subjects/PSI<id>/tf_maps__<pipeline>.png
+        tf_baseline__<pipeline>.png              # the same, trial-normalised
+        subjects/PSI<id>/{tf_maps,tf_baseline}__<pipeline>.png
         snr/<selection>/<window>/
             pvalue_summary__<pipeline>.png
             snr_by_condition__<pipeline>.png
@@ -59,7 +63,6 @@ import matplotlib
 
 matplotlib.use("Agg")  # headless: no display on a compute node
 
-import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
@@ -92,16 +95,22 @@ from src.definitions.fields import (  # noqa: E402
     MusicTypeVariants,
 )
 from src.io.loading import assr_electrode_mask, concatenated_dir  # noqa: E402
+from src.io.saving import (  # noqa: E402
+    save_npz_atomic,
+    save_snr_courses,
+    save_snr_values,
+)
 from src.io.wavelet_store import find_wavelet_set, wavelet_label_dir  # noqa: E402
 from src.visualization.assr_snr_plots import (  # noqa: E402
     plot_cell,
+    plot_condition_tf_grid,
     plot_courses,
     plot_snr,
 )
 
 _STAGE_DIR = "00-preprocessing"
 _ANALYSIS_DIR = "assr_roi_tf_variants"
-_SIGNAL_VARIANT = "stored_prestim"
+_SIGNAL_VARIANT = "full"
 #: The binary ROI is the one reference row, under 06b's name for it.
 _ROI_LABEL = at.FULL_MASK_LABEL
 _REFERENCES = (_ROI_LABEL,)
@@ -132,13 +141,16 @@ class PipelineResult:
     """One (pipeline, condition) over the paired cohort.
 
     :param tf_maps: ``(K, P, F, W)`` onset-averaged sources.
+    :param tf_baseline: ``(K, P, F, W)`` the same epochs, every trial referenced to its
+        own pre-stimulus window (:func:`~src.analysis.assr_trials.baseline_tf_map`).
     :param loadings: ``(K, P, C)`` — ``C`` is the pipeline's channel count.
     :param explained: ``(K, P)`` explained-variance ratios.
-    :param course: selection → ``(P, K, W)`` stored_prestim trial-median course.
+    :param course: selection → ``(P, K, W)`` trial-median course.
     :param value: ``(selection, window)`` → ``(P, K)`` trial-median window mean.
     """
 
     tf_maps: np.ndarray
+    tf_baseline: np.ndarray
     loadings: np.ndarray
     explained: np.ndarray
     course: dict[str, np.ndarray]
@@ -186,10 +198,10 @@ def pipeline_sources(
     return tf_maps, loadings, explained, sources
 
 
-def stored_prestim(
+def full_reading(
     sources: np.ndarray, onsets: np.ndarray, grid: Grid
 ) -> tuple[dict[str, np.ndarray], dict[tuple[str, str], np.ndarray]]:
-    """06b's ``stored_prestim`` reading of continuous ``(K, F, T)`` sources.
+    """06b's ``full`` reading of continuous ``(K, F, T)`` sources.
 
     :return: ``(course, value)`` — selection → ``(K, W)`` trial-median course and
         ``(selection, window)`` → ``(K,)`` trial-median window mean.
@@ -248,6 +260,7 @@ def align_signs(
             result = by_condition[c]
             result.loadings[k] *= sign[:, None]
             result.tf_maps[k] *= sign[:, None, None]
+            result.tf_baseline[k] *= sign[:, None, None]
             for course in result.course.values():
                 course[:, k] *= sign[:, None]
             for value in result.value.values():
@@ -256,61 +269,39 @@ def align_signs(
     return consistency
 
 
-def plot_condition_tf_grid(
-    maps: dict[str, np.ndarray],
-    notes: dict[str, list[str]],
+def store_tf_maps(
+    path: Path,
+    results: dict[str, dict[str, PipelineResult]],
     conditions: list[str],
+    participants: list[str],
     epoch_times: np.ndarray,
     freqs: np.ndarray,
-    assr_freq: float,
-    title: str,
-    save_path: Path,
 ) -> None:
-    """One column per component: each condition's TF map, then their difference.
+    """Write every pipeline's sign-aligned onset-averaged TF maps to one ``.npz``.
 
-    The two conditions of a column share one symmetric scale, so their intensities
-    compare directly; the difference has its own.
-
-    :param maps: condition → ``(K, F, W)``.
-    :param notes: condition → per-component panel-title suffix.
+    Keys ``tf_maps__<pipeline>__<condition>`` and
+    ``tf_baseline__<pipeline>__<condition>`` hold ``(K, P, F, W)`` and
+    ``explained__<pipeline>__<condition>`` hold ``(K, P)``; ``participants``,
+    ``conditions``, ``pipelines``, ``epoch_times`` and ``freqs`` are the axes. Written
+    to a temporary name and renamed, so a full disk never leaves a truncated file.
     """
-    first, second = conditions
-    n_components = maps[first].shape[0]
-    extent = [epoch_times[0], epoch_times[-1], freqs[0], freqs[-1]]
-    fig, axes = plt.subplots(
-        3, n_components, figsize=(4.6 * n_components, 3.3 * 3), squeeze=False
-    )
-    for k in range(n_components):
-        shared = max(float(np.nanmax(np.abs(maps[c][k]))) for c in conditions)
-        diff = maps[first][k] - maps[second][k]
-        panels = [(f"{c}{notes[c][k]}", maps[c][k], shared) for c in conditions] + [
-            (f"{first} − {second}", diff, float(np.nanmax(np.abs(diff))))
-        ]
-        for row, (label, grid, vmax) in enumerate(panels):
-            ax = axes[row, k]
-            vmax = vmax if vmax > 0 else 1e-12
-            im = ax.imshow(
-                grid,
-                aspect="auto",
-                origin="lower",
-                extent=extent,
-                cmap="RdBu_r",
-                vmin=-vmax,
-                vmax=vmax,
+    arrays: dict[str, np.ndarray] = {
+        "participants": np.asarray(participants),
+        "conditions": np.asarray(conditions),
+        "pipelines": np.asarray(list(results)),
+        "epoch_times": epoch_times,
+        "freqs": freqs,
+    }
+    for pipeline, by_condition in results.items():
+        for c in conditions:
+            arrays[f"tf_maps__{pipeline}__{c}"] = by_condition[c].tf_maps.astype(
+                np.float32
             )
-            ax.axvline(0.0, color="k", ls="--", lw=0.7)
-            ax.axvline(AssrEpoch.STIMULUS_DURATION_S, color="k", ls=":", lw=0.7)
-            ax.axhline(assr_freq, color="green", ls=":", lw=0.9)
-            ax.set_title(f"{_PC_PREFIX}{k + 1} — {label}", fontsize=9)
-            fig.colorbar(im, ax=ax, shrink=0.85, label="z vs recording")
-            if k == 0:
-                ax.set_ylabel("Frequency (Hz)")
-            if row == 2:
-                ax.set_xlabel("Time rel. onset (s)")
-    fig.suptitle(title, y=1.0)
-    fig.tight_layout()
-    fig.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
+            arrays[f"tf_baseline__{pipeline}__{c}"] = by_condition[
+                c
+            ].tf_baseline.astype(np.float32)
+            arrays[f"explained__{pipeline}__{c}"] = by_condition[c].explained
+    save_npz_atomic(path, **arrays)
 
 
 def _write_cell_plots(
@@ -488,6 +479,7 @@ def run(args: argparse.Namespace) -> None:
         p.name: {
             c: PipelineResult(
                 _empty(n_components, n_subj, n_freqs, win),
+                _empty(n_components, n_subj, n_freqs, win),
                 _empty(
                     n_components,
                     n_subj,
@@ -541,9 +533,12 @@ def run(args: argparse.Namespace) -> None:
                 )
                 result = results[p.name][c]
                 result.tf_maps[:, i] = tf_maps
+                result.tf_baseline[:, i] = at.baseline_tf_map(
+                    sources, onsets, pre, post, grid.baseline_mask
+                )
                 result.loadings[:, i] = loadings
                 result.explained[:, i] = explained
-                course, value = stored_prestim(sources, onsets, grid)
+                course, value = full_reading(sources, onsets, grid)
                 for s in grid.selections:
                     result.course[s][i] = course[s]
                 for key, v in value.items():
@@ -608,8 +603,37 @@ def run(args: argparse.Namespace) -> None:
     csv_path = results_dir / f"snr_grid__{_SIGNAL_VARIANT}__pca{n_components}.csv"
     frame = pd.DataFrame(rows_out)
     frame.to_csv(csv_path, index=False)
+    # Each pipeline's PC courses with the ROI course as the last source, as the course
+    # figure reads them.
+    courses = {
+        (p.name, s): {
+            c: np.concatenate(
+                [results[p.name][c].course[s], roi_course[c][s][:, None]], axis=1
+            )
+            for c in conditions
+        }
+        for p in pipelines
+        for s in grid.selections
+    }
+    courses_path = (
+        results_dir / f"snr_courses__{_SIGNAL_VARIANT}__pca{n_components}.npz"
+    )
+    save_snr_courses(courses_path, courses, participants, labels, times)
+    values_path = results_dir / f"snr_values__{_SIGNAL_VARIANT}__pca{n_components}.npz"
+    save_snr_values(
+        values_path,
+        {
+            (p.name, s, w): _values(p.name, s, w)
+            for p in pipelines
+            for s in grid.selections
+            for w in grid.windows
+        },
+        participants,
+        labels,
+    )
     print(
-        f"saved {csv_path} ({len(frame)} test rows, floor p = "
+        f"saved {csv_path}, {courses_path.name} and {values_path.name} "
+        f"({len(frame)} test rows, floor p = "
         f"{at.p_floor(n_subj):.5f} two-sided). Contrast {conditions[0]} - "
         f"{conditions[1]} ({args.contrast_alternative}), p:",
         flush=True,
@@ -623,6 +647,10 @@ def run(args: argparse.Namespace) -> None:
         .to_string(),
         flush=True,
     )
+    if args.store_tf_maps:
+        tf_path = results_dir / f"tf_maps__pca{n_components}.npz"
+        store_tf_maps(tf_path, results, conditions, participants, times, freqs)
+        print(f"saved {tf_path}", flush=True)
     if args.skip_plots:
         return
 
@@ -647,35 +675,47 @@ def run(args: argparse.Namespace) -> None:
             for c in conditions
         }
         plots_dir.mkdir(parents=True, exist_ok=True)
-        plot_condition_tf_grid(
-            {c: by_condition[c].tf_maps.mean(axis=1) for c in conditions},
-            group_notes,
-            conditions,
-            times,
-            freqs,
-            args.center_freq,
-            f"{p.name}: {p.title} — group mean (n={n_subj})",
-            plots_dir / f"tf_maps__{p.name}.png",
-        )
-        for i, participant in enumerate(participants):
-            subject_dir = plots_dir / "subjects" / f"PSI{participant}"
-            subject_dir.mkdir(parents=True, exist_ok=True)
+        # Each map twice: z vs the whole recording (the onset average of the sources),
+        # and trial-normalised (every trial against its own pre-stimulus window, in
+        # that condition's baseline SD), which compares across methods and conditions.
+        readings = {
+            "tf_maps": ("tf_maps", "z vs recording", ""),
+            "tf_baseline": ("tf_baseline", "baseline SD", ", trial-normalised"),
+        }
+        for stem, (field, unit, note) in readings.items():
             plot_condition_tf_grid(
-                {c: by_condition[c].tf_maps[:, i] for c in conditions},
-                {
-                    c: [
-                        f" — EV {by_condition[c].explained[k, i] * 100:.0f}%"
-                        for k in range(n_components)
-                    ]
-                    for c in conditions
-                },
+                {c: getattr(by_condition[c], field).mean(axis=1) for c in conditions},
+                group_notes,
                 conditions,
                 times,
                 freqs,
                 args.center_freq,
-                f"{p.name}: {p.title} — PSI{participant}",
-                subject_dir / f"tf_maps__{p.name}.png",
+                f"{p.name}: {p.title}{note} — group mean (n={n_subj})",
+                plots_dir / f"{stem}__{p.name}.png",
+                colorbar_label=unit,
             )
+        for i, participant in enumerate(participants):
+            subject_dir = plots_dir / "subjects" / f"PSI{participant}"
+            subject_dir.mkdir(parents=True, exist_ok=True)
+            subject_notes = {
+                c: [
+                    f" — EV {by_condition[c].explained[k, i] * 100:.0f}%"
+                    for k in range(n_components)
+                ]
+                for c in conditions
+            }
+            for stem, (field, unit, note) in readings.items():
+                plot_condition_tf_grid(
+                    {c: getattr(by_condition[c], field)[:, i] for c in conditions},
+                    subject_notes,
+                    conditions,
+                    times,
+                    freqs,
+                    args.center_freq,
+                    f"{p.name}: {p.title}{note} — PSI{participant}",
+                    subject_dir / f"{stem}__{p.name}.png",
+                    colorbar_label=unit,
+                )
 
         for s in grid.selections:
             for w in grid.windows:
@@ -691,13 +731,7 @@ def run(args: argparse.Namespace) -> None:
                     },
                     rows_out,
                     _values(p.name, s, w),
-                    {
-                        c: np.concatenate(
-                            [by_condition[c].course[s], roi_course[c][s][:, None]],
-                            axis=1,
-                        )
-                        for c in conditions
-                    },
+                    courses[(p.name, s)],
                     times,
                     intervals[w],
                     conditions,
@@ -705,8 +739,7 @@ def run(args: argparse.Namespace) -> None:
                     pc_labels,
                     args.alpha,
                     n_subj,
-                    f"{p.title}; PCs as 06b stored_prestim, the ROI as 06b "
-                    f"'{_ROI_LABEL}'",
+                    f"{p.title}; PCs as 06b 'full', the ROI as 06b '{_ROI_LABEL}'",
                 )
     print(f"[DONE] plots written to {plots_dir}", flush=True)
 
@@ -714,7 +747,7 @@ def run(args: argparse.Namespace) -> None:
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="ASSR channel-PCA TF maps by four orders of ROI / z-score / PCA, "
-        "Placebo vs Psilocybin, with 06b's stored_prestim SNR grid.",
+        "Placebo vs Psilocybin, with 06b's 'full' SNR grid.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--experiment", default=ExperimentNames.ASSR.value)
@@ -788,6 +821,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--results_dir",
         default=None,
         help="Results root; default results/<experiment>/.",
+    )
+    parser.add_argument(
+        "--store_tf_maps",
+        action="store_true",
+        help="Also write the group TF maps of every pipeline to "
+        "results/.../tf_maps__pca<N>.npz (small), for redrawing without a rerun.",
     )
     parser.add_argument("--skip_plots", action="store_true")
     return parser

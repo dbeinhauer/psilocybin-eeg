@@ -257,6 +257,10 @@ class IvaVariants(Enum):
       (:mod:`src.analysis.corrca`) instead of IVA: one channel filter shared by every
       recording, components ranked by inter-subject correlation. The products have
       the :attr:`CHANNEL` shapes, so they share the store and the figures.
+    * :attr:`CORRCA_CHANNEL_JOINED_SEPARATE_ROI` / :attr:`CORRCA_CHANNEL_JOINED_TRACKS_ROI`
+      — the same two CorrCA joins fitted on the binary ASSR ROI only (the electrodes of
+      ``config/assr_electrodes/``), cut BEFORE the z-scoring, so their channel axis is
+      that subset rather than the montage.
     """
 
     CHANNEL = "iva_channel"
@@ -266,6 +270,8 @@ class IvaVariants(Enum):
     CHANNEL_JOINED_TRACKS = "iva_channel_joined_tracks"
     CORRCA_CHANNEL_JOINED_SEPARATE = "corrca_channel_joined_separate"
     CORRCA_CHANNEL_JOINED_TRACKS = "corrca_channel_joined_tracks"
+    CORRCA_CHANNEL_JOINED_SEPARATE_ROI = "corrca_channel_joined_separate_roi"
+    CORRCA_CHANNEL_JOINED_TRACKS_ROI = "corrca_channel_joined_tracks_roi"
 
 
 class JicaVariants(Enum):

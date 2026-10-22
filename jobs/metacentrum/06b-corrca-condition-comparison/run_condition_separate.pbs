@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N PSILO_CORRCA_JOINED_06B
-#PBS -l walltime=1:00:00
+#PBS -l walltime=2:00:00
 #PBS -l select=1:ncpus=4:mem=400gb:scratch_local=80gb
 #PBS -m ae
 #PBS -j oe
@@ -25,6 +25,12 @@
 #   - corrca_shared_topomaps            the model's group topography
 #   - corrca_condition_isc (+ 3 CSVs)   ISC per condition from the same filters,
 #                                       paired LOO-ISC + Wilcoxon (uncorrected)
+#
+# ROI FIT. Every run also fits a second time on the binary ASSR ROI alone
+# (ROI -> z-score -> PCA -> CorrCA), from the same loaded tensor, stored and drawn
+# as the '_roi' variant beside the full-montage one; the full fit also draws
+# 'roi_masked_*' TF maps (its filter restricted to the ROI). --skip_roi_fit /
+# --skip_roi_masked drop them. Walltime allows for the second fit and figure set.
 #
 # Output:
 #   plots/06b-corrca-condition-comparison/JoinedSeparate_ASSR/
@@ -90,7 +96,7 @@ COMMON_ARGS=(
 
 echo "=== full extent at $(date) ==="
 python /mnt/scripts/run_corrca_condition_comparison.py \
-    --n_pca 5 \
+    --n_pca 20 \
     "${COMMON_ARGS[@]}"
 
 # --- ASSR neighbourhood only ------------------------------------------------

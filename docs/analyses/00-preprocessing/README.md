@@ -93,11 +93,14 @@ The PCA is fit as stage 00 fits it, on the onset-averaged stack; its loadings ar
 applied to the continuous recording, giving each PC a continuous source, and a PC's TF
 map is that source averaged over the onsets (zero = the recording's mean level). Signs
 are aligned across participants and both conditions in one pass, so the
-Placebo − Psilocybin row is not a sign artefact. Without the z-score first (3, 4) the PCA
+Placebo − Psilocybin row is not a sign artefact. Each PC is also drawn trial-normalised
+(`tf_baseline__<pipeline>.png`, stored as `tf_baseline__*` in `tf_maps__pca<n>.npz`):
+every trial in its own pre-onset SD, median over trials, as every ASSR trial-locked map
+is (stage 06, §7). Without the z-score first (3, 4) the PCA
 runs on raw power, which the low frequencies dominate: PC1 alone takes ~90% of the
 variance there.
 
-The SNR grid reads each source the way 06b reads `stored_prestim` (selection averaged,
+The SNR grid reads each source the way 06b reads its `full` variant (selection averaged,
 every trial referenced to its own pre-stimulus window, median over trials), against the
 binary ROI built exactly as 06b's `ASSR-mask (full)` — on the same 12 paired participants
 that row reproduces 06b's numbers to < 1e-8.

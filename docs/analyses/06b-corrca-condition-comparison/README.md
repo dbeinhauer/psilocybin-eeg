@@ -156,6 +156,12 @@ data/processed/<experiment>/iva_results/<JoinedSeparate|JoinedTracks>/
     <variant>__<MusicType>__<spectrum>__pca<n>.npz        (--store_components)
 ```
 
+`condition_mean_tf_maps_onset.png` and the `participants/*onset_*` grids are
+trial-normalised (each trial in its own pre-onset SD, median over trials), as every
+ASSR trial-locked map is — see stage 06, §7. `run_corrca_snr_grid.py` also draws
+`corrca_snr_grid/pca_<n>/tf_baseline_maps.png` (every component) and stores the
+per-participant maps in `results/<experiment>/assr_snr_grid__*__tf_baseline.npz`.
+
 The component store is the stage-06 one (`src/io/iva_store.py`), keyed by the
 `IvaVariants.CORRCA_*` members. Besides the TF maps and per-recording patterns it keeps
 these extras:
@@ -201,17 +207,47 @@ It draws the same figures per grid cell: `pvalue_summary__<variant>`,
   sought in. In stage 06 it is each recording's PCA subspace. The label and the role are
   the same: the like-for-like reference for a component that could only see that
   subspace.
-- **Four signal variants:** `zscored`, `prestim`, `stored_prestim` and
-  `masked_prestim`. Stage 06's `mean_*` rows exist to swap per-recording filters for one
-  shared filter, which CorrCA's filter already is.
+- **The signal variants are stage 06's two and their complement:** `full` (the stored
+  sources), `roi_masked` (the shared filter with every weight outside the ASSR
+  electrodes zeroed, on the z-scored cache) and `non_roi_masked` (the same filter with
+  the ASSR electrodes zeroed instead). The two masked filters add up to the full one,
+  so between them they split a component's response into what the ROI carries and what
+  the rest of the head carries. Neither is renormalised; every reading is in units of
+  its own pre-stimulus SD, so their scales never meet. An ROI store (§5b) has no
+  electrode outside the ROI and skips `non_roi_masked`.
+- **Masked TF maps** (`--masked_tf_maps`, on in `run_snr_grid_tracks.pbs`): the masked
+  variants also get full trial-normalised TF maps, read the way the stored sources'
+  are. They are stored beside those in the `__tf_baseline.npz`
+  (`tf_baseline__<variant>__<Condition>`). The cache is then read at every frequency
+  of the store rather than only at the 40 Hz selections, several times the read time.
 
 **Outputs:**
 
 - `results/<experiment>/assr_snr_grid__corrca_channel_joined_<join>__<spectrum>__pca<N>.csv`
 - `plots/06b-corrca-condition-comparison/<Condition>_<Music>/<spectrum>/corrca_snr_grid/pca_<N>/`
 
-The plot directory also holds `masked_filter_topomaps.png`, which shows what the
-`masked_prestim` rows read.
+The plot directory also holds `masked_filter_topomaps.png` and
+`non_roi_masked_filter_topomaps.png`, which show what the `roi_masked` and
+`non_roi_masked` rows read, and with `--masked_tf_maps` their
+`tf_baseline_maps__<variant>.png`. A `_roi` store (§5b) writes to `corrca_snr_grid_roi/` instead.
+
+## 5b. The binary ROI
+
+Two ways of asking what the CorrCA components carry from the ASSR electrodes alone:
+
+- **ROI-masked maps of the full fit.** Both fit scripts draw
+  `roi_masked_condition_mean_tf_maps.png` (and `_onset`, and `participants/roi_masked_*`):
+  the fitted shared filter with every weight outside the ROI zeroed — not renormalised —
+  applied to the z-scored signal the fit saw. They are the TF-map counterpart of the
+  grid's `roi_masked` rows. `--skip_roi_masked` drops them.
+- **A fit on the ROI alone.** Every fit run makes a second fit from the same loaded
+  tensor, with the channel axis cut to the ROI **before** the z-scoring, so ROI → z-score
+  → PCA → CorrCA. It is stored and drawn as `corrca_channel_joined_{separate,tracks}_roi`,
+  beside the full-montage fit, and every grid run reads that store after the full one.
+  There `roi_masked` coincides with `full` by construction, a free check that the store
+  and the cache agree. The ROI fit is skipped, with a warning, when the montage holds no
+  ASSR electrode or fewer than `--n_pca` of them; `--skip_roi_fit` (fit) and `--skip_roi`
+  (grid) skip it outright. The existing jobs run both.
 
 ## 6. Not here yet
 
