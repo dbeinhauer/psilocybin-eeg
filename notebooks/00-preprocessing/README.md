@@ -23,6 +23,7 @@ EGI, Placebo/Psilocybin × CLASSIC/PSYTRANCE) and the **ASSR** dataset (annotate
 | `assr_data_inspection.ipynb` | Inspect ASSR annotation labels, counts, and stimulus-onset timing |
 | `assr_annotation_discrepancy.ipynb` | Diagnose why the MNE-read `fam+` markers disagree with the `.evt` event exports |
 | `assr_stimulus_timing_verification.ipynb` | Acceptance test: verify from the data alone that the stimulus onsets of the aligned products are not shifted |
+| `assr_aligned_fif_inspection.ipynb` | Check the standalone `aligned_fif/` export (`scripts/export_aligned_assr_fif.py`): format, verbatim cuts, 40 Hz response timing, and the export against the wavelet store and stage 00's raw / wavelet channel PCA |
 
 ## What each notebook does
 

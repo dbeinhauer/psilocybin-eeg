@@ -1,0 +1,90 @@
+#!/bin/bash
+#PBS -N PSILO_EXPORT_ALIGNED_ASSR_FIF
+#PBS -l walltime=1:00:00
+#PBS -l select=1:ncpus=1:mem=16gb:scratch_local=10gb
+
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Standalone export for another project, outside the analysis workflow: every
+# ASSR recording (no exclusions) aligned on its stimulus onsets and stored as
+# its own FIF. Stimulus k lands at the same sample in every file; each
+# inter-stimulus interval is cut to the group minimum, keeping 100 ms of
+# continuous data before every onset. True onsets are `stimulus_onset`
+# annotations; the cuts are `BAD boundary` (see the script docstring).
+#
+# RESOURCES. Single-threaded and I/O bound: recordings are read lazily, one at
+# a time (~10 s each, ~38 recordings).
+#
+# The script refuses a non-empty output directory; `qsub -v OVERWRITE=1 ...`
+# replaces its files.
+#
+# Input:
+#   data/processed/assr/after_ica/*.fif
+# Output:
+#   data/processed/assr/aligned_fif/*.fif   (~150 MB each, ~5.6 GB in total)
+#   data/processed/assr/aligned_fif/stimulus_onsets.csv   trial, onset_sample,
+#       onset_s; shared by every file, written last (marks a complete export)
+# ---------------------------------------------------------------------------
+
+set -e
+
+# Ensure clean_scratch runs on exit, even on error
+cleanup() {
+echo "Running clean_scratch at $(date)"
+clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music.sif"  # or .sandbox
+
+export TMPDIR=$SCRATCHDIR
+
+test -n "$SCRATCHDIR" || {
+echo >&2 "SCRATCHDIR is not set!"
+exit 1
+}
+
+cd "$DATADIR" || {
+echo >&2 "Failed to enter DATADIR"
+exit 1
+}
+
+cd "$SCRATCHDIR"
+
+OVERWRITE="${OVERWRITE:-0}"
+echo "Overwrite existing export: $OVERWRITE"
+
+# The runner heredoc below is quoted, so this is read from the container
+# environment at run time rather than substituted here.
+export SINGULARITYENV_OVERWRITE="$OVERWRITE"
+export APPTAINERENV_OVERWRITE="$OVERWRITE"
+
+# Create the runner script for inside container
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+source /opt/myproject/.venv/bin/activate
+
+python /mnt/scripts/export_aligned_assr_fif.py \
+    $([ "${OVERWRITE:-0}" = "1" ] && echo --overwrite)
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+# Bind your project directory as /mnt inside container
+singularity exec -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch
