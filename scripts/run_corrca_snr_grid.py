@@ -128,7 +128,9 @@ from src.io.saving import (  # noqa: E402
     save_snr_values,
 )
 from src.io.wavelet_store import find_wavelet_set, wavelet_label_dir  # noqa: E402
-from src.visualization.assr_filter_plots import plot_masked_filter_topomaps  # noqa: E402
+from src.visualization.assr_filter_plots import (
+    plot_masked_filter_topomaps,
+)  # noqa: E402
 from src.visualization.assr_snr_plots import (  # noqa: E402
     plot_cell,
     plot_condition_tf_grid,

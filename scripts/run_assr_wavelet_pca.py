@@ -282,9 +282,11 @@ class UnreducedReference:
             self.chan_mean_tf[order],
             self.chan_stim_mean[order],
             self.chan_base_mean[order],
-            None
-            if self.chan_mean_tf_baseline is None
-            else self.chan_mean_tf_baseline[order],
+            (
+                None
+                if self.chan_mean_tf_baseline is None
+                else self.chan_mean_tf_baseline[order]
+            ),
         )
 
     def channel_contrast(self, freq_mask: np.ndarray) -> np.ndarray:

@@ -27,11 +27,14 @@ def store():
     power = {
         p: rng.gamma(2.0, 1.0, (N_CHANNELS, N_FREQS, N_TIMES)) for p in ("019", "023")
     }
-    return SimpleNamespace(
-        n_channels=N_CHANNELS,
-        n_freqs=N_FREQS,
-        open=lambda participant: power[participant],
-    ), power
+    return (
+        SimpleNamespace(
+            n_channels=N_CHANNELS,
+            n_freqs=N_FREQS,
+            open=lambda participant: power[participant],
+        ),
+        power,
+    )
 
 
 def _stream(wavelet_set, **kwargs):

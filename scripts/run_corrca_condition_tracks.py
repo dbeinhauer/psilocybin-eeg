@@ -375,9 +375,9 @@ def run_corrca_condition_tracks(
             spectrum=spectrum,
             analysis_type=variant.value,
             n_pca=args.n_pca,
-            root=args.save_dir
-            if args.save_dir is not None
-            else ProjectPaths.PLOTS_PATH,
+            root=(
+                args.save_dir if args.save_dir is not None else ProjectPaths.PLOTS_PATH
+            ),
         )
         out_dir.mkdir(parents=True, exist_ok=True)
         participants_dir = out_dir / "participants"
