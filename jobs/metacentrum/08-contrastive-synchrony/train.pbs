@@ -37,6 +37,10 @@
 # data.freq_pooling=none it grows tenfold (~13 GB): still fits gpu_mem=16gb.
 # The default model is small (~0.4 M parameters). Without a GPU the same run falls
 # back to the CPU (training.device=auto).
+#
+# TRACKING. --set wandb.enabled=true streams each fold's loss / accuracy / chance
+# curves to Weights & Biases (project psilocybin-eeg, grouped by run name). Only the
+# config and scalar metrics are sent; participant-level outputs stay here.
 # ---------------------------------------------------------------------------
 
 set -e
@@ -74,9 +78,18 @@ source /opt/myproject/.venv/bin/activate
 cd /mnt
 nvidia-smi || echo "No GPU visible; training falls back to the CPU."
 
+# W&B is not in the container image yet: install it into scratch for this job. The
+# login comes from ~/.netrc (run `wandb login` once). Caches go to scratch, not to
+# the home volume, which runs at quota.
+export UV_CACHE_DIR="$TMPDIR/uv-cache" WANDB_CACHE_DIR="$TMPDIR/wandb-cache" \
+    WANDB_DATA_DIR="$TMPDIR/wandb-data"
+uv pip install --quiet --python "$(which python)" --target "$TMPDIR/pylib" wandb
+export PYTHONPATH="$TMPDIR/pylib${PYTHONPATH:+:$PYTHONPATH}"
+
 echo "=== baseline at $(date) ==="
 python scripts/run_contrastive_synchrony.py \
     --config config/models/contrastive_synchrony.yaml \
+    --set wandb.enabled=true \
     --n_jobs 4
 
 # --- Variants -------------------------------------------------------------

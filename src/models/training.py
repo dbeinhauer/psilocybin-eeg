@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -189,6 +189,7 @@ def train_model(
     window: int,
     frame_rate: float,
     device: torch.device,
+    on_epoch: Callable[[dict[str, Any]], None] | None = None,
 ) -> pd.DataFrame:
     """Train *model* in place for ``config.epochs`` epochs; the last one is kept.
 
@@ -200,6 +201,8 @@ def train_model(
     :param val_sets: Held-out data for the diagnostic curves.
     :param window: Window length in frames.
     :param frame_rate: Frames per second, to turn ``config.exclusion_s`` into frames.
+    :param on_epoch: Called with each epoch's row as soon as it is complete, e.g. to
+        stream the curves to an experiment tracker.
     :return: One row per epoch: training and validation loss, accuracy and chance.
     """
     torch.manual_seed(config.seed)
@@ -234,6 +237,8 @@ def train_model(
             | {f"train_{key}": value for key, value in train.items()}
             | {f"val_{key}": value for key, value in val.items()}
         )
+        if on_epoch is not None:
+            on_epoch(rows[-1])
         _logger.info(
             f"epoch {epoch:3d}/{config.epochs}  train loss {train['loss']:.3f} "
             f"acc {train['accuracy']:.3f} | val loss {val['loss']:.3f} "
