@@ -30,6 +30,7 @@ DEFAULT_CONFIG_PATH = ProjectPaths.CONFIG_DIR / "models" / "contrastive_synchron
 
 FREQ_POOLINGS = ("bands", "none")
 NORMALIZATIONS = ("subject", "none")
+WANDB_MODES = ("online", "offline")
 
 
 def _require(value: str, allowed: Sequence[str], key: str) -> None:
@@ -135,12 +136,26 @@ class ScoringConfig:
 
 
 @dataclass(frozen=True)
+class WandbConfig:
+    """Weights & Biases tracking of the training curves; off unless enabled."""
+
+    enabled: bool
+    project: str
+    entity: str | None
+    mode: str
+
+    def __post_init__(self) -> None:
+        _require(self.mode, WANDB_MODES, "wandb.mode")
+
+
+@dataclass(frozen=True)
 class SynchronyConfig:
     run_name: str
     data: DataConfig
     model: ModelConfig
     training: TrainingConfig
     scoring: ScoringConfig
+    wandb: WandbConfig
 
 
 _SECTIONS = {
@@ -148,6 +163,7 @@ _SECTIONS = {
     "model": ModelConfig,
     "training": TrainingConfig,
     "scoring": ScoringConfig,
+    "wandb": WandbConfig,
 }
 
 

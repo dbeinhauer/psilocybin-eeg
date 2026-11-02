@@ -71,6 +71,14 @@ per-recording PCA already recovers the response, IVA and jICA are buying nothing
 compare each PCA component against an **unreduced reference** — the same electrode
 average without the reduction — which is what makes the comparison interpretable.
 
+Every TF map `run_assr_wavelet_pca.py` draws — component maps per participant and
+averaged, the unreduced channel-mean maps and their band time courses — is
+trial-normalised, in baseline SD: the PCA is fit on the onset-averaged z-scored power as
+before, its loadings are applied to the continuous z-scored power, and every trial is
+referenced to its own pre-onset mean and the pre-onset SD pooled over the recording's
+trials, median over trials (`assr_trials.baseline_tf_map`, as in stage 06, §7). The
+component comparison table still reads the plain onset-averaged maps.
+
 `run_assr_raw_pca.py` defines its own `assr_snr`: an FFT SNR with a Hann taper and a
 leakage-excluded noise floor. It is a different measure from
 `assr_trials.roi_channelwise_snr`, which is baseline-referenced; they are not

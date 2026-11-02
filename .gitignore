@@ -2,7 +2,6 @@ data/*/
 config/participant_mappings/
 plots*/
 results/
-notebooks/03-wavelet-analysis/wavelet_cache/
 src/psilocybin_eeg.egg-info/
 *wavelet_cache*
 PSILO_*.o*
@@ -14,7 +13,6 @@ logs/
 .vscode/
 .python-version
 .venv/
-.venv-viz/
 .worktrees/
 notebooks/**/out/
 notebooks/cache/

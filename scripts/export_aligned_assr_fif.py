@@ -31,7 +31,10 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.definitions.constants import AssrEpoch, ProjectPaths  # noqa: E402
-from src.definitions.fields import ExperimentNames, PreprocessedDataVariants  # noqa: E402
+from src.definitions.fields import (
+    ExperimentNames,
+    PreprocessedDataVariants,
+)  # noqa: E402
 from src.preprocessing.stimulus_alignment import (  # noqa: E402
     StimulusAligner,
     apply_keep_segments,

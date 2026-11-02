@@ -47,7 +47,9 @@ import argparse
 import logging
 import math
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import matplotlib
 
@@ -64,6 +66,7 @@ from src.definitions.constants import ProjectPaths  # noqa: E402
 from src.models.config import (  # noqa: E402
     DEFAULT_CONFIG_PATH,
     SynchronyConfig,
+    config_to_dict,
     load_config,
     save_config,
 )
@@ -152,12 +155,56 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def start_wandb_run(config: SynchronyConfig, fold: int, run_dir: Path) -> Any:
+    """One W&B run per fold, grouped under the run name, or ``None`` when disabled.
+
+    Only the resolved config, scalar metrics and hardware utilisation are sent —
+    never participant ids, per-subject tables or figures. Console capture, git and
+    machine metadata are switched off, since a log line or a path can name a
+    participant; the PBS log keeps the console output on the cluster.
+    """
+    if not config.wandb.enabled:
+        return None
+    import wandb  # optional dependency: only a run with wandb.enabled needs it
+
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return wandb.init(
+        project=config.wandb.project,
+        entity=config.wandb.entity,
+        mode=config.wandb.mode,
+        group=config.run_name,
+        name=f"{config.run_name}-fold{fold}",
+        job_type="fold",
+        config=config_to_dict(config) | {"fold": fold},
+        dir=run_dir,
+        settings=wandb.Settings(
+            console="off", disable_git=True, disable_code=True, x_disable_meta=True
+        ),
+    )
+
+
+def _log_epoch(tracker: Any) -> Callable[[dict[str, Any]], None]:
+    # "train_loss" -> "train/loss", so W&B panels group by split.
+    def log(row: dict[str, Any]) -> None:
+        tracker.log(
+            {
+                key.replace("_", "/", 1): value
+                for key, value in row.items()
+                if key != "epoch"
+            },
+            step=row["epoch"],
+        )
+
+    return log
+
+
 def train_fold(
     fold: int,
     datasets: list[SynchronyDataset],
     config: SynchronyConfig,
     window: int,
     device: torch.device,
+    on_epoch: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[torch.nn.Module, pd.DataFrame]:
     """Train one fold's encoder on every track with block *fold* held out."""
     n_folds = config.training.n_folds
@@ -183,6 +230,7 @@ def train_fold(
         window,
         datasets[0].frame_rate,
         device,
+        on_epoch=on_epoch,
     )
     return model, history.assign(fold=fold)
 
@@ -261,10 +309,19 @@ def run(args: argparse.Namespace) -> None:
     histories, scores, subjects = [], [], []
     for fold in range(n_folds):
         model_path = run_dir / f"model_fold{fold}.pt"
+        tracker = None
         if args.skip_training:
             model = load_checkpoint(model_path, device)
         else:
-            model, history = train_fold(fold, datasets, config, window, device)
+            tracker = start_wandb_run(config, fold, run_dir)
+            model, history = train_fold(
+                fold,
+                datasets,
+                config,
+                window,
+                device,
+                on_epoch=None if tracker is None else _log_epoch(tracker),
+            )
             save_checkpoint(
                 model_path, model, config.model, datasets[0].n_features, window
             )
@@ -282,6 +339,15 @@ def run(args: argparse.Namespace) -> None:
             }
             scores.append(block_scores.assign(**keys))
             subjects.append(block_subjects.assign(**keys))
+            if tracker is not None:
+                tracker.summary[f"{dataset.label}/mean_synchrony"] = float(
+                    block_scores["synchrony"].mean()
+                )
+                tracker.summary[f"{dataset.label}/candidate_fraction"] = float(
+                    block_scores["candidate"].mean()
+                )
+        if tracker is not None:
+            tracker.finish()
 
     scores_df = pd.concat(scores, ignore_index=True)
     subjects_df = pd.concat(subjects, ignore_index=True)

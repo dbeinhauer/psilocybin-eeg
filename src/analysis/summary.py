@@ -24,9 +24,11 @@ from scipy.stats import zscore
 from src.preprocessing.pipeline import DatasetHandler
 from src.preprocessing.stimulus_alignment import (
     resolve_stimulus_marker,
+    ResampledPlan,
     StimulusAligner,
     StimulusMarker,
     get_stimulus_onset_samples,
+    rescale_onsets,
     apply_keep_segments_to_array,  # noqa: F401 — re-exported for caller convenience
 )
 from src.filtering.dataset_filter import DatasetFilter
@@ -182,6 +184,14 @@ class EEGSummarizedAnalyzer(LoggerMixin):
                 processed_data_type=PreprocessedDataVariants.RAW_CROPPED,
                 preload=True,
             ).pick(["eeg"])
+            if axis0_index == 0:
+                # Stimulus onsets, on the same sample grid as the concatenated data.
+                # The alignment makes the *onsets* identical across subjects, so one
+                # recording is representative — but its annotations must be read
+                # with its own offset, and on the native grid, before resampling.
+                self.stimulus_onsets = self._extract_stimulus_onsets(
+                    raw, filename, resample_freq
+                )
             raws.append(raw.resample(resample_freq, n_jobs=n_jobs))
             axis0_indices.append(axis0_index)
 
@@ -190,14 +200,6 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         # Store MNE Info from first file (before any resampling changes it)
         self._refresh_info(raws[0].info)
         self.resample_freq = resample_freq
-
-        # Stimulus onsets, on the same sample grid as the concatenated data. The
-        # alignment makes the *onsets* identical across subjects, so one recording
-        # is representative — but its annotations must be read with its own offset,
-        # since that is what the alignment removed to put the onsets there.
-        self.stimulus_onsets = self._extract_stimulus_onsets(
-            raws[0], self.filtered_df.iloc[0][SingleDataMetadata.FILENAME]
-        )
 
         self.data = np.array([r.get_data() for r in raws])  # (n_subj, n_ch, n_times)
         self.logger.info(f"Data array shape: {self.data.shape}")
@@ -270,12 +272,21 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         for condition in conditions:
             arrays: list[np.ndarray] = []
             for participant in order:
+                filename = by_participant[participant][condition]
                 raw = self.dataset_handler.load_data_file(
-                    by_participant[participant][condition],
+                    filename,
                     is_processed=True,
                     processed_data_type=PreprocessedDataVariants.RAW_CROPPED,
                     preload=True,
                 ).pick(["eeg"])
+                if first_raw is None:
+                    # Onsets of the *first* segment, on the concatenated grid (its
+                    # segment starts at 0, so no shift is needed), read on the native
+                    # grid before resampling. Later segments have their own onset
+                    # grids; PairedConditionTracks resolves them per condition.
+                    self.stimulus_onsets = self._extract_stimulus_onsets(
+                        raw, filename, resample_freq
+                    )
                 raw = raw.resample(resample_freq, n_jobs=n_jobs)
                 if first_raw is None:
                     first_raw = raw
@@ -325,13 +336,6 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         self._refresh_info(first_raw.info)
         self.resample_freq = resample_freq
 
-        # Onsets of the *first* segment, on the concatenated grid (its segment starts
-        # at 0, so no shift is needed). Later segments have their own onset grids;
-        # PairedConditionTracks resolves them per condition.
-        self.stimulus_onsets = self._extract_stimulus_onsets(
-            first_raw, by_participant[order[0]][conditions[0]]
-        )
-
         self.logger.info(
             f"Concatenated {len(order)} participant-matched track pair(s): "
             f"shape {self.data.shape}, segment lengths {segment_lengths}, "
@@ -340,20 +344,26 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         return self.data, self.info
 
     def _extract_stimulus_onsets(
-        self, raw: mne.io.Raw, filename: str
+        self, raw: mne.io.Raw, filename: str, resample_freq: float
     ) -> Optional[np.ndarray]:
         """
         Extract the stimulus-onset sample positions mapping onto the time axis of
         :attr:`data`.
 
         The stimulus alignment splices every recording so that each onset lands at
-        the same sample index in all participants, so a single (here resampled)
-        recording is representative of the whole group.
+        the same sample index in all participants, so a single recording is
+        representative of the whole group. The onsets are read on its native grid,
+        where they are exactly the alignment plan's, and rescaled once
+        (:func:`~src.preprocessing.stimulus_alignment.rescale_onsets`) — the same
+        onsets the wavelet store is cut at (:meth:`load_pre_alignment_data`).
+        Reading them back from the resampled recording instead would inherit MNE's
+        rounding of its ``first_samp`` and land up to a sample off.
 
-        :param raw: A loaded (resampled) recording of the current group.
+        :param raw: A loaded recording of the current group, **not yet resampled**.
         :param filename: Filename *raw* was loaded from. The marker→onset offset is
             per recording, so reading another recording's annotations with this
             one's offset would place the onsets tens of milliseconds off.
+        :param resample_freq: Sampling rate of :attr:`data`.
         :return: Sorted array of onset sample indices, or ``None`` when the
             experiment has no stimulus annotations / none are present.
         """
@@ -371,7 +381,7 @@ class EEGSummarizedAnalyzer(LoggerMixin):
                 "loaded recordings; skipping stimulus-onset extraction."
             )
             return None
-        return onsets
+        return rescale_onsets(onsets, raw.info["sfreq"], resample_freq)
 
     def load_pre_alignment_data(
         self,
@@ -384,7 +394,7 @@ class EEGSummarizedAnalyzer(LoggerMixin):
     ) -> tuple[
         list[np.ndarray],
         list[list[tuple[int, int]]],
-        StimulusAligner,
+        ResampledPlan,
         Optional[mne.Info],
     ]:
         """
@@ -399,9 +409,18 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         to :func:`~src.preprocessing.stimulus_alignment.apply_keep_segments_to_array`
         to reproduce the stimulus alignment on the wavelet output.
 
+        The alignment is fitted at the recordings' **native** rate — the very plan
+        ``RAW_CROPPED`` was cut with — and carried over to *resample_freq* trial by
+        trial (:meth:`~src.preprocessing.stimulus_alignment.StimulusAligner.resampled`).
+        The trimmed output therefore shares its onsets with the concatenated array
+        (``round(onset * resample_freq / native rate)``) and has its length. Fitting
+        a second aligner on the resampled recordings would take its group minima
+        from re-rounded gaps: a different cut, whose trials drift against those
+        onsets by up to tens of milliseconds along the recording.
+
         Typical usage::
 
-            arrays, segments, aligner, info = analyzer.load_pre_alignment_data(resample_freq=250)
+            arrays, segments, plan, info = analyzer.load_pre_alignment_data(resample_freq=250)
             # arrays[i]: (n_channels, n_times_i)  — variable lengths
             wavelet_aligned = []
             for arr, keep in zip(arrays, segments):
@@ -409,14 +428,12 @@ class EEGSummarizedAnalyzer(LoggerMixin):
                 wd = to_wavelet_power(ad, freqs, keep_frequency_dim=True)
                 # wd.data: (1, n_ch, n_freqs, n_times_i)
                 trimmed = apply_keep_segments_to_array(wd.data[0], keep)
-                # trimmed: (n_ch, n_freqs, aligner.total_length)
+                # trimmed: (n_ch, n_freqs, plan.total_length)
                 wavelet_aligned.append(trimmed)
             data_4d = np.stack(wavelet_aligned)  # (n_subj, n_ch, n_freqs, n_times_aligned)
 
-        :param resample_freq: Target sampling frequency in Hz (default 250).
-            Resampling is applied before constructing the aligner so that the
-            keep-segments are expressed on the same sample grid as the returned
-            arrays.
+        :param resample_freq: Target sampling frequency in Hz (default 250). The
+            returned arrays and keep-segments are on this grid.
         :param n_jobs: Parallel jobs for resampling (``-1`` = all CPUs).
         :param stimulus_label: Annotation label marking stimulus onsets.
             Defaults to the experiment's registered label (e.g. ``"fam+"`` for
@@ -427,7 +444,7 @@ class EEGSummarizedAnalyzer(LoggerMixin):
             ``None`` keeps the per-subject shortest available lead-in.
         :param post_window_sec: Cap on the window kept after the last onset.
             ``None`` keeps the per-subject shortest available lead-out.
-        :return: Tuple ``(arrays, segments, aligner, info)`` where
+        :return: Tuple ``(arrays, segments, plan, info)`` where
 
             * ``arrays`` is a list of ``(n_channels, n_times_i)`` numpy arrays — one per
               recording **selected by this analyser**, in its metadata order, variable
@@ -436,10 +453,12 @@ class EEGSummarizedAnalyzer(LoggerMixin):
               with
               :func:`~src.preprocessing.stimulus_alignment.apply_keep_segments_to_array`
               to trim subject *i*'s wavelet output. Use these rather than
-              ``aligner.keep_segments``, which is indexed by the **whole** alignment
+              ``plan.keep_segments``, which is indexed by the **whole** alignment
               cohort, not by this analyser's selection.
-            * ``aligner`` is the fitted :class:`~src.preprocessing.stimulus_alignment.StimulusAligner`,
-              fitted over every recording of both conditions.
+            * ``plan`` is the
+              :class:`~src.preprocessing.stimulus_alignment.ResampledPlan` at
+              *resample_freq*, fitted over every recording of both conditions; its
+              ``aligned_onset_samples`` are the trimmed output's onsets.
             * ``info`` is the MNE Info object from the first loaded recording.
 
         :raises ValueError: If the experiment has no registered stimulus label
@@ -486,35 +505,38 @@ class EEGSummarizedAnalyzer(LoggerMixin):
             f"{len(self.filtered_df)} of them are in this analyser's selection."
         )
 
+        # The plan is fitted on the native grid, as RAW_CROPPED's was; each raw is
+        # resampled straight after its native onsets and length are read, so only
+        # one full-rate recording is held at a time.
         raws: list[mne.io.Raw] = []
-        for filename in cohort_filenames:
-            raw = (
-                self.dataset_handler.load_data_file(
-                    filename,
-                    is_processed=True,
-                    processed_data_type=PreprocessedDataVariants.RAW_AFTER_ICA,
-                    preload=True,
-                )
-                .pick(["eeg"])
-                .resample(resample_freq, n_jobs=n_jobs)
+        onset_samples: list[np.ndarray] = []
+        native_lengths: list[int] = []
+        native_rates: set[float] = set()
+        for filename, offset in zip(cohort_filenames, onset_offsets):
+            raw = self.dataset_handler.load_data_file(
+                filename,
+                is_processed=True,
+                processed_data_type=PreprocessedDataVariants.RAW_AFTER_ICA,
+                preload=True,
+            ).pick(["eeg"])
+            onset_samples.append(get_stimulus_onset_samples(raw, label, offset))
+            native_lengths.append(raw.n_times)
+            native_rates.add(float(raw.info["sfreq"]))
+            raws.append(raw.resample(resample_freq, n_jobs=n_jobs))
+        if len(native_rates) != 1:
+            raise ValueError(
+                f"The alignment cohort mixes sampling rates {sorted(native_rates)}."
             )
-            raws.append(raw)
 
-        # Build the alignment plan from the resampled recordings so that the
-        # keep-segments are expressed on the resampled sample grid.
-        onset_samples = [
-            get_stimulus_onset_samples(raw, label, offset)
-            for raw, offset in zip(raws, onset_offsets)
-        ]
-        recording_lengths = [raw.n_times for raw in raws]
         aligner = StimulusAligner(
             onset_samples,
-            recording_lengths,
-            sfreq=resample_freq,
+            native_lengths,
+            sfreq=native_rates.pop(),
             keep_tail_sec=keep_tail_sec,
             pre_window_sec=pre_window_sec,
             post_window_sec=post_window_sec,
         )
+        plan = aligner.resampled(resample_freq, [raw.n_times for raw in raws])
 
         # Return only this analyser's recordings, in ITS metadata order, together with
         # their keep-segments — the plan is group-wide, the data is not.
@@ -531,7 +553,7 @@ class EEGSummarizedAnalyzer(LoggerMixin):
             selected.append(cohort_index[filename])
 
         arrays = [raws[index].get_data() for index in selected]
-        segments = [aligner.keep_segments[index] for index in selected]
+        segments = [plan.keep_segments[index] for index in selected]
 
         self._refresh_info(raws[0].info)
         self.resample_freq = resample_freq
@@ -539,10 +561,10 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         self.logger.info(
             f"Pre-alignment load complete: {len(arrays)} selected subject(s) of "
             f"{len(raws)} in the alignment cohort, "
-            f"aligned total_length={aligner.total_length} samples "
-            f"(common stimulus count {aligner.common_count})."
+            f"aligned total_length={plan.total_length} samples at "
+            f"{resample_freq:g} Hz (common stimulus count {aligner.common_count})."
         )
-        return arrays, segments, aligner, self.info
+        return arrays, segments, plan, self.info
 
     def _refresh_info(self, info: mne.Info) -> None:
         """Store an mne.Info copy taken from the first loaded raw object."""

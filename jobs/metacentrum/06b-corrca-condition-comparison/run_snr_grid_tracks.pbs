@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N PSILO_CORRCA_SNR_TRACKS_06B
-#PBS -l walltime=1:00:00
+#PBS -l walltime=0:30:00
 #PBS -l select=1:ncpus=4:mem=200gb:scratch_local=100gb
 #PBS -m ae
 #PBS -j oe
@@ -74,8 +74,8 @@ cd "$DATADIR" || {
 
 cd "$SCRATCHDIR"
 
-# qsub -v N_PCA=5 ... reads another stored fit.
-N_PCA="${N_PCA:-20}"
+# qsub -v N_PCA=20 ... reads another stored fit.
+N_PCA="${N_PCA:-5}"
 echo "PCA dimensions: $N_PCA"
 
 # The runner heredoc below is quoted, so this is read from the container
@@ -94,7 +94,7 @@ python /mnt/scripts/run_corrca_snr_grid.py \
     --variant corrca_channel_joined_tracks \
     --music_type ASSR \
     --conditions Placebo Psilocybin \
-    --n_pca "${N_PCA:-20}" \
+    --n_pca "${N_PCA:-5}" \
     --halfwidths 0 5 \
     --stimulus_intervals 0:0.5 0.2:0.5 \
     --signal_variants full roi_masked non_roi_masked \

@@ -19,7 +19,12 @@ from src.definitions.fields import (
     PreprocessedDataVariants,
     SingleDataMetadata,
 )
-from src.preprocessing.stimulus_alignment import StimulusAligner
+from src.preprocessing.stimulus_alignment import (
+    ResampledPlan,
+    StimulusAligner,
+    get_stimulus_onset_samples,
+    rescale_onsets,
+)
 
 
 class TestLoadAndPrepareData:
@@ -244,7 +249,7 @@ def _make_mock_raw(n_channels: int, n_times: int, sfreq: float, onset_sec: list[
 class TestLoadPreAlignmentData:
     @patch("src.analysis.summary.DatasetFilter.filter_dataset_by_all_categories")
     @patch("src.analysis.summary.DatasetHandler")
-    def test_returns_list_aligner_and_info(self, mock_dataset_handler_cls, mock_filter):
+    def test_returns_list_plan_and_info(self, mock_dataset_handler_cls, mock_filter):
         sfreq = 250.0
         filtered_df = pd.DataFrame(
             {SingleDataMetadata.FILENAME: ["subj1.fif", "subj2.fif"]},
@@ -270,7 +275,7 @@ class TestLoadPreAlignmentData:
             exclusion_categories=[],
         )
 
-        arrays, segments, aligner, info = analyzer.load_pre_alignment_data(
+        arrays, segments, plan, info = analyzer.load_pre_alignment_data(
             resample_freq=sfreq, n_jobs=1
         )
 
@@ -279,13 +284,13 @@ class TestLoadPreAlignmentData:
         assert arrays[0].shape == (2, int(3 * sfreq))
         assert arrays[1].shape == (2, int(4 * sfreq))
 
-        # Aligner has one keep_segments list per subject.
-        assert isinstance(aligner, StimulusAligner)
-        assert len(aligner.keep_segments) == 2
+        # The plan has one keep_segments list per subject.
+        assert isinstance(plan, ResampledPlan)
+        assert len(plan.keep_segments) == 2
 
         # All subjects' segments sum to the same total_length.
-        for segs in aligner.keep_segments:
-            assert sum(e - s for s, e in segs) == aligner.total_length
+        for segs in plan.keep_segments:
+            assert sum(e - s for s, e in segs) == plan.total_length
 
         # RAW_AFTER_ICA was loaded, not RAW_CROPPED.
         for call in mock_dataset_handler.load_data_file.call_args_list:
@@ -293,6 +298,60 @@ class TestLoadPreAlignmentData:
                 call.kwargs.get("processed_data_type")
                 == PreprocessedDataVariants.RAW_AFTER_ICA
             )
+
+    @patch("src.analysis.summary.DatasetFilter.filter_dataset_by_all_categories")
+    @patch("src.analysis.summary.DatasetHandler")
+    def test_plan_is_fitted_natively_and_rescaled(
+        self, mock_dataset_handler_cls, mock_filter
+    ):
+        # Recorded at 1000 Hz, stored at 250 Hz: the plan's onsets are the native
+        # plan's onsets rescaled, as RAW_CROPPED's are, not a second fit at 250 Hz.
+        native, target = 1000.0, 250.0
+        filenames = ["subj1.fif", "subj2.fif"]
+        mock_filter.return_value = pd.DataFrame(
+            {SingleDataMetadata.FILENAME: filenames}, index=[0, 1]
+        )
+        mock_dataset_handler = MagicMock()
+        mock_dataset_handler.dataset_metadata = pd.DataFrame()
+        mock_dataset_handler.excluded_participants_metadata = pd.DataFrame()
+        mock_dataset_handler_cls.return_value = mock_dataset_handler
+
+        raws = [
+            _make_mock_raw(2, 9000, native, [1.0, 2.3014, 3.5523, 4.8531]),
+            _make_mock_raw(2, 9500, native, [1.4, 2.6987, 3.9991, 5.2546]),
+        ]
+        for raw in raws:
+            resampled = _make_mock_raw(2, raw.n_times // 4, target, [])
+            raw.resample.return_value = resampled
+        mock_dataset_handler.load_data_file.side_effect = raws
+
+        analyzer = EEGSummarizedAnalyzer(
+            experiment_name=ExperimentNames.ASSR,
+            coordinate_system=CoordinateSystems.HYDROGEL_257_NO_FIDUCIALS,
+            music_types=[MusicTypeVariants.ASSR],
+            conditions=[ConditionVariants.PLACEBO],
+            exclusion_categories=[],
+        )
+        arrays, segments, plan, _info = analyzer.load_pre_alignment_data(
+            resample_freq=target, n_jobs=1
+        )
+
+        marker = analyzer._stimulus_marker
+        native_aligner = StimulusAligner(
+            [
+                get_stimulus_onset_samples(r, marker.label, marker.onset_offset_for(f))
+                for r, f in zip(raws, filenames)
+            ],
+            [r.n_times for r in raws],
+            native,
+            keep_tail_sec=0.1,
+        )
+        np.testing.assert_array_equal(
+            plan.aligned_onset_samples,
+            rescale_onsets(native_aligner.aligned_onset_samples, native, target),
+        )
+        assert [a.shape[-1] for a in arrays] == [2250, 2375]
+        assert all(sum(e - s for s, e in seg) == plan.total_length for seg in segments)
 
     @patch("src.analysis.summary.DatasetFilter.filter_dataset_by_all_categories")
     @patch("src.analysis.summary.DatasetHandler")
@@ -315,3 +374,34 @@ class TestLoadPreAlignmentData:
 
         with pytest.raises(ValueError, match="no registered stimulus label"):
             analyzer.load_pre_alignment_data()
+
+
+class TestExtractStimulusOnsets:
+    @patch("src.analysis.summary.DatasetFilter.filter_dataset_by_all_categories")
+    @patch("src.analysis.summary.DatasetHandler")
+    def test_onsets_are_read_natively_and_rescaled(
+        self, mock_dataset_handler_cls, mock_filter
+    ):
+        mock_filter.return_value = pd.DataFrame(
+            {SingleDataMetadata.FILENAME: ["subj1.fif"]}, index=[0]
+        )
+        mock_dataset_handler = MagicMock()
+        mock_dataset_handler.dataset_metadata = pd.DataFrame()
+        mock_dataset_handler.excluded_participants_metadata = pd.DataFrame()
+        mock_dataset_handler_cls.return_value = mock_dataset_handler
+        analyzer = EEGSummarizedAnalyzer(
+            experiment_name=ExperimentNames.ASSR,
+            coordinate_system=CoordinateSystems.HYDROGEL_257_NO_FIDUCIALS,
+            music_types=[MusicTypeVariants.ASSR],
+            conditions=[ConditionVariants.PLACEBO],
+            exclusion_categories=[],
+        )
+        raw = _make_mock_raw(2, 6000, 1000.0, [1.0, 2.3014, 3.5523])
+        marker = analyzer._stimulus_marker
+
+        onsets = analyzer._extract_stimulus_onsets(raw, "subj1.fif", 250.0)
+
+        native = get_stimulus_onset_samples(
+            raw, marker.label, marker.onset_offset_for("subj1.fif")
+        )
+        np.testing.assert_array_equal(onsets, rescale_onsets(native, 1000.0, 250.0))

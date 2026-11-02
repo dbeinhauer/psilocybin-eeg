@@ -55,3 +55,9 @@ scoring:
   stride_s: 1.0  # hop between scored windows
   n_null: 200  # circular-shift surrogates for the null distribution
   null_quantile: 0.95  # a window above this null quantile is a candidate
+
+wandb:  # live training curves; only this config and scalar metrics leave the cluster
+  enabled: false  # the PBS job turns it on; needs `wandb` installed and logged in
+  project: psilocybin-eeg
+  entity: null  # W&B user or team; null = the account's default
+  mode: online  # online | offline (then upload with `wandb sync <run_dir>/wandb`)

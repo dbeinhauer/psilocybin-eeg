@@ -16,6 +16,7 @@ from src.preprocessing.stimulus_alignment import (
     coarse_crop_to_stimulus_span,
     align_raws,
     apply_keep_segments_to_array,
+    rescale_onsets,
     resolve_per_recording_offsets,
     resolve_stimulus_marker,
 )
@@ -509,3 +510,133 @@ class TestApplyToRaw:
         # The second fam+ lands at the same sample in every aligned recording.
         second_onsets = {int(get_stimulus_onset_samples(a, "fam+")[1]) for a in aligned}
         assert second_onsets == {aligner.aligned_onset_samples[1]} == {700}
+
+
+def _jittered_cohort(seed: int = 0):
+    """Three 1000 Hz recordings with ASSR-like gaps, none a multiple of 4 samples."""
+    rng = np.random.default_rng(seed)
+    onsets, lengths = [], []
+    for lead_in, extra in ((500, 0), (733, 1), (1210, 0)):
+        gaps = rng.integers(1240, 1330, size=40)
+        recording = lead_in + np.concatenate([[0], np.cumsum(gaps)])[: 41 + extra]
+        onsets.append(recording)
+        lengths.append(int(recording[-1]) + 1500)
+    return onsets, lengths
+
+
+class TestRescaleOnsets:
+    """rescale_onsets — onsets on another rate's grid, rounded once."""
+
+    def test_quarter_rate(self):
+        assert rescale_onsets([0, 4, 6, 1757], 1000.0, 250.0).tolist() == [
+            0,
+            1,
+            2,
+            439,
+        ]
+
+    def test_same_rate_is_identity(self):
+        onsets = np.array([3, 1500, 2999])
+        np.testing.assert_array_equal(rescale_onsets(onsets, 250.0, 250.0), onsets)
+
+
+class TestResampledPlan:
+    """StimulusAligner.resampled — one native plan carried to a resampled grid."""
+
+    @pytest.fixture
+    def aligner(self):
+        onsets, lengths = _jittered_cohort()
+        return StimulusAligner(onsets, lengths, SFREQ, keep_tail_sec=0.1)
+
+    @pytest.fixture
+    def lengths_250(self):
+        _, lengths = _jittered_cohort()
+        return [int(round(n / 4)) for n in lengths]
+
+    def test_same_rate_reproduces_the_native_cut(self, aligner):
+        plan = aligner.resampled(SFREQ, aligner.recording_lengths)
+        for length, native, mapped in zip(
+            aligner.recording_lengths, aligner.keep_segments, plan.keep_segments
+        ):
+            index = np.arange(length)
+            np.testing.assert_array_equal(
+                apply_keep_segments_to_array(index, mapped),
+                apply_keep_segments_to_array(index, native),
+            )
+        np.testing.assert_array_equal(
+            plan.aligned_onset_samples, aligner.aligned_onset_samples
+        )
+        assert plan.total_length == aligner.total_length
+
+    def test_onsets_are_the_native_onsets_rescaled(self, aligner, lengths_250):
+        plan = aligner.resampled(250.0, lengths_250)
+        np.testing.assert_array_equal(
+            plan.aligned_onset_samples,
+            rescale_onsets(aligner.aligned_onset_samples, SFREQ, 250.0),
+        )
+
+    def test_every_recording_has_the_same_length(self, aligner, lengths_250):
+        plan = aligner.resampled(250.0, lengths_250)
+        for length, segments in zip(lengths_250, plan.keep_segments):
+            trimmed = apply_keep_segments_to_array(np.arange(length), segments)
+            assert trimmed.size == plan.total_length
+
+    def test_every_trial_lands_on_its_own_onset(self, aligner, lengths_250):
+        # The source sample at each shared output onset is the recording's own onset
+        # rescaled — for the last trial as for the first: no drift accumulates.
+        plan = aligner.resampled(250.0, lengths_250)
+        for source, length, segments in zip(
+            aligner.onset_samples, lengths_250, plan.keep_segments
+        ):
+            trimmed = apply_keep_segments_to_array(np.arange(length), segments)
+            np.testing.assert_array_equal(
+                trimmed[plan.aligned_onset_samples],
+                rescale_onsets(source[: aligner.common_count], SFREQ, 250.0),
+            )
+
+    def test_each_piece_is_continuous_and_starts_tail_before_an_onset(
+        self, aligner, lengths_250
+    ):
+        plan = aligner.resampled(250.0, lengths_250)
+        tail = int(round(aligner.keep_tail / 4))
+        for segments in plan.keep_segments:
+            starts = [begin for begin, _ in segments]
+            assert len(segments) == aligner.common_count
+            assert all(end > begin for begin, end in segments)
+            assert np.all(np.diff(starts) > 0)
+        output_starts = np.cumsum([0] + [e - b for b, e in plan.keep_segments[0]])
+        np.testing.assert_array_equal(
+            output_starts[1:-1], plan.aligned_onset_samples[1:] - tail
+        )
+
+    def test_length_is_the_native_length_rescaled(self):
+        onsets = [np.array([400, 1700, 3000]), np.array([600, 1950, 3200])]
+        aligner = StimulusAligner(onsets, [4500, 4700], SFREQ, keep_tail_sec=0.1)
+        plan = aligner.resampled(250.0, [1125, 1175])
+        assert plan.total_length == int(round(aligner.total_length / 4))
+
+    def test_a_recordings_own_end_can_cost_at_most_one_sample(
+        self, aligner, lengths_250
+    ):
+        # Every recording here ends exactly at the native lead-out, so rounding its
+        # length down may leave it one 250 Hz sample short; the plan never reads
+        # past it.
+        plan = aligner.resampled(250.0, lengths_250)
+        assert int(round(aligner.total_length / 4)) - plan.total_length in (0, 1)
+        for length, segments in zip(lengths_250, plan.keep_segments):
+            assert segments[-1][1] <= length
+
+    def test_lead_out_ends_at_the_native_cut_before_a_surplus_onset(self):
+        # Recording 2 has a fourth onset 301 samples after the last common one; the
+        # native plan stops there, and the resampled one within rounding of it.
+        onsets = [np.array([400, 1700, 3000]), np.array([400, 1700, 3000, 3301])]
+        lengths = [6000, 6000]
+        aligner = StimulusAligner(onsets, lengths, SFREQ, keep_tail_sec=0.1)
+        plan = aligner.resampled(250.0, [1500, 1500])
+        _, last_end = plan.keep_segments[1][-1]
+        assert abs(last_end * 4 - 3301) <= 2
+        assert plan.total_length == int(round(aligner.total_length / 4))
+
+    def test_mismatched_recording_lengths_raise(self, aligner):
+        with pytest.raises(ValueError, match="recording lengths"):
+            aligner.resampled(250.0, [100])
