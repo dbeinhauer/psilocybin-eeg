@@ -36,18 +36,28 @@ Pipeline (per subject):
    reference keeps the convention well defined even when no 40 Hz response is
    present — and it has to be, because for later components a 40 Hz reference would
    be noise by construction. Subjects are ordered by participant ID.
-5. **Scalp topographies.** Each component's loading is plotted as a topomap, per
+5. **Trial-normalised TF maps.** Every TF map drawn is in units of the
+   pre-stimulus baseline, the reading every ASSR trial-locked map uses (stage 06,
+   §7): each subject's kept loadings are applied to its continuous z-scored power,
+   giving each component a continuous source, and every trial of every
+   (component, frequency) row is referenced to its own pre-onset mean, divided by
+   the pre-onset SD pooled over the subject's trials, and the median over trials
+   kept (:func:`src.analysis.assr_trials.baseline_tf_map`). The PCA is still fit on
+   the plain trial average (step 3), and the comparison table (step 7) still reads
+   that, so only the figures change.
+6. **Scalp topographies.** Each component's loading is plotted as a topomap, per
    participant and averaged — the record of what the channel reduction kept, since
    every spatial pattern orthogonal to these topographies is discarded. The
    retained / discarded channel-variance split is printed alongside.
-6. **Component comparison.** A summary table is printed with, per component, the
+7. **Component comparison.** A summary table is printed with, per component, the
    mean explained variance, the topography-consistency diagnostic and the
    driven-minus-baseline contrast in the ASSR band and across all frequencies —
    the evidence for whether a later component is the better steady-state carrier.
-7. **Unreduced reference** (``--no_unreduced_reference`` to skip). The same
+8. **Unreduced reference** (``--no_unreduced_reference`` to skip). The same
    trial-averaged power is plotted **before** the reduction, in channel space, as a
-   test reference: channel-mean TF maps, band-limited channel-mean time courses and
-   per-channel driven-minus-baseline topomaps. No polarity alignment is involved —
+   test reference: channel-mean TF maps and band-limited channel-mean time courses
+   (trial-normalised like the components: the channel mean of the z-scored power,
+   then step 5's reading), and per-channel driven-minus-baseline topomaps. No polarity alignment is involved —
    power has a fixed sign convention, so channel averages and the group mean are
    meaningful directly, which makes them a reference *for* the alignment rather than
    another thing to diagnose. The summaries are accumulated inside the same
@@ -99,7 +109,7 @@ from src.analysis.pca_polarity import (  # noqa: E402
     apply_pc1_signs,
     topography_consistency,
 )
-from src.analysis.assr_trials import baseline_normalise  # noqa: E402
+from src.analysis.assr_trials import baseline_normalise, baseline_tf_map  # noqa: E402
 from src.definitions.constants import AssrEpoch, ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
     ConditionVariants,
@@ -256,11 +266,15 @@ class UnreducedReference:
             and frequency over the driven interval.
         chan_base_mean: ``(n_subjects, n_channels, n_freqs)`` the same over the
             pre-onset baseline.
+        chan_mean_tf_baseline: ``(n_subjects, n_freqs, win)`` channel-mean maps in
+            baseline SD (the channel mean of the continuous z-scored power, trial-
+            normalised), or ``None`` when the pass was not asked for them.
     """
 
     chan_mean_tf: np.ndarray
     chan_stim_mean: np.ndarray
     chan_base_mean: np.ndarray
+    chan_mean_tf_baseline: np.ndarray | None = None
 
     def reordered(self, order: list[int]) -> "UnreducedReference":
         """Return a copy with subjects reordered by *order* (e.g. into PID order)."""
@@ -268,6 +282,9 @@ class UnreducedReference:
             self.chan_mean_tf[order],
             self.chan_stim_mean[order],
             self.chan_base_mean[order],
+            None
+            if self.chan_mean_tf_baseline is None
+            else self.chan_mean_tf_baseline[order],
         )
 
     def channel_contrast(self, freq_mask: np.ndarray) -> np.ndarray:
@@ -419,7 +436,10 @@ def stream_wavelet_pca(
     *,
     zscore_vs_recording: bool = True,
     baseline_mode: str | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, int, UnreducedReference]:
+    trial_normalised: bool = False,
+) -> tuple[
+    np.ndarray, np.ndarray, np.ndarray, int, UnreducedReference, np.ndarray | None
+]:
     """Read every participant once, reducing each subject to its TF maps.
 
     Each subject's memory-mapped wavelets are read one ``(n_freqs, n_times)`` channel
@@ -448,15 +468,21 @@ def stream_wavelet_pca(
             to its own pre-onset baseline before averaging, via
             :func:`epoch_average_baselined`, instead of the plain onset average. Use
             with ``zscore_vs_recording=False`` — the baseline reference replaces it.
+        trial_normalised: Also return every component's TF map, and the channel
+            mean in ``reference``, in baseline SD (module docstring, step 5). Costs a
+            second read of each subject's channels, right after the first, once its
+            loadings are known.
 
     Returns:
-        Tuple ``(tf_maps, loadings, explained, n_times, reference)``,
+        Tuple ``(tf_maps, loadings, explained, n_times, reference, tf_baseline)``,
         component-major: ``tf_maps`` is ``(n_components, n_subj, n_freqs, win)``,
         ``loadings`` is ``(n_components, n_subj, n_channels)`` channel topographies,
         ``explained`` is ``(n_components, n_subj)`` variance ratios, ``n_times`` is
-        the wavelet time length and ``reference`` holds the unreduced channel-space
-        summaries. Signs are left arbitrary here and aligned across participants,
-        per component, by the caller.
+        the wavelet time length, ``reference`` holds the unreduced channel-space
+        summaries and ``tf_baseline`` is ``(n_components, n_subj, n_freqs, win)``
+        trial-normalised maps, or ``None`` without *trial_normalised*. Signs are left
+        arbitrary here and aligned across participants, per component, by the
+        caller — on ``tf_baseline`` with the same signs as on ``tf_maps``.
     """
     win = pre + post
     n_subj = len(participants)
@@ -470,6 +496,14 @@ def stream_wavelet_pca(
     chan_mean_tf = np.zeros((n_subj, n_freqs, win), dtype=np.float64)
     chan_stim_mean = np.zeros((n_subj, n_channels, n_freqs), dtype=np.float64)
     chan_base_mean = np.zeros((n_subj, n_channels, n_freqs), dtype=np.float64)
+    tf_baseline = (
+        np.zeros((n_components, n_subj, n_freqs, win), dtype=np.float64)
+        if trial_normalised
+        else None
+    )
+    chan_mean_tf_baseline = (
+        np.zeros((n_subj, n_freqs, win), dtype=np.float64) if trial_normalised else None
+    )
     n_times = 0
     for subj, participant in enumerate(participants):
         subject = wavelet_set.open(participant)
@@ -496,6 +530,24 @@ def stream_wavelet_pca(
         chan_stim_mean[subj] = stack[:, :, stim_mask].mean(axis=2)
         chan_base_mean[subj] = stack[:, :, base_mask].mean(axis=2)
         del stack
+        if trial_normalised:
+            # Continuous sources and channel mean of the same z-scored power: the
+            # loadings are only known now, so the channels are read a second time.
+            sources = np.zeros((n_components, n_freqs, n_times), dtype=np.float64)
+            channel_sum = np.zeros((n_freqs, n_times), dtype=np.float64)
+            for chan in range(n_channels):
+                block = np.asarray(subject[chan], dtype=np.float64)
+                if zscore_vs_recording:
+                    block = zscore(block, axis=1)
+                sources += loadings[:, subj, chan, None, None] * block
+                channel_sum += block
+            tf_baseline[:, subj] = baseline_tf_map(
+                sources, onsets, pre, post, base_mask
+            )
+            chan_mean_tf_baseline[subj] = baseline_tf_map(
+                channel_sum / n_channels, onsets, pre, post, base_mask
+            )
+            del sources, channel_sum
         ev_summary = ", ".join(
             f"PC{c + 1} {explained[c, subj] * 100:.1f}%" for c in range(n_components)
         )
@@ -503,8 +555,10 @@ def stream_wavelet_pca(
             f"  reduced subject {subj + 1}/{n_subj} ({participant}, {ev_summary})",
             flush=True,
         )
-    reference = UnreducedReference(chan_mean_tf, chan_stim_mean, chan_base_mean)
-    return tf_maps, loadings, explained, n_times, reference
+    reference = UnreducedReference(
+        chan_mean_tf, chan_stim_mean, chan_base_mean, chan_mean_tf_baseline
+    )
+    return tf_maps, loadings, explained, n_times, reference, tf_baseline
 
 
 # --------------------------------------------------------------------------- #
@@ -572,6 +626,7 @@ def plot_pca_per_participant(
     title_suffix: str,
     plots_dir: Path,
     file_suffix: str = "",
+    unit: str = "score (a.u.)",
 ) -> None:
     """Grid of per-participant TF maps for ONE component, written to its own figure.
 
@@ -606,9 +661,7 @@ def plot_pca_per_participant(
         )
     for ax in flat[n_subj:]:
         ax.axis("off")
-    fig.colorbar(
-        im, ax=axes.ravel().tolist(), shrink=0.6, label=f"{pc_label} score (a.u.)"
-    )
+    fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.6, label=f"{pc_label} {unit}")
     fig.suptitle(
         f"Per-participant channel-PCA {pc_label} TF map — {title_suffix} "
         f"(agreeing {agreement})",
@@ -709,6 +762,7 @@ def plot_pca_group(
     title_suffix: str,
     plots_dir: Path,
     file_suffix: str = "",
+    unit: str = "score (a.u.)",
 ) -> None:
     """Group-average TF map per component, one panel each.
 
@@ -749,7 +803,7 @@ def plot_pca_group(
         ax.set_xlabel("Time relative to onset (s)")
         ax.set_ylabel("Frequency (Hz)")
         ax.legend(loc="upper right", fontsize=8)
-        fig.colorbar(im, ax=ax, shrink=0.9, label=f"{pc_label} score (a.u.)")
+        fig.colorbar(im, ax=ax, shrink=0.9, label=f"{pc_label} {unit}")
     fig.suptitle(
         f"Channel-PCA component TF maps, averaged over participants — {title_suffix}",
         y=1.03,
@@ -1059,16 +1113,19 @@ def run(args: argparse.Namespace) -> None:
 
     # ---- Wavelet: single streaming pass, PCA per subject --------------------
     print(f"Reading wavelets of {len(participants)} participant(s) ...", flush=True)
-    tf_maps, loadings, explained, n_times_wav, reference = stream_wavelet_pca(
-        wavelet_set,
-        participants,
-        onsets,
-        pre,
-        post,
-        n_components,
-        stim_mask,
-        base_mask,
-        zscore_vs_recording=args.zscore_vs_recording,
+    tf_maps, loadings, explained, n_times_wav, reference, tf_baseline = (
+        stream_wavelet_pca(
+            wavelet_set,
+            participants,
+            onsets,
+            pre,
+            post,
+            n_components,
+            stim_mask,
+            base_mask,
+            zscore_vs_recording=args.zscore_vs_recording,
+            trial_normalised=True,
+        )
     )
     n_subj = tf_maps.shape[1]
     print(
@@ -1083,6 +1140,7 @@ def run(args: argparse.Namespace) -> None:
     # reproduce the notebook, which works in participant-ID order throughout.
     order = sorted(range(n_subj), key=lambda s: int(idx_to_pid.get(s, "9999")))
     tf_maps = tf_maps[:, order]
+    tf_baseline = tf_baseline[:, order]
     loadings = loadings[:, order]
     explained = explained[:, order]
     reference = reference.reordered(order)
@@ -1100,6 +1158,7 @@ def run(args: argparse.Namespace) -> None:
         signs, anchor = align_pc1_signs(loadings[comp], channel_names=channel_names)
         loadings[comp] = apply_pc1_signs(loadings[comp], signs)
         tf_maps[comp] = apply_pc1_signs(tf_maps[comp], signs)
+        tf_baseline[comp] = apply_pc1_signs(tf_baseline[comp], signs)
         cons = topography_consistency(loadings[comp])
         consistency.append(cons)
         print(
@@ -1141,10 +1200,11 @@ def run(args: argparse.Namespace) -> None:
     )
 
     # ---- Plots (one per-participant figure per component) --------------------
+    # The TF maps are drawn trial-normalised (module docstring, step 5).
     title_suffix = f"{condition.value}/{music_type.value} (n={n_subj})"
     for comp, pc_label in enumerate(pc_labels):
         plot_pca_per_participant(
-            tf_maps[comp],
+            tf_baseline[comp],
             explained[comp],
             epoch_times,
             freqs,
@@ -1154,6 +1214,7 @@ def run(args: argparse.Namespace) -> None:
             f"{consistency[comp].n_agreeing}/{consistency[comp].n_subjects}",
             title_suffix,
             plots_dir,
+            unit="(baseline SD)",
         )
         plot_component_topomaps(
             loadings[comp],
@@ -1167,7 +1228,7 @@ def run(args: argparse.Namespace) -> None:
             plots_dir,
         )
     plot_pca_group(
-        tf_maps,
+        tf_baseline,
         explained,
         consistency,
         epoch_times,
@@ -1176,6 +1237,7 @@ def run(args: argparse.Namespace) -> None:
         pc_labels,
         title_suffix,
         plots_dir,
+        unit="(baseline SD)",
     )
 
     # ---- Pre-stimulus-baseline variant of the TF maps ------------------------
@@ -1190,7 +1252,7 @@ def run(args: argparse.Namespace) -> None:
             "TF-map variant ...",
             flush=True,
         )
-        tf_base, load_base, exp_base, _n_b, _ref_b = stream_wavelet_pca(
+        tf_base, load_base, exp_base, _n_b, _ref_b, _tf_b = stream_wavelet_pca(
             wavelet_set,
             participants,
             onsets,
@@ -1286,23 +1348,24 @@ def run(args: argparse.Namespace) -> None:
         all_freqs = np.ones_like(band_mask, dtype=bool)
         stim_end = AssrEpoch.STIMULUS_DURATION_S
 
+        # Trial-normalised like the component maps.
         plot_unreduced_tf_maps(
-            reference.chan_mean_tf,
+            reference.chan_mean_tf_baseline,
             epoch_times,
             freqs,
             labels,
             args.assr_freq,
-            power_unit,
+            "baseline SD",
             title_suffix,
             plots_dir,
         )
         plot_unreduced_band_timecourses(
-            reference.chan_mean_tf,
+            reference.chan_mean_tf_baseline,
             freqs,
             band_mask,
             epoch_times,
             labels,
-            power_unit,
+            "baseline SD",
             stim_end,
             title_suffix,
             plots_dir,
