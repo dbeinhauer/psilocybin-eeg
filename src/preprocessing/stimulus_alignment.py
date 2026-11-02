@@ -32,7 +32,15 @@ Key pieces:
     - ``get_stimulus_onset_samples``: extract onset sample indices from a Raw.
     - ``StimulusAligner``: pure planner — from per-recording onset samples computes
       the keep-segments and the aligned onset positions (no MNE dependency).
+      ``StimulusAligner.resampled`` expresses the same plan on a resampled grid.
+    - ``rescale_onsets``: onset samples on another rate's grid.
     - ``apply_keep_segments`` / ``align_raws``: apply the plan to MNE ``Raw`` objects.
+
+One plan, every rate: the alignment is fitted once, at the recordings' native rate
+(``RAW_CROPPED`` and everything built from it), and any resampled product takes its
+cut and its onsets from that plan. Fitting a second aligner on resampled recordings
+gives a different cut — its group minima come from re-rounded gaps — whose onsets
+drift against the native plan's by a growing number of samples.
 """
 
 import logging
@@ -271,6 +279,43 @@ def coarse_crop_to_stimulus_span(
     return raw.copy().crop(tmin=start / sfreq, tmax=end / sfreq, include_tmax=True)
 
 
+def rescale_onsets(
+    onsets: np.ndarray | Sequence[int], from_sfreq: float, to_sfreq: float
+) -> np.ndarray:
+    """
+    Onset samples on another sampling rate's grid, rounded once.
+
+    Resampling keeps sample 0 in place, so native sample ``n`` sits at
+    ``n * to_sfreq / from_sfreq`` on the new grid. Rescale the native samples rather
+    than reading the annotations back from a resampled ``Raw``: MNE rounds its
+    ``first_samp`` to the new grid (a crop starting at sample 3297 at 1000 Hz becomes
+    824 at 250 Hz, not 824.25), which shifts every annotation-derived onset by up to
+    a sample.
+
+    :param onsets: Onset sample indices at *from_sfreq*.
+    :param from_sfreq: Sampling rate the onsets are given at.
+    :param to_sfreq: Sampling rate to express them at.
+    :return: Integer onset samples at *to_sfreq*.
+    """
+    return np.round(np.asarray(onsets) * (to_sfreq / from_sfreq)).astype(int)
+
+
+@dataclass(frozen=True)
+class ResampledPlan:
+    """
+    A :class:`StimulusAligner` plan expressed on a resampled grid.
+
+    Has the attributes of the plan that a consumer applies — keep-segments per
+    recording, the shared onsets and the common length — so it is used exactly like
+    the aligner itself with :func:`apply_keep_segments_to_array`.
+    """
+
+    sfreq: float
+    keep_segments: list[list[tuple[int, int]]]
+    aligned_onset_samples: np.ndarray
+    total_length: int
+
+
 class StimulusAligner(LoggerMixin):
     """
     Plans the trimming needed to align stimulus onsets across a group of recordings.
@@ -457,6 +502,74 @@ class StimulusAligner(LoggerMixin):
             f"Recording {idx}: kept {kept} samples, expected {self.total_length}."
         )
         return segments
+
+    def resampled(
+        self, sfreq: float, recording_lengths: Sequence[int]
+    ) -> ResampledPlan:
+        """
+        This plan on another sampling grid, mapped trial by trial.
+
+        The output onsets are this plan's onsets rescaled once
+        (:func:`rescale_onsets`) and shared by every recording. Output piece ``k``
+        runs from ``keep_tail`` before onset ``k`` to ``keep_tail`` before onset
+        ``k + 1`` — piece 0 also carries the lead-in, the last one the lead-out — and
+        each recording supplies it from around its own onset ``k``, rescaled. Every
+        piece is anchored on its own onset, so rounding errs by at most half a sample
+        per trial and never accumulates along the recording.
+
+        Rounding both ends of a piece can make it one sample longer than the
+        recording's own gap, so two neighbouring pieces may share their boundary
+        sample. That sample lies ``keep_tail`` before an onset, where this plan cuts
+        anyway.
+
+        :param sfreq: Target sampling frequency in Hz.
+        :param recording_lengths: Per recording, in this plan's order, its number of
+            samples on the target grid.
+        :return: The plan on the target grid.
+        :raises ValueError: If *recording_lengths* does not match the plan, or a
+            recording cannot supply its pieces within its own bounds.
+        """
+        if len(recording_lengths) != len(self.onset_samples):
+            raise ValueError(
+                f"Got {len(recording_lengths)} recording lengths for a plan over "
+                f"{len(self.onset_samples)} recordings."
+            )
+        onsets = rescale_onsets(self.aligned_onset_samples, self.sfreq, sfreq)
+        tail = int(round(self.keep_tail * sfreq / self.sfreq))
+        sources = [rescale_onsets(o, self.sfreq, sfreq) for o in self.onset_samples]
+        last = self.common_count - 1
+
+        # The lead-out: this plan's length rescaled, so the output is exactly as long
+        # as a resampled RAW_CROPPED. This plan already stops it before any surplus
+        # (unaligned) onset; only a recording's own end can cut it shorter.
+        lead_out = int(round(self.total_length * sfreq / self.sfreq)) - int(onsets[-1])
+        for source, length in zip(sources, recording_lengths):
+            lead_out = min(lead_out, int(length) - int(source[last]))
+
+        starts = np.concatenate([[0], onsets[1:] - tail])
+        stops = np.append(starts[1:], onsets[-1] + lead_out)
+        keep_segments = []
+        for idx, (source, length) in enumerate(zip(sources, recording_lengths)):
+            # A piece starts as far before the recording's own onset k as the output
+            # piece starts before the shared onset k.
+            source_starts = source[: self.common_count] - (onsets - starts)
+            segments = [
+                (int(begin), int(begin + stop - start))
+                for begin, start, stop in zip(source_starts, starts, stops)
+            ]
+            if any(begin < 0 or end > length for begin, end in segments):
+                raise ValueError(
+                    f"Recording {idx} cannot supply the {sfreq:g} Hz plan within its "
+                    f"{length} samples."
+                )
+            keep_segments.append(segments)
+
+        return ResampledPlan(
+            sfreq=sfreq,
+            keep_segments=keep_segments,
+            aligned_onset_samples=onsets,
+            total_length=int(stops[-1]),
+        )
 
 
 def apply_keep_segments(raw: mne.io.Raw, segments: list[tuple[int, int]]) -> mne.io.Raw:

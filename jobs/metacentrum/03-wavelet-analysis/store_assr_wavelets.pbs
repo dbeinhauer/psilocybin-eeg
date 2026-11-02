@@ -37,6 +37,13 @@
 # Each subject is stored as soon as it is transformed, so a run that stops
 # part-way resumes at the first subject not yet stored.
 #
+# One time base with the concatenated array: the trim is the native-rate
+# (RAW_CROPPED) alignment carried to 250 Hz trial by trial, so the store's onsets
+# ARE the concatenated array's onsets file. The job refuses to run when they
+# disagree — an onsets file written before that rule (rebuild the concatenated
+# arrays: --process_and_save), or stored subjects of another length (remove
+# data/processed/assr/wavelets/<Condition>_ASSR/ and re-run).
+#
 # Output (one float32 file per participant, src/io/wavelet_store.py):
 #   data/processed/assr/wavelets/<Condition>_ASSR/
 #       wavelet_power__1.000_50.000_50.json              shared axes

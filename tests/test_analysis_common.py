@@ -3,6 +3,7 @@ Tests for scripts/analysis_common.py — argument parsing and workflow helpers.
 """
 
 import argparse
+from types import SimpleNamespace
 from unittest.mock import patch
 import runpy
 
@@ -16,6 +17,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.analysis_common import (
+    _check_plan_against_concatenated,
+    _refuse_stale_subjects,
     add_common_arguments,
     condition_index_mask,
     paired_subject_index,
@@ -30,6 +33,7 @@ from scripts.analysis_common import (
     wavelet_transform,
 )
 from src.analysis.corrca import CorrcaResult
+from src.preprocessing.stimulus_alignment import ResampledPlan
 from src.analysis.data_representations import AnalysisData, DataRepresentation
 from src.analysis.wavelet_ica import zscore_by_time
 from src.definitions.constants import ProjectPaths
@@ -773,3 +777,52 @@ class TestAssrRoiCorrca:
         )
         names = ["Fz", "Cz", "Pz", "Oz", "T7"]
         assert roi_masked_corrca_sources(data, model, names, **self._kwargs()) is None
+
+
+class TestStoreTimeBaseChecks:
+    """The wavelet store must share the concatenated array's onsets and length."""
+
+    @staticmethod
+    def _plan(onsets=(25, 340, 659), total_length=1000):
+        return ResampledPlan(
+            sfreq=250.0,
+            keep_segments=[],
+            aligned_onset_samples=np.asarray(onsets),
+            total_length=total_length,
+        )
+
+    @staticmethod
+    def _analyzer(onsets=(25, 340, 659), n_times=1000):
+        return SimpleNamespace(
+            stimulus_onsets=np.asarray(onsets), data=np.zeros((2, 3, n_times))
+        )
+
+    def test_matching_time_base_passes(self):
+        _check_plan_against_concatenated("L", self._plan(), self._analyzer())
+
+    def test_differing_onsets_are_refused(self):
+        with pytest.raises(ValueError, match="onsets differ"):
+            _check_plan_against_concatenated(
+                "L", self._plan(), self._analyzer(onsets=(25, 341, 659))
+            )
+
+    def test_differing_length_is_refused(self):
+        with pytest.raises(ValueError, match="not on one time base"):
+            _check_plan_against_concatenated(
+                "L", self._plan(), self._analyzer(n_times=996)
+            )
+
+    @staticmethod
+    def _store(lengths):
+        return SimpleNamespace(
+            directory=Path("store"),
+            open=lambda participant: np.zeros((1, 1, lengths[participant])),
+        )
+
+    def test_stored_subjects_of_the_right_length_pass(self):
+        _refuse_stale_subjects("L", self._store({"019": 1000}), ["019"], 1000)
+
+    def test_stale_stored_subject_is_refused(self):
+        store = self._store({"019": 1000, "023": 996})
+        with pytest.raises(ValueError, match="another alignment"):
+            _refuse_stale_subjects("L", store, ["019", "023"], 1000)

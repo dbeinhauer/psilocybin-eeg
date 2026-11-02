@@ -107,7 +107,10 @@ from src.io.wavelet_store import (
     wavelet_root,
     write_wavelet_subject,
 )
-from src.preprocessing.stimulus_alignment import apply_keep_segments_to_array
+from src.preprocessing.stimulus_alignment import (
+    ResampledPlan,
+    apply_keep_segments_to_array,
+)
 
 if TYPE_CHECKING:
     from src.analysis.summary import EEGSummarizedAnalyzer
@@ -1755,6 +1758,58 @@ def _condition_participants(
     return [participant_label(pid) for pid in frame[SingleDataMetadata.PARTICIPANT_ID]]
 
 
+def _check_plan_against_concatenated(
+    label: str, plan: ResampledPlan, analyzer: EEGSummarizedAnalyzer
+) -> None:
+    """Refuse a store whose trials would not sit at the concatenated array's onsets.
+
+    Every reader cuts the store at the concatenated array's onsets file, so the two
+    must describe one time base: the same onsets, the same length.
+
+    :raises ValueError: If the onsets or the length differ.
+    """
+    onsets = getattr(analyzer, "stimulus_onsets", None)
+    if onsets is not None and not np.array_equal(
+        np.asarray(onsets), plan.aligned_onset_samples
+    ):
+        raise ValueError(
+            f"[{label}] the concatenated array's stimulus onsets differ from the "
+            "alignment plan's; the onsets file predates the plan-derived onsets. "
+            "Rebuild the concatenated arrays (--process_and_save) first."
+        )
+    data = getattr(analyzer, "data", None)
+    if data is not None and data.shape[-1] != plan.total_length:
+        raise ValueError(
+            f"[{label}] the store would be {plan.total_length} samples long but the "
+            f"concatenated array is {data.shape[-1]}; they are not on one time base."
+        )
+
+
+def _refuse_stale_subjects(
+    label: str,
+    wavelet_set: WaveletSet,
+    stored: Sequence[str],
+    expected_length: int | None,
+) -> None:
+    """Refuse stored subjects whose time axis is not the concatenated array's.
+
+    Stored subjects are reused, never recomputed, so a store cut on another
+    alignment would otherwise survive every re-run unnoticed.
+
+    :raises ValueError: If any stored subject has a different length.
+    """
+    if expected_length is None:
+        return
+    lengths = {p: wavelet_set.open(p).shape[-1] for p in stored}
+    stale = {p: n for p, n in lengths.items() if n != expected_length}
+    if stale:
+        raise ValueError(
+            f"[{label}] stored subject(s) {stale} do not have the concatenated "
+            f"array's {expected_length} samples: they were cut on another alignment. "
+            f"Remove {wavelet_set.directory} and re-run."
+        )
+
+
 def precompute_pre_alignment_wavelet_cache(
     analyzers: dict[str, "EEGSummarizedAnalyzer"],
     freqs: np.ndarray,
@@ -1799,14 +1854,22 @@ def precompute_pre_alignment_wavelet_cache(
             participant_label(pid)
             for pid in analyzer.filtered_df[SingleDataMetadata.PARTICIPANT_ID]
         ]
+        data = getattr(analyzer, "data", None)
+        expected_length = None if data is None else int(data.shape[-1])
 
         for representation in representations:
             try:
-                pending = find_wavelet_set(directory, representation, freqs).missing(
-                    participants
-                )
+                wavelet_set = find_wavelet_set(directory, representation, freqs)
             except FileNotFoundError:
                 pending = list(participants)
+            else:
+                pending = wavelet_set.missing(participants)
+                _refuse_stale_subjects(
+                    label,
+                    wavelet_set,
+                    [p for p in participants if p not in pending],
+                    expected_length,
+                )
             if not pending:
                 _logger.info(
                     f"[{label}] all {len(participants)} subject(s) already stored "
@@ -1818,13 +1881,14 @@ def precompute_pre_alignment_wavelet_cache(
                 f"[{label}] Pre-alignment wavelet ({representation}) for {pending}: "
                 "loading RAW_AFTER_ICA per subject …"
             )
-            # `segments` is indexed by this analyser's selection; `aligner` is fitted
-            # over the whole alignment cohort, so its own keep_segments must not be
-            # zipped with `arrays`.
-            arrays, segments, aligner, info = analyzer.load_pre_alignment_data(
+            # `segments` is indexed by this analyser's selection; `plan` covers the
+            # whole alignment cohort, so its own keep_segments must not be zipped
+            # with `arrays`.
+            arrays, segments, plan, info = analyzer.load_pre_alignment_data(
                 resample_freq=resample_freq,
                 n_jobs=n_jobs,
             )
+            _check_plan_against_concatenated(label, plan, analyzer)
             if len(arrays) != len(participants):
                 raise ValueError(
                     f"[{label}] {len(arrays)} recording(s) loaded for "
