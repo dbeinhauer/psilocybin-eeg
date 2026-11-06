@@ -28,6 +28,7 @@ from scripts.analysis_common import (
     resolve_wavelet_dir,
     restrict_to_assr_roi,
     roi_masked_corrca_sources,
+    run_corrca_fits,
     run_wavelet_workflow,
     subject_conditions,
     wavelet_transform,
@@ -42,6 +43,7 @@ from src.definitions.fields import (
     ConditionVariants,
     CoordinateSystems,
     ExperimentNames,
+    IvaVariants,
     SingleDataMetadata,
 )
 from src.io.wavelet_store import find_wavelet_set
@@ -767,6 +769,34 @@ class TestAssrRoiCorrca:
         expected = np.einsum("ck,scft->skft", masked, zscore_by_time(data))
         np.testing.assert_allclose(sources, expected)
 
+    def test_non_roi_cut_keeps_every_other_electrode(self, data):
+        import mne
+
+        info = mne.create_info(self.CHANNELS, 250.0, "eeg")
+        cut, rest_info = restrict_to_assr_roi(
+            data, info, **self._kwargs(n_pca=3, complement=True)
+        )
+        assert rest_info.ch_names == ["E1", "E2", "E3"]
+        np.testing.assert_array_equal(cut, data[:, [0, 2, 4]])
+
+    def test_the_two_masked_readings_add_up_to_the_full_filter(self, data):
+        filters = np.random.default_rng(2).standard_normal((5, 2))
+        model = CorrcaResult(
+            filters=filters,
+            patterns=filters.T,
+            isc=np.array([0.5, 0.2]),
+            n_retained=2,
+            gamma=0.0,
+        )
+        readings = [
+            roi_masked_corrca_sources(
+                data, model, self.CHANNELS, **self._kwargs(complement=complement)
+            )
+            for complement in (False, True)
+        ]
+        full = np.einsum("ck,scft->skft", filters, zscore_by_time(data))
+        np.testing.assert_allclose(readings[0] + readings[1], full)
+
     def test_no_masked_sources_without_an_assr_electrode(self, data):
         model = CorrcaResult(
             filters=np.ones((5, 1)),
@@ -777,6 +807,54 @@ class TestAssrRoiCorrca:
         )
         names = ["Fz", "Cz", "Pz", "Oz", "T7"]
         assert roi_masked_corrca_sources(data, model, names, **self._kwargs()) is None
+
+    def _run_fits(self, data, out_dir, parallel_fits, fail=None):
+        import mne
+
+        args = SimpleNamespace(
+            n_pca=2,
+            lenient_mask=True,
+            skip_log_power=False,
+            skip_roi_fit=False,
+            skip_non_roi_fit=False,
+            parallel_fits=parallel_fits,
+        )
+
+        def run_fit(fit):
+            if fit.variant == fail:
+                raise RuntimeError("boom")
+            np.save(out_dir / f"{fit.variant.value}.npy", fit.data)
+
+        out_dir.mkdir()
+        run_corrca_fits(
+            data,
+            mne.create_info(self.CHANNELS, 250.0, "eeg"),
+            CoordinateSystems.HYDROGEL_257_NO_FIDUCIALS,
+            IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS,
+            args,
+            prepare=lambda d, log: np.log10(d) if log else d,
+            run_fit=run_fit,
+            label="test",
+            logger=self._kwargs()["logger"],
+        )
+        return {f.stem: np.load(f) for f in out_dir.glob("*.npy")}
+
+    def test_parallel_fits_run_the_same_fits_on_the_same_inputs(self, data, tmp_path):
+        in_turn = self._run_fits(data, tmp_path / "in_turn", parallel_fits=1)
+        parallel = self._run_fits(data, tmp_path / "parallel", parallel_fits=2)
+        assert len(in_turn) == 6
+        assert in_turn.keys() == parallel.keys()
+        for variant, inputs in in_turn.items():
+            np.testing.assert_array_equal(parallel[variant], inputs)
+        np.testing.assert_array_equal(
+            in_turn["corrca_channel_joined_tracks_log_roi"],
+            np.log10(data[:, self.ROI]),
+        )
+
+    def test_a_failed_parallel_fit_fails_the_run(self, data, tmp_path):
+        failing = IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS_LOG
+        with pytest.raises(RuntimeError, match=failing.value):
+            self._run_fits(data, tmp_path / "out", parallel_fits=2, fail=failing)
 
 
 class TestStoreTimeBaseChecks:

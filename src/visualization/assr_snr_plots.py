@@ -75,23 +75,24 @@ def plot_condition_tf_grid(
 ) -> plt.Figure:
     """One column per component: each condition's TF map, then their difference.
 
-    The two conditions of a column share one symmetric scale, so their intensities
+    The conditions of a column share one symmetric scale, so their intensities
     compare directly; the difference has its own.
 
     :param maps: condition → ``(K, F, W)``.
     :param notes: condition → per-component panel-title suffix.
+    :param conditions: One or two conditions, one row each.
     :param save_path: Output path, its extension picking the format; ``None`` skips
         saving.
-    :param show_difference: Add the difference row.
+    :param show_difference: Add the difference row; ignored for a single condition.
     :param dpi: Resolution of the saved figure.
     :param close: Close the figure once drawn; ``False`` keeps it open for the caller.
     :param component_prefix: Names the columns (``"PC"``, ``"CC"``, ``"IC"``).
     :param colorbar_label: The maps' unit, on every colour bar.
     :return: The figure.
     """
-    first, second = conditions
-    n_components = maps[first].shape[0]
-    n_rows = 2 + show_difference
+    show_difference = show_difference and len(conditions) == 2
+    n_components = maps[conditions[0]].shape[0]
+    n_rows = len(conditions) + show_difference
     extent = [epoch_times[0], epoch_times[-1], freqs[0], freqs[-1]]
     fig, axes = plt.subplots(
         n_rows, n_components, figsize=(4.6 * n_components, 3.3 * n_rows), squeeze=False
@@ -100,6 +101,7 @@ def plot_condition_tf_grid(
         shared = max(float(np.nanmax(np.abs(maps[c][k]))) for c in conditions)
         panels = [(f"{c}{notes[c][k]}", maps[c][k], shared) for c in conditions]
         if show_difference:
+            first, second = conditions
             diff = maps[first][k] - maps[second][k]
             panels.append((f"{first} − {second}", diff, float(np.nanmax(np.abs(diff)))))
         for row, (label, grid, vmax) in enumerate(panels):

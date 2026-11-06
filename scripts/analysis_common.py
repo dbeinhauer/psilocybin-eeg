@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import argparse
 import logging
+import multiprocessing.connection
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Mapping, Sequence
+from typing import TYPE_CHECKING, Callable, Mapping, NamedTuple, Sequence
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -31,6 +32,7 @@ from src.definitions.fields import (
     SingleDataMetadata,
     FrequencyBandNames,
     AnalysisVariants,
+    IvaVariants,
 )
 from src.definitions.constants import ProjectPaths
 from src.definitions.frequency import (
@@ -261,6 +263,238 @@ CORRCA_ALIGNMENT_NOTE = (
 #: The same when the montage carries no anchor electrode.
 CORRCA_ALIGNMENT_NOTE_NONE = "fit orientation (no ASSR anchor electrode present)"
 
+#: Stage directory of every stage-06b figure, the fits' and the SNR grid's alike.
+CORRCA_STAGE_DIR = "06b-corrca-condition-comparison"
+#: The fits on one real condition alone: one store per condition, and one plot
+#: subdirectory per condition below the variant's directory.
+_INDIVIDUAL_FITS = (
+    IvaVariants.CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS,
+    IvaVariants.CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS_ROI,
+    IvaVariants.CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS_NON_ROI,
+)
+_INDIVIDUAL_LOG_FITS = (
+    IvaVariants.CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS_LOG,
+    IvaVariants.CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS_LOG_ROI,
+    IvaVariants.CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS_LOG_NON_ROI,
+)
+CORRCA_INDIVIDUAL_VARIANTS = (*_INDIVIDUAL_FITS, *_INDIVIDUAL_LOG_FITS)
+#: Every stage-06b run fits three times, in this order: the full montage, then the
+#: ASSR electrodes alone, then every other electrode — each cut BEFORE the z-scoring.
+#: Keyed by the full fit; the ``*_log`` keys are the same runs on ``log10`` power.
+CORRCA_FITS = {
+    IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE: (
+        IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE,
+        IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE_ROI,
+        IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE_NON_ROI,
+    ),
+    IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS: (
+        IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS,
+        IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS_ROI,
+        IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS_NON_ROI,
+    ),
+    IvaVariants.CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS: _INDIVIDUAL_FITS,
+    IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE_LOG: (
+        IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE_LOG,
+        IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE_LOG_ROI,
+        IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE_LOG_NON_ROI,
+    ),
+    IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS_LOG: (
+        IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS_LOG,
+        IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS_LOG_ROI,
+        IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS_LOG_NON_ROI,
+    ),
+    IvaVariants.CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS_LOG: _INDIVIDUAL_LOG_FITS,
+}
+#: The log-power counterpart of each raw-power run, keyed by the full fit.
+CORRCA_LOG_OF = {
+    IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE: (
+        IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE_LOG
+    ),
+    IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS: IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS_LOG,
+    IvaVariants.CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS: (
+        IvaVariants.CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS_LOG
+    ),
+}
+#: Every variant fitted on ``log10`` power, whose readers must take the log too.
+CORRCA_LOG_VARIANTS = frozenset(
+    variant for full in CORRCA_LOG_OF.values() for variant in CORRCA_FITS[full]
+)
+
+
+class CorrcaFit(NamedTuple):
+    """One fit of a stage-06b run, as :func:`run_corrca_fits` hands it over."""
+
+    variant: IvaVariants
+    #: ``(S, C, F, T)`` the fit's input, prepared (log, standardised) and cut.
+    data: np.ndarray
+    #: ``Info`` of the kept channels.
+    info: object
+    #: ``"full"``, ``"roi"`` or ``"non_roi"``: which electrodes the fit sees.
+    channels: str
+    log_power: bool
+
+
+def corrca_run_plan(
+    full: IvaVariants, args: argparse.Namespace
+) -> list[tuple[IvaVariants, str, bool]]:
+    """``(variant, channels, log_power)`` of every fit of a run, in run order.
+
+    Full montage, then the same on log power, then the ROI and non-ROI cuts, then
+    their log-power twins. ``--skip_log_power``, ``--skip_roi_fit`` and
+    ``--skip_non_roi_fit`` drop fits.
+
+    :param full: The raw-power full fit, a key of :data:`CORRCA_LOG_OF`.
+    """
+    raw, log = CORRCA_FITS[full], CORRCA_FITS[CORRCA_LOG_OF[full]]
+    plan = [
+        (raw[0], "full", False),
+        (log[0], "full", True),
+        (raw[1], "roi", False),
+        (raw[2], "non_roi", False),
+        (log[1], "roi", True),
+        (log[2], "non_roi", True),
+    ]
+    skipped = {"roi": args.skip_roi_fit, "non_roi": args.skip_non_roi_fit}
+    return [
+        (variant, channels, log_power)
+        for variant, channels, log_power in plan
+        if not (log_power and args.skip_log_power) and not skipped.get(channels, False)
+    ]
+
+
+#: Plot label of those fits, the counterpart of a join's ``JoinedTracks``.
+CORRCA_INDIVIDUAL_LABEL = "IndividualConditions"
+
+
+def corrca_plots_dir(
+    variant: IvaVariants,
+    condition: ConditionVariants,
+    music_type: MusicTypeVariants,
+    *,
+    band: str | None,
+    n_pca: int,
+    root: Path | None,
+) -> Path:
+    """Where a stage-06b fit draws, and the SNR grid read off its store draws too.
+
+    A join draws under its own label, ``<Join>_<music>/<spectrum>/<variant>/pca_<n>/``;
+    an individual-condition fit under :data:`CORRCA_INDIVIDUAL_LABEL`, with its
+    condition one level below the variant,
+    ``.../corrca_channel_individual_conditions/<Condition>/pca_<n>/``.
+
+    :param condition: The store's condition: the join, or the one real condition.
+    :param band: Band token, ``None`` for broadband.
+    :param root: Plot root; ``None`` uses the project's ``plots/``.
+    :return: The directory, which is not created.
+    """
+    spectrum = (
+        SpectrumTypeVariants.BROADBAND if band is None else SpectrumTypeVariants.BANDS
+    )
+    if variant in CORRCA_INDIVIDUAL_VARIANTS:
+        label, analysis_type = (
+            CORRCA_INDIVIDUAL_LABEL,
+            f"{variant.value}/{condition.value}",
+        )
+    else:
+        label, analysis_type = condition.value, variant.value
+    return ProjectPaths.analysis_plots_dir(
+        CORRCA_STAGE_DIR,
+        f"{label}_{music_type.value}",
+        spectrum=spectrum.value,
+        analysis_type=analysis_type,
+        n_pca=n_pca,
+        root=root,
+    )
+
+
+def stored_corrca_fit(
+    args: argparse.Namespace,
+    condition: ConditionVariants,
+    variant: IvaVariants,
+    music_type: MusicTypeVariants,
+    band: str | None,
+    *,
+    participants: Sequence[str],
+    subject_conditions: Sequence[str],
+    channel_names: Sequence[str],
+    n_times: int,
+    label: str,
+    logger: logging.Logger,
+) -> tuple[CorrcaDecomposition, str] | None:
+    """A stored stage-06b fit, read back in place of refitting it.
+
+    Only with ``--skip_stored --store_components``, and only when the store exists.
+    The returned decomposition carries what the fit would: the oriented sources and
+    per-recording patterns, and the shared filters, patterns and ISC, so every figure
+    is drawn exactly as after a fresh fit.
+
+    :param participants: Participant per row of the loaded data, in row order.
+    :param subject_conditions: Condition per row of the loaded data.
+    :param channel_names: Channels of the loaded data the fit would see.
+    :param n_times: Time length of the loaded data the fit would see.
+    :return: ``(decomposition, alignment_note)``, or ``None`` when the run must fit.
+    :raises ValueError: If the store was fitted on other data than the loaded one —
+        another cohort, channel set or time extent. The store name does not record
+        them, so a mismatch means a trimmed run wrote it: refit (``FORCE_FIT=1``) or
+        point the run at another ``--store_dir``.
+    """
+    from src.io.iva_store import iva_results_path, load_iva_components
+
+    if not (args.skip_stored and args.store_components):
+        return None
+    store_dir = None if args.store_dir is None else Path(args.store_dir)
+    path = iva_results_path(
+        ExperimentNames(args.experiment),
+        condition,
+        variant,
+        music_type,
+        band,
+        args.n_pca,
+        processed_data_dir=store_dir,
+    )
+    if not path.exists():
+        logger.info(f"[{label}] fitting {variant.value}: no store at {path}")
+        return None
+    stored = load_iva_components(path)
+    mismatch = {
+        name: (got, want)
+        for name, got, want in (
+            ("participants", list(stored.participants), list(participants)),
+            (
+                "conditions",
+                list(stored.subject_conditions),
+                list(subject_conditions),
+            ),
+            ("channels", list(stored.channel_names), list(channel_names)),
+            ("time samples", stored.tf_maps.shape[-1], n_times),
+        )
+        if got != want
+    }
+    if mismatch:
+        raise ValueError(
+            f"[{label}] {path} was not fitted on the loaded data (store vs loaded: "
+            f"{mismatch}). Refit it (FORCE_FIT=1, i.e. drop --skip_stored) or use "
+            "another --store_dir."
+        )
+    extras = stored.extras
+    model = CorrcaResult(
+        filters=np.asarray(extras["corrca_filters"], dtype=float),
+        patterns=np.asarray(extras["corrca_shared_patterns"], dtype=float),
+        isc=np.asarray(extras["corrca_fit_isc"], dtype=float),
+        n_retained=int(extras["corrca_n_retained"]),
+        gamma=float(extras["corrca_gamma"]),
+    )
+    anchored = str(extras.get("polarity_anchor", np.asarray("none"))) != "none"
+    logger.info(f"[{label}] --skip_stored: {variant.value} read from {path}, not refit")
+    return (
+        CorrcaDecomposition(
+            model=model,
+            sources=np.asarray(stored.tf_maps, dtype=float),
+            patterns=np.asarray(stored.channel_patterns, dtype=float),
+        ),
+        CORRCA_ALIGNMENT_NOTE if anchored else CORRCA_ALIGNMENT_NOTE_NONE,
+    )
+
 
 def add_corrca_condition_args(parser: argparse.ArgumentParser) -> None:
     """Add the arguments both stage-06b scripts share.
@@ -394,6 +628,15 @@ def add_corrca_condition_args(parser: argparse.ArgumentParser) -> None:
     )
     add_iva_store_args(parser)
     parser.add_argument(
+        "--skip_stored",
+        action="store_true",
+        help=(
+            "With --store_components, read each fit whose store already exists "
+            "instead of refitting it, and draw every figure from it as usual. A "
+            "store fitted on other data (cohort, channels, time extent) is refused."
+        ),
+    )
+    parser.add_argument(
         "--n_jobs",
         type=int,
         default=1,
@@ -419,11 +662,39 @@ def add_corrca_condition_args(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--skip_log_power",
+        action="store_true",
+        help=(
+            "Skip the three log-power fits ('*_log' variants: log10 of the wavelet "
+            "power taken BEFORE any z-scoring), which otherwise follow the full fit."
+        ),
+    )
+    parser.add_argument(
+        "--skip_non_roi_fit",
+        action="store_true",
+        help=(
+            "Skip the third fit on every electrode BUT the ASSR ones (cut BEFORE the "
+            "z-scoring), which is otherwise stored and drawn as the '_non_roi' variant."
+        ),
+    )
+    parser.add_argument(
+        "--parallel_fits",
+        type=float,
+        default=1.0,
+        help=(
+            "How many full-montage fits may run at once, each in its own process; a "
+            "ROI or non-ROI fit counts as its share of the channels. A running fit "
+            "holds about three copies of its input, so this is a memory budget. 1 "
+            "runs the fits one after another."
+        ),
+    )
+    parser.add_argument(
         "--skip_roi_masked",
         action="store_true",
         help=(
-            "Skip the 'roi_masked_' TF maps: the fitted shared filter with every "
-            "weight outside the ASSR electrodes zeroed, on the z-scored signal."
+            "Skip the masked TF maps of the full fit: 'roi_masked_' (every filter "
+            "weight outside the ASSR electrodes zeroed) and 'non_roi_masked_' (the "
+            "ASSR electrodes zeroed instead), on the z-scored signal."
         ),
     )
     parser.add_argument(
@@ -433,8 +704,7 @@ def add_corrca_condition_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def restrict_to_assr_roi(
-    data_4d: np.ndarray,
+def assr_roi_channels(
     info,
     coordinate_system: CoordinateSystems,
     *,
@@ -442,20 +712,16 @@ def restrict_to_assr_roi(
     lenient_mask: bool,
     label: str,
     logger: logging.Logger,
-):
-    """The input of the ROI fit: a ``(S, C, F, T)`` tensor cut to the ASSR electrodes.
+    complement: bool = False,
+) -> np.ndarray | None:
+    """Indices of the channels the ROI (or non-ROI) fit keeps, in montage order.
 
-    The cut comes before :func:`~src.analysis.corrca.decompose_channel_corrca`
-    z-scores the tensor, so the ROI is the whole channel space of the fit.
-
-    :param info: ``Info`` whose channels match the tensor's channel axis.
-    :param n_pca: The fit's subspace dimension, which the ROI must be able to hold.
-    :return: ``(data_4d, info)`` on the ROI electrodes, in montage order; ``None``
-        (with a warning) when the montage has no ASSR electrode or fewer than
-        *n_pca* of them.
+    :param info: ``Info`` of the full montage.
+    :param n_pca: The fit's subspace dimension, which the cut must be able to hold.
+    :param complement: Every electrode BUT the ASSR ones, for the non-ROI fit.
+    :return: The kept indices; ``None`` (with a warning) when the montage has no ASSR
+        electrode or fewer than *n_pca* electrodes are kept.
     """
-    import mne
-
     from src.io.loading import assr_electrode_mask
 
     names = list(info.ch_names)
@@ -467,18 +733,190 @@ def restrict_to_assr_roi(
         logger.warning(f"[{label}] no ASSR electrode in this montage; no ROI fit.")
         return None
     mask = assr_electrode_mask(names, coordinate_system, strict=not lenient_mask)
-    keep = np.flatnonzero(mask)
+    keep = np.flatnonzero(~mask if complement else mask)
+    fit = "non-ROI fit" if complement else "ROI fit"
     if n_pca is not None and n_pca > keep.size:
         logger.warning(
-            f"[{label}] --n_pca {n_pca} exceeds the {keep.size} ROI channel(s); no "
-            "ROI fit."
+            f"[{label}] --n_pca {n_pca} exceeds the {keep.size} kept channel(s); no "
+            f"{fit}."
         )
         return None
     logger.info(
-        f"[{label}] ROI fit: {keep.size}/{mask.size} channel(s), cut before the "
-        "z-scoring"
+        f"[{label}] {fit}: {keep.size}/{mask.size} channel(s), cut before the z-scoring"
     )
+    return keep
+
+
+def restrict_to_assr_roi(
+    data_4d: np.ndarray,
+    info,
+    coordinate_system: CoordinateSystems,
+    *,
+    n_pca: int | None,
+    lenient_mask: bool,
+    label: str,
+    logger: logging.Logger,
+    complement: bool = False,
+):
+    """The input of the ROI fit: a ``(S, C, F, T)`` tensor cut to the ASSR electrodes.
+
+    The cut comes before :func:`~src.analysis.corrca.decompose_channel_corrca`
+    z-scores the tensor, so the ROI is the whole channel space of the fit.
+
+    :param info: ``Info`` whose channels match the tensor's channel axis.
+    :return: ``(data_4d, info)`` on the kept electrodes, or ``None`` where
+        :func:`assr_roi_channels` keeps none.
+    """
+    import mne
+
+    keep = assr_roi_channels(
+        info,
+        coordinate_system,
+        n_pca=n_pca,
+        lenient_mask=lenient_mask,
+        label=label,
+        logger=logger,
+        complement=complement,
+    )
+    if keep is None:
+        return None
     return data_4d[:, keep], mne.pick_info(info, keep)
+
+
+def run_corrca_fits(
+    raw_4d: np.ndarray,
+    info,
+    coordinate_system: CoordinateSystems,
+    full: IvaVariants,
+    args: argparse.Namespace,
+    *,
+    prepare: Callable[[np.ndarray, bool], np.ndarray],
+    run_fit: Callable[[CorrcaFit], None],
+    label: str,
+    logger: logging.Logger,
+) -> None:
+    """Run every fit of a stage-06b run through *run_fit*, in :func:`corrca_run_plan`
+    order.
+
+    All from the SAME loaded raw-power tensor. Each fit's input is made only when the
+    fit starts — cut to its electrodes first, then *prepare*-d. Cutting first is
+    exact: the log and the z-scoring both act per channel. A cut the montage cannot
+    hold is skipped with a warning (:func:`assr_roi_channels`).
+
+    ``--parallel_fits 1`` runs the fits one after another in this process. Above 1,
+    each fit runs in its own forked process, which reads the loaded tensor without
+    copying it, and fits start in plan order while the running ones weigh at most
+    ``--parallel_fits`` full montages: a cut fit weighs its share of the channels.
+    A fit holds about three copies of its prepared input at its peak (the input, its
+    z-scored copy and one temporary), so the budget is a memory budget. A failed fit
+    lets the running ones finish and starts no other, then raises.
+
+    :param raw_4d: ``(S, C, F, T)`` raw wavelet power on the full montage.
+    :param full: The raw-power full fit, a key of :data:`CORRCA_LOG_OF`.
+    :param prepare: ``(data, log_power) -> input``: ``log10`` when asked, then
+        whatever standardisation the join applies before the fit.
+    :param run_fit: Fits (or reads back), stores and draws one fit.
+    :raises RuntimeError: If a parallel fit's process fails.
+    """
+    import mne
+
+    fits = []
+    for variant, channels, log_power in corrca_run_plan(full, args):
+        keep = None
+        if channels != "full":
+            keep = assr_roi_channels(
+                info,
+                coordinate_system,
+                n_pca=args.n_pca,
+                lenient_mask=args.lenient_mask,
+                label=label,
+                logger=logger,
+                complement=channels == "non_roi",
+            )
+            if keep is None:
+                continue
+        fits.append((variant, channels, log_power, keep))
+
+    def _run(variant, channels, log_power, keep) -> None:
+        data, kept = raw_4d, info
+        if keep is not None:
+            data, kept = raw_4d[:, keep], mne.pick_info(info, keep)
+        run_fit(CorrcaFit(variant, prepare(data, log_power), kept, channels, log_power))
+
+    if args.parallel_fits <= 1:
+        for fit in fits:
+            _run(*fit)
+        return
+
+    n_full = len(info.ch_names)
+    budget = args.parallel_fits * n_full
+    weights = [n_full if keep is None else keep.size for *_, keep in fits]
+    # Fork: the children read raw_4d (and run_fit's closure) in place, unpickled.
+    context = multiprocessing.get_context("fork")
+    waiting, running, failed = list(range(len(fits))), {}, []
+    while waiting or running:
+        if failed:
+            waiting.clear()
+        # Start what the budget holds, skipping ahead past a fit too heavy for now; an
+        # idle run always takes the next fit, however heavy.
+        for index in list(waiting):
+            load = sum(weights[i] for i in running)
+            if running and load + weights[index] > budget:
+                continue
+            process = context.Process(target=_run, args=fits[index])
+            process.start()
+            running[index] = process
+            waiting.remove(index)
+            logger.info(
+                f"[{label}] started {fits[index][0].value} (pid {process.pid}); "
+                f"{len(running)} fit(s) running"
+            )
+        if not running:
+            break
+        multiprocessing.connection.wait([p.sentinel for p in running.values()])
+        for index, process in list(running.items()):
+            if process.is_alive():
+                continue
+            process.join()
+            del running[index]
+            if process.exitcode != 0:
+                failed.append(f"{fits[index][0].value} (exit code {process.exitcode})")
+    if failed:
+        raise RuntimeError(f"[{label}] fit(s) failed: {', '.join(failed)}")
+
+
+def standardise_joined_tracks(
+    data_4d: np.ndarray, boundaries: Sequence[int], zscore_mode: str
+) -> np.ndarray:
+    """The standardisation of the time-axis join, on an already joined raw array.
+
+    What :func:`~src.analysis.condition_tracks.concatenate_condition_tracks` does with
+    *zscore_mode*, applied after the fact, so one raw join can be prepared both on raw
+    and on log power.
+
+    :param boundaries: Segment edges, ``PairedConditionTracks.boundaries``.
+    :param zscore_mode: One of :data:`~src.analysis.condition_tracks.ZSCORE_MODES`.
+    """
+    from src.analysis.wavelet_ica import zscore_by_time
+
+    if zscore_mode == "per_condition":
+        return np.concatenate(
+            [
+                zscore_by_time(data_4d[..., start:stop])
+                for start, stop in zip(boundaries[:-1], boundaries[1:])
+            ],
+            axis=-1,
+        )
+    if zscore_mode == "joint":
+        return zscore_by_time(data_4d)
+    return data_4d
+
+
+#: Title note of each masked reading of the full fit, in drawing order.
+CORRCA_MASKED_READINGS = {
+    "roi_masked": "ROI-masked filter (weights outside the ASSR electrodes zeroed)",
+    "non_roi_masked": "non-ROI-masked filter (weights on the ASSR electrodes zeroed)",
+}
 
 
 def roi_masked_corrca_sources(
@@ -490,6 +928,7 @@ def roi_masked_corrca_sources(
     lenient_mask: bool,
     label: str,
     logger: logging.Logger,
+    complement: bool = False,
 ) -> np.ndarray | None:
     """The fitted shared filter, restricted to the ASSR electrodes, on its own input.
 
@@ -500,6 +939,8 @@ def roi_masked_corrca_sources(
 
     :param data_4d: ``(S, C, F, T)`` the tensor the model was fitted on.
     :param model: The oriented fit, so the masked sources carry its signs.
+    :param complement: Zero the ASSR electrodes instead, keeping the rest of the head
+        (the ``non_roi_masked`` reading); the two masked filters add up to the full one.
     :return: ``(S, K, F, T)``, or ``None`` when the montage has no ASSR electrode.
     """
     from src.analysis.assr_trials import (
@@ -524,11 +965,14 @@ def roi_masked_corrca_sources(
     mask = assr_electrode_mask(
         list(channel_names), coordinate_system, strict=not lenient_mask
     )
+    if complement:
+        mask = ~mask
     filters = np.asarray(model.filters).T  # (K, C)
     masked = restrict_filters_to_mask(filters, mask)
     share = mask_weight_share(filters, mask)
     logger.info(
-        f"[{label}] ROI-masked filter over {int(mask.sum())} electrode(s); |w| kept "
+        f"[{label}] {'non-ROI' if complement else 'ROI'}-masked filter over "
+        f"{int(mask.sum())} electrode(s); |w| kept "
         + ", ".join(f"CC {k + 1} {v:.0%}" for k, v in enumerate(share))
     )
     n_subjects, _n_channels, n_freqs, n_times = data_4d.shape
@@ -546,6 +990,7 @@ def anchor_corrca_signs(
     lenient_mask: bool,
     label: str,
     logger: logging.Logger,
+    expect_anchor: bool = True,
 ) -> tuple[CorrcaDecomposition, str, dict[str, np.ndarray]]:
     """Orient each CorrCA component to the ASSR electrodes, once per component.
 
@@ -556,6 +1001,8 @@ def anchor_corrca_signs(
     electrode keeps the fit's own orientation (largest pattern weight positive), which
     is still one consistent sign per component, so no group mean cancels.
 
+    :param expect_anchor: ``False`` for a fit cut to the non-ROI electrodes, which
+        has no anchor electrode by design, so its fallback is not warned about.
     :return: ``(oriented, alignment_note, store_extras)``.
     """
     from src.io.loading import assr_electrode_mask
@@ -565,10 +1012,11 @@ def anchor_corrca_signs(
     except FileNotFoundError:
         present = np.zeros(len(channel_names), dtype=bool)
     if not present.any():
-        logger.warning(
+        (logger.warning if expect_anchor else logger.info)(
             f"[{label}] no anchor electrode of {coordinate_system.value} in this "
             "montage; components keep the fit's orientation (largest shared-pattern "
-            "weight positive). Check --coordinate_system."
+            "weight positive)."
+            + (" Check --coordinate_system." if expect_anchor else "")
         )
         return (
             corrca,

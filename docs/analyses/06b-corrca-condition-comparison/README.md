@@ -13,14 +13,32 @@ compared panel for panel.
 |---|---|---|
 | Decompose, compare, store: subject axis (`JoinedSeparate`) | `scripts/run_corrca_condition_comparison.py` | `run_condition_separate.pbs` |
 | Decompose, compare, store: time axis (`JoinedTracks`) | `scripts/run_corrca_condition_tracks.py` | `run_condition_tracks.pbs` |
-| SNR / contrast grid on the stored components (§5) | `scripts/run_corrca_snr_grid.py` | `run_snr_grid_separate.pbs`, `run_snr_grid_tracks.pbs` |
+| Decompose, store: each condition alone (§2) | `scripts/run_corrca_individual_conditions.py` | `run_individual_conditions.pbs` |
+| SNR / contrast grid on the stored components (§5) | `scripts/run_corrca_snr_grid.py` | the same job, second step |
 
-The SNR jobs read the store the first two write (`--store_components`, same `--n_pca`,
-full channel set), so run them second.
+Each job fits six times from one data load, in this order: the full montage, the full
+montage on log power (`_log`, §5c), the ASSR ROI alone (`_roi`), every other electrode
+(`_non_roi`; §5b), then `_log_roi` and `_log_non_roi`. It then runs the SNR grid on the
+six stores in the same order. The fit runs with `--skip_stored`: a fit whose store for that
+`--n_pca` and band already exists is read back instead of refit, and every figure is
+still drawn from it. The data is loaded either way, for the masked maps and any fit
+still missing. A store fitted on other data (cohort, channels, time extent: the store
+name does not record `--n_times` or `--n_pairs`) is refused, not reused.
+`qsub -v FORCE_FIT=1` refits all six; `qsub -v N_PCA=<n>` picks the component count
+(default 5).
+
+The six fits run in parallel, each in its own forked process that reads the one loaded
+tensor without copying it. `--parallel_fits P` is a memory budget in full-montage fits:
+fits start in plan order while the running ones weigh at most `P`, where a cut fit
+weighs its share of the channels (ROI ~0.2, non-ROI ~0.8). A running fit holds about
+three copies of its prepared input at its peak (the input, its z-scored copy and one
+temporary). The broadband joins run with `P = 2`, the individual conditions and the
+gamma jobs with `P = 3`; each job's header gives the memory estimate. `P = 1` (the
+script default) runs the fits one after another in one process.
 
 Every job has a `*_gamma.pbs` twin that decomposes only 30–50 Hz (`--band_range 30 50`,
-stored and plotted as `30-50hz`, under `bands/`). The gamma SNR jobs read the gamma
-store (`--band 30-50hz`).
+stored and plotted as `30-50hz`, under `bands/`), whose grid reads the gamma store
+(`--band 30-50hz`).
 
 The notebooks in `notebooks/06b-corrca-condition-comparison/` select parameters at
 reduced scale: `corrca_channel_joined_*` for the decomposition (`BAND_RANGE = (30, 50)`
@@ -111,6 +129,14 @@ The joins are the stage-06 ones; only what they mean for a shared filter differs
   and are drawn as one shared row. This is the cleanest inter-condition contrast here:
   one fixed spatial component, observed under two conditions.
 
+Beside the joins, **`corrca_channel_individual_conditions`** fits each condition alone:
+the time-axis join reduced to one track, so every participant the condition has is one
+subject (not only the matched ones), and each condition gets its **own** filters. `CC 1`
+of Placebo and `CC 1` of Psilocybin are then two different spatial combinations, to be
+compared by their topographies and synchrony, not row by row; there is no paired test.
+The store is a one-segment tracks store under the condition itself
+(`iva_results/<Condition>/`), so the SNR grid reads it as it reads the join.
+
 ## 3. Synchrony per condition
 
 The read-out IVA has no counterpart for. For each condition, using the **same**
@@ -152,15 +178,22 @@ plots/06b-corrca-condition-comparison/<JoinedSeparate|JoinedTracks>_<MusicType>/
         corrca_shared_topomaps.png, corrca_condition_isc.png
         corrca_condition_isc.csv, corrca_participant_isc.csv, corrca_condition_isc_test.csv
         participants/*_cc<k>_participants_*.png
-data/processed/<experiment>/iva_results/<JoinedSeparate|JoinedTracks>/
+plots/06b-corrca-condition-comparison/IndividualConditions_<MusicType>/
+    <broadband|bands>/corrca_channel_individual_conditions/<Condition>/pca_<n>/
+        the same, with condition_mean_topomaps.png and no _test.csv
+data/processed/<experiment>/iva_results/<JoinedSeparate|JoinedTracks|Condition>/
     <variant>__<MusicType>__<spectrum>__pca<n>.npz        (--store_components)
 ```
 
+The `_roi` and `_non_roi` fits (§5b) draw into `<variant>_roi/` and `<variant>_non_roi/`
+beside them, and the SNR grid (§5) into a `snr_grid/` subdirectory of the fit it read.
+The full fit also draws `roi_masked_*` and `non_roi_masked_*` TF maps (§5b).
+
 `condition_mean_tf_maps_onset.png` and the `participants/*onset_*` grids are
 trial-normalised (each trial in its own pre-onset SD, median over trials), as every
-ASSR trial-locked map is — see stage 06, §7. `run_corrca_snr_grid.py` also draws
-`corrca_snr_grid/pca_<n>/tf_baseline_maps.png` (every component) and stores the
-per-participant maps in `results/<experiment>/assr_snr_grid__*__tf_baseline.npz`.
+ASSR trial-locked map is — see stage 06, §7. `run_corrca_snr_grid.py` stores the
+per-participant maps in `results/<experiment>/assr_snr_grid__*__tf_baseline.npz`; it
+draws no TF map or topography itself, only its statistical figures (§5).
 
 The component store is the stage-06 one (`src/io/iva_store.py`), keyed by the
 `IvaVariants.CORRCA_*` members. Besides the TF maps and per-recording patterns it keeps
@@ -215,31 +248,37 @@ It draws the same figures per grid cell: `pvalue_summary__<variant>`,
   the rest of the head carries. Neither is renormalised; every reading is in units of
   its own pre-stimulus SD, so their scales never meet. An ROI store (§5b) has no
   electrode outside the ROI and skips `non_roi_masked`.
-- **Masked TF maps** (`--masked_tf_maps`, on in `run_snr_grid_tracks.pbs`): the masked
-  variants also get full trial-normalised TF maps, read the way the stored sources'
-  are. They are stored beside those in the `__tf_baseline.npz`
+- **Masked TF maps** (`--masked_tf_maps`, on in every job): the masked
+  variants' full trial-normalised TF maps, read the way the stored sources' are, are
+  stored (not drawn) beside those in the `__tf_baseline.npz`
   (`tf_baseline__<variant>__<Condition>`). The cache is then read at every frequency
   of the store rather than only at the 40 Hz selections, several times the read time.
 
 **Outputs:**
 
-- `results/<experiment>/assr_snr_grid__corrca_channel_joined_<join>__<spectrum>__pca<N>.csv`
-- `plots/06b-corrca-condition-comparison/<Condition>_<Music>/<spectrum>/corrca_snr_grid/pca_<N>/`
+- `results/<experiment>/assr_snr_grid__<variant>__<spectrum>__pca<N>.csv`; an
+  individual condition's files carry it, `<variant>__<Condition>__<spectrum>`
+- plots in `snr_grid/` inside the fit's own directory (§4): `.../<variant>/pca_<N>/snr_grid/`,
+  likewise under `<variant>_roi/` and `<variant>_non_roi/`, and under
+  `.../corrca_channel_individual_conditions/<Condition>/pca_<N>/` for one condition.
+  Each grid cell gets `<selection>/<window>/` with the three statistical figures and
+  nothing else: the TF maps and topographies are the fit's, in its directory.
 
-The plot directory also holds `masked_filter_topomaps.png` and
-`non_roi_masked_filter_topomaps.png`, which show what the `roi_masked` and
-`non_roi_masked` rows read, and with `--masked_tf_maps` their
-`tf_baseline_maps__<variant>.png`. A `_roi` store (§5b) writes to `corrca_snr_grid_roi/` instead.
+**Individual conditions.** `--variant corrca_channel_individual_conditions` runs the
+grid once per condition, each on that condition alone. The filters differ between the
+conditions, so there is nothing to contrast: only the `snr` family is tested, the
+p-value summary is not drawn and the TF map has one row.
 
 ## 5b. The binary ROI
 
 Two ways of asking what the CorrCA components carry from the ASSR electrodes alone:
 
-- **ROI-masked maps of the full fit.** Both fit scripts draw
+- **ROI- and non-ROI-masked maps of the full fit.** Every fit script draws
   `roi_masked_condition_mean_tf_maps.png` (and `_onset`, and `participants/roi_masked_*`):
   the fitted shared filter with every weight outside the ROI zeroed — not renormalised —
-  applied to the z-scored signal the fit saw. They are the TF-map counterpart of the
-  grid's `roi_masked` rows. `--skip_roi_masked` drops them.
+  applied to the z-scored signal the fit saw; then `non_roi_masked_*`, the same with the
+  ROI zeroed instead. The two add up to the full maps. They are the TF-map counterpart
+  of the grid's `roi_masked` / `non_roi_masked` rows. `--skip_roi_masked` drops both.
 - **A fit on the ROI alone.** Every fit run makes a second fit from the same loaded
   tensor, with the channel axis cut to the ROI **before** the z-scoring, so ROI → z-score
   → PCA → CorrCA. It is stored and drawn as `corrca_channel_joined_{separate,tracks}_roi`,
@@ -247,7 +286,38 @@ Two ways of asking what the CorrCA components carry from the ASSR electrodes alo
   There `roi_masked` coincides with `full` by construction, a free check that the store
   and the cache agree. The ROI fit is skipped, with a warning, when the montage holds no
   ASSR electrode or fewer than `--n_pca` of them; `--skip_roi_fit` (fit) and `--skip_roi`
-  (grid) skip it outright. The existing jobs run both.
+  (grid) skip it outright.
+- **A fit on the rest of the head.** The same cut to every electrode BUT the ROI, stored
+  and drawn as `<join>_non_roi`, third. It has no anchor electrode, so it keeps the
+  fit's own orientation (largest shared-pattern weight positive). The grid reads its
+  store on the full montage, with the filters zero on the ROI, so its references read
+  the same electrodes as every other store's; only its `full` rows are tested, and
+  only against `ASSR-mask (full)`, since a reference read through its subspace is
+  identically zero. `--skip_non_roi_fit` (fit) and `--skip_non_roi` (grid) skip it.
+
+## 5c. Log-power variant
+
+Every run also fits on log power: `log10` of the wavelet power (floored at the dtype's
+smallest normal number, as in stage 08), taken **before any z-scoring**, including the
+time-axis join's per-condition z-scoring. A component is then fitted on relative power
+changes rather than absolute ones, which the strongest bursts dominate. Everything
+else is the raw-power fit's: the same cuts, the masked maps, the figures and the SNR
+grid. The products are stored and drawn as the `*_log` variants beside the raw ones
+(`corrca_channel_joined_tracks_log`, `..._log_roi`, `..._log_non_roi`, and likewise for
+the subject-axis join and the individual conditions). `--skip_log_power` drops the
+three log-power fits (and the grid's reading of their stores).
+
+One load serves both: each fit's input is prepared from the raw tensor when the fit
+comes up — cut to its electrodes, then the log if any, then the join's
+standardisation — so only one prepared copy is held at a time. For the time-axis join
+the tracks are therefore joined raw (`zscore_mode none`) and standardised per fit with
+`--zscore_mode`, exactly as the join would have.
+
+In the SNR grid a `*_log*` store reads its masked rows on the log cache, z-scored like
+the fit's input. It adds a fourth reference, **`ASSR-mask (log, PCA, z)`**: the PCA
+mask on that same log-then-z-scored signal, the like-for-like reference for what the
+decomposition was handed. The other three references are the raw-power ones every
+store carries, so the two variants can be compared on them directly.
 
 ## 6. Not here yet
 
@@ -256,4 +326,6 @@ Two ways of asking what the CorrCA components carry from the ASSR electrodes alo
 - **A time-shift surrogate null for the group ISC.**
 - **Time-resolved ISC on the component signals.** Sliding windows, to locate *when* each
   condition is synchronised.
-- **Fitting on Placebo only.** Then project Psilocybin through those filters.
+- **Projecting one condition through the other's filters.** The individual-condition
+  fits give each condition its own; scoring Psilocybin through the Placebo filters is
+  not done yet.

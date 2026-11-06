@@ -22,6 +22,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from src.analysis import assr_trials as at
+from src.analysis.wavelet_ica import log10_power
 from src.definitions.fields import IvaVariants
 from src.io.wavelet_store import WaveletSet, iter_wavelet_subjects
 
@@ -83,6 +84,9 @@ class ProjectedVariants:
     #: ``None`` unless asked for.
     masked_tf_z: np.ndarray | None = None
     outside_tf_z: np.ndarray | None = None
+    #: The PCA mask on ``log10`` power, then z-scored — the reference a log-power
+    #: decomposition is read against; ``None`` unless *log_power*.
+    pca_log_z: np.ndarray | None = None
 
 
 def store_channel_index(
@@ -122,6 +126,7 @@ def project_condition(
     *,
     outside_filters: np.ndarray | None = None,
     tf_freq_indices: np.ndarray | None = None,
+    log_power: bool = False,
 ) -> ProjectedVariants:
     """Read one condition once; return every per-condition array the grid needs.
 
@@ -145,6 +150,9 @@ def project_condition(
         anchor electrodes zeroed instead, for :attr:`ProjectedVariants.outside_z`.
     :param tf_freq_indices: Cache bins at which to also project the masked filters
         (:attr:`ProjectedVariants.masked_tf_z`, ``outside_tf_z``).
+    :param log_power: The decomposition was fitted on ``log10`` power: its masked
+        filters read the z-scored LOG cache, and :attr:`ProjectedVariants.pca_log_z`
+        is added. The other reference rows stay on raw power, as for every store.
     :return: A :class:`ProjectedVariants`.
     :raises ValueError: If a store channel is absent from the cache.
     """
@@ -170,6 +178,7 @@ def project_condition(
     masked_z = _empty(n_comp)
     outside_z = None if outside_filters is None else _empty(n_comp)
     masked_tf_z = outside_tf_z = None
+    pca_log_z = _empty(1) if log_power else None
     if tf_at is not None:
         masked_tf_z = _empty(n_comp, tf_at.size)
         if outside_filters is not None:
@@ -189,9 +198,12 @@ def project_condition(
         if channel_index is not None:
             wide = wide[channel_index]
         wide_z = zscore_time(wide)
-        block, block_z = wide, wide_z
+        # What the decomposition was handed, which its learned rows must read.
+        wide_fit = zscore_time(log10_power(wide)) if log_power else wide_z
+        block, block_z, block_fit = wide, wide_z, wide_fit
         if tf_at is not None:
             block, block_z = wide[:, grid_at], wide_z[:, grid_at]
+            block_fit = wide_fit[:, grid_at]
         store = resolve(name, condition)
         pca_row = pca_rows[store][None, :]
         reference_raw[row] = at.project_channels(
@@ -200,17 +212,19 @@ def project_condition(
         roi_raw[row] = block[roi_index]
 
         pca_z[row] = at.project_channels(pca_row, block_z)
+        if pca_log_z is not None:
+            pca_log_z[row] = at.project_channels(pca_row, block_fit)
         # The restricted operators read the z-scored wavelet and NOT raw power: the
         # weights presume that scaling, and a weighted average of raw power is
         # additionally weighted by each electrode's own power level — the very artefact
         # roi_channelwise_snr exists to remove from the binary reference. And no PCA:
         # P^T P mixes every channel back in, which would defeat "read only these
         # electrodes" entirely.
-        masked_z[row] = at.project_channels(masked_filters[store], block_z)
+        masked_z[row] = at.project_channels(masked_filters[store], block_fit)
         if outside_z is not None:
-            outside_z[row] = at.project_channels(outside_filters[store], block_z)
+            outside_z[row] = at.project_channels(outside_filters[store], block_fit)
         if tf_at is not None:
-            tf_z = wide_z[:, tf_at]
+            tf_z = wide_fit[:, tf_at]
             masked_tf_z[row] = at.project_channels(masked_filters[store], tf_z)
             if outside_tf_z is not None:
                 outside_tf_z[row] = at.project_channels(outside_filters[store], tf_z)
@@ -227,4 +241,5 @@ def project_condition(
         outside_z=outside_z,
         masked_tf_z=masked_tf_z,
         outside_tf_z=outside_tf_z,
+        pca_log_z=pca_log_z,
     )

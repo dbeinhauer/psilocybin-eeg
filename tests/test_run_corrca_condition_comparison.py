@@ -16,9 +16,9 @@ import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 import pytest  # noqa: E402
 
+from scripts.analysis_common import CORRCA_STAGE_DIR as _STAGE_DIR  # noqa: E402
 from scripts.run_corrca_condition_comparison import (  # noqa: E402
     _ANALYSIS_DIR,
-    _STAGE_DIR,
     main,
 )
 from src.definitions.fields import (  # noqa: E402

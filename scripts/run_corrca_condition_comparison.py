@@ -50,13 +50,22 @@ Figures (panels labelled ``CC <k>``):
   - ``roi_masked_condition_mean_tf_maps`` (+ ``_onset``, + ``participants/roi_masked_*``)
     — the same TF maps with the fitted filter restricted to the ASSR electrodes (every
     other weight zeroed) on the z-scored signal: what the component carries from the
-    ROI alone. ``--skip_roi_masked`` drops them.
+    ROI alone
+  - ``non_roi_masked_*`` — the same with the ASSR electrodes zeroed instead: what the
+    rest of the head carries. The two add up to the full maps. ``--skip_roi_masked``
+    drops both.
 
-Every run then fits a second time on the binary ASSR ROI alone, from the same
-loaded tensor: the channel axis is cut to the ROI BEFORE the z-scoring (ROI → z-score →
-PCA → CorrCA), and that fit is stored and drawn as ``corrca_channel_joined_separate_roi``
-beside the full-montage one. It is skipped, with a warning, when the montage holds no
-ASSR electrode or fewer than ``--n_pca`` of them; ``--skip_roi_fit`` skips it outright.
+Every run then fits twice more from the same loaded tensor, the channel axis cut
+BEFORE the z-scoring: on the binary ASSR ROI alone (ROI → z-score → PCA → CorrCA),
+stored and drawn as ``corrca_channel_joined_separate_roi``, then on every other electrode,
+as ``corrca_channel_joined_separate_non_roi``. A cut is skipped, with a warning, when the
+montage holds no ASSR electrode or fewer than ``--n_pca`` kept channels;
+``--skip_roi_fit`` / ``--skip_non_roi_fit`` skip it outright. The non-ROI fit has no
+anchor electrode, so it keeps the fit's own orientation.
+
+With ``--skip_stored --store_components`` a fit whose store exists is read back
+instead of refit and every figure is drawn from it, so a rerun redraws without
+recomputing; a store fitted on other data (cohort, channels, time extent) is refused.
 
 Output::
 
@@ -64,6 +73,7 @@ Output::
         broadband/corrca_channel_joined_separate/pca_<n_pca>/
         bands/corrca_channel_joined_separate/pca_<n_pca>/      # --band / --band_range
         broadband/corrca_channel_joined_separate_roi/pca_<n_pca>/  # the ROI fit
+        broadband/corrca_channel_joined_separate_non_roi/pca_<n_pca>/  # the rest
 
 Examples::
 
@@ -98,13 +108,17 @@ import numpy as np  # noqa: E402
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.analysis_common import (  # noqa: E402
+    CORRCA_MASKED_READINGS,
+    CorrcaFit,
     add_corrca_condition_args,
     anchor_corrca_signs,
+    corrca_plots_dir,
     corrca_store_extras,
     log_corrca_conditions,
     resolve_wavelet_dir,
-    restrict_to_assr_roi,
     roi_masked_corrca_sources,
+    run_corrca_fits,
+    stored_corrca_fit,
     write_corrca_condition_report,
 )
 from scripts.notebook_helpers import load_joined_condition_wavelets  # noqa: E402
@@ -118,6 +132,7 @@ from src.analysis.corrca import (  # noqa: E402
     paired_condition_test,
 )
 from src.analysis.iva_condition_comparison import slice_to_band  # noqa: E402
+from src.analysis.wavelet_ica import log10_power  # noqa: E402
 from src.definitions.constants import ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
     ConditionVariants,
@@ -127,7 +142,6 @@ from src.definitions.fields import (  # noqa: E402
     IvaComponentArrays,
     IvaVariants,
     MusicTypeVariants,
-    SpectrumTypeVariants,
 )
 from src.definitions.frequency import band_token  # noqa: E402
 from src.io.iva_store import save_iva_components  # noqa: E402
@@ -142,14 +156,9 @@ from src.visualization.iva_quality_plots import topo_info_subset  # noqa: E402
 
 _logger = logging.getLogger(__name__)
 
-#: Stage directory under ``plots/``.
-_STAGE_DIR = "06b-corrca-condition-comparison"
-
 #: Store variant, and the analysis-type subdirectory named after it.
 _VARIANT = IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE
 _ANALYSIS_DIR = _VARIANT.value
-#: The same join fitted on the ASSR electrodes alone, the second fit of every run.
-_VARIANT_ROI = IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE_ROI
 
 #: Frequency (Hz) marked on every TF panel — the ASSR stimulation frequency.
 _TF_FREQ_MARKS = [iva_quality.ASSR_FREQ]
@@ -178,6 +187,9 @@ def run_corrca_condition_comparison(
     """
     experiment_name = ExperimentNames(args.experiment)
     conditions = [ConditionVariants(c) for c in args.conditions]
+    run_label = f"{ConditionVariants.JOINED_SEPARATE.value}_{music_type.value}"
+    band = tuple(args.band_range) if args.band_range is not None else args.band
+    band_name = band_token(band)
     freqs_full = np.linspace(
         args.wavelet_freq_min, args.wavelet_freq_max, args.wavelet_n_freqs
     )
@@ -198,32 +210,22 @@ def run_corrca_condition_comparison(
         pooled = pooled.select_participants(keep)
         _logger.info(f"Restricted to {len(keep)} participant(s): {keep}")
 
-    label = f"{ConditionVariants.JOINED_SEPARATE.value}_{music_type.value}"
     sfreq = pooled.data.sfreq
-    band = tuple(args.band_range) if args.band_range is not None else args.band
-    band_name = band_token(band)
     data_4d, freqs = slice_to_band(pooled.data.data, freqs_full, band)
     coordinate_system = CoordinateSystems(args.coordinate_system)
     topo_info = topo_info_subset(
         condition_analyzers[pooled.conditions[0]].info, data_4d.shape[1]
     )
-    # The full montage, then the binary ASSR ROI alone from the SAME loaded tensor —
-    # one load, two fits, each stored and drawn under its own variant.
-    fits = [(_VARIANT, data_4d, topo_info)]
-    if not args.skip_roi_fit:
-        roi_input = restrict_to_assr_roi(
-            data_4d,
-            topo_info,
-            coordinate_system,
-            n_pca=args.n_pca,
-            lenient_mask=args.lenient_mask,
-            label=label,
-            logger=_logger,
-        )
-        if roi_input is not None:
-            fits.append((_VARIANT_ROI, *roi_input))
-    for variant, data_4d, topo_info in fits:
-        roi = variant == _VARIANT_ROI
+    condition_rows = [c.value for c in pooled.conditions]
+    subject_participants = list(pooled.participants)
+    subject_conditions = [c.value for c in pooled.subject_conditions]
+
+    # Full montage, on raw then log power, then the ASSR ROI and the rest of the head,
+    # raw then log — one load, every fit stored and drawn as its own variant. The fit
+    # z-scores each recording itself, so preparing is only the optional log.
+    def _run_fit(fit: CorrcaFit) -> None:
+        variant, data_4d, topo_info = fit.variant, fit.data, fit.info
+        label = f"{run_label}_log" if fit.log_power else run_label
         _logger.info(f"[{label}] === {variant.value} ===")
         _n_rec, n_ch, _n_freqs, n_t = data_4d.shape
         _logger.info(
@@ -231,38 +233,37 @@ def run_corrca_condition_comparison(
             f"{pooled.n_pairs} participant(s) × {len(pooled.conditions)} condition(s)"
         )
 
-        corrca = decompose_channel_corrca(
-            data_4d, label=label, n_pca=args.n_pca, gamma=args.gamma
-        )
         channel_names = list(topo_info.ch_names)
-        corrca, alignment_note, extras = anchor_corrca_signs(
-            corrca,
-            channel_names,
-            coordinate_system,
-            lenient_mask=args.lenient_mask,
+        reused = stored_corrca_fit(
+            args,
+            ConditionVariants.JOINED_SEPARATE,
+            variant,
+            music_type,
+            band_name,
+            participants=subject_participants,
+            subject_conditions=subject_conditions,
+            channel_names=channel_names,
+            n_times=n_t,
             label=label,
             logger=_logger,
         )
-        sources, patterns = corrca.sources, corrca.patterns
-        # On an ROI fit every weight is already inside the ROI, so the masked maps would
-        # repeat the plain ones.
-        masked_sources = (
-            None
-            if roi or args.skip_roi_masked
-            else roi_masked_corrca_sources(
-                data_4d,
-                corrca.model,
+        if reused is None:
+            corrca = decompose_channel_corrca(
+                data_4d, label=label, n_pca=args.n_pca, gamma=args.gamma
+            )
+            corrca, alignment_note, extras = anchor_corrca_signs(
+                corrca,
                 channel_names,
                 coordinate_system,
                 lenient_mask=args.lenient_mask,
                 label=label,
                 logger=_logger,
+                expect_anchor=fit.channels != "non_roi",
             )
-        )
+        else:
+            corrca, alignment_note = reused
+        sources, patterns = corrca.sources, corrca.patterns
 
-        condition_rows = [c.value for c in pooled.conditions]
-        subject_participants = list(pooled.participants)
-        subject_conditions = [c.value for c in pooled.subject_conditions]
         rows_of = {
             c: [i for i, rc in enumerate(subject_conditions) if rc == c]
             for c in condition_rows
@@ -278,7 +279,7 @@ def run_corrca_condition_comparison(
         )
         log_corrca_conditions(group_isc, tests, label=label, logger=_logger)
 
-        if args.store_components:
+        if args.store_components and reused is None:
             stored_onsets: dict[str, np.ndarray] = {}
             for condition in pooled.conditions:
                 onsets_c = pooled.condition_onsets(condition)
@@ -329,20 +330,13 @@ def run_corrca_condition_comparison(
                 f"--components {out_of_range} are outside 1..{n_components}."
             )
 
-        spectrum = (
-            SpectrumTypeVariants.BROADBAND.value
-            if band_name is None
-            else SpectrumTypeVariants.BANDS.value
-        )
-        out_dir = ProjectPaths.analysis_plots_dir(
-            _STAGE_DIR,
-            label,
-            spectrum=spectrum,
-            analysis_type=variant.value,
+        out_dir = corrca_plots_dir(
+            variant,
+            ConditionVariants.JOINED_SEPARATE,
+            music_type,
+            band=band_name,
             n_pca=args.n_pca,
-            root=(
-                args.save_dir if args.save_dir is not None else ProjectPaths.PLOTS_PATH
-            ),
+            root=args.save_dir,
         )
         out_dir.mkdir(parents=True, exist_ok=True)
         participants_dir = out_dir / "participants"
@@ -465,16 +459,31 @@ def run_corrca_condition_comparison(
             return drawn
 
         written += _draw_tf_maps(sources, prefix, shared)
-        if masked_sources is not None:
-            written += _draw_tf_maps(
-                masked_sources,
-                f"{prefix}roi_masked_",
-                {
-                    **shared,
-                    "alignment_note": "ROI-masked filter (weights outside the ASSR "
-                    f"electrodes zeroed); {alignment_note}",
-                },
+        # The full fit read through the ROI alone, then through the rest of the head. A
+        # cut fit has only one of the two electrode sets, so it has no masked reading.
+        masked_readings = (
+            {}
+            if fit.channels != "full" or args.skip_roi_masked
+            else CORRCA_MASKED_READINGS
+        )
+        for reading, note in masked_readings.items():
+            masked_sources = roi_masked_corrca_sources(
+                data_4d,
+                corrca.model,
+                channel_names,
+                coordinate_system,
+                lenient_mask=args.lenient_mask,
+                label=label,
+                logger=_logger,
+                complement=reading == "non_roi_masked",
             )
+            if masked_sources is not None:
+                written += _draw_tf_maps(
+                    masked_sources,
+                    f"{prefix}{reading}_",
+                    {**shared, "alignment_note": f"{note}; {alignment_note}"},
+                )
+            del masked_sources
 
         write_corrca_condition_report(
             corrca.model,
@@ -494,8 +503,18 @@ def run_corrca_condition_comparison(
             f"[{label}] done: {len(written)} per-participant figure(s), condition grids "
             f"and the synchrony report in {out_dir}"
         )
-        # Free this fit's arrays before the next one is computed.
-        del corrca, sources, patterns, masked_sources
+
+    run_corrca_fits(
+        data_4d,
+        topo_info,
+        coordinate_system,
+        _VARIANT,
+        args,
+        prepare=lambda data, log: log10_power(data) if log else data,
+        run_fit=_run_fit,
+        label=run_label,
+        logger=_logger,
+    )
 
 
 def run(args: argparse.Namespace) -> None:

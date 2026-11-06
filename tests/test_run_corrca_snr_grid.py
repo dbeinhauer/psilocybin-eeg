@@ -10,7 +10,9 @@ those filters span.
 import numpy as np
 import pytest
 
+from scripts.run_assr_snr_grid import _accumulate_tests
 from scripts.run_corrca_snr_grid import _build_arg_parser, corrca_operators
+from src.analysis import assr_trials as at
 
 N_CHANNELS, N_COMPONENTS = 12, 4
 
@@ -84,3 +86,44 @@ def test_an_roi_store_has_no_complement(shared_filters):
     ops = corrca_operators(shared_filters, everything / N_CHANNELS, everything)
     assert not ops["outside"].any()
     assert not ops["outside_share"].any()
+
+
+def test_cli_reads_the_log_power_stores_with_their_run():
+    # The log stores are read with the raw run, after the full store; not on their own.
+    assert _build_arg_parser().parse_args([]).skip_log_power is False
+    assert _build_arg_parser().parse_args(["--skip_log_power"]).skip_log_power
+    with pytest.raises(SystemExit):
+        _build_arg_parser().parse_args(
+            ["--variant", "corrca_channel_joined_tracks_log"]
+        )
+
+
+def test_cli_reads_the_individual_condition_stores():
+    args = _build_arg_parser().parse_args(
+        ["--variant", "corrca_channel_individual_conditions"]
+    )
+    assert args.variant == "corrca_channel_individual_conditions"
+
+
+def test_a_single_condition_is_tested_only_for_snr():
+    n_participants, n_components = 6, 2
+    comp_labels = [f"CC {k + 1}" for k in range(n_components)]
+    labels = comp_labels + list(at.MASK_LABELS)
+    value = {
+        "Placebo": np.random.default_rng(1).standard_normal(
+            (n_participants, len(labels))
+        )
+    }
+    rows = []
+    _accumulate_tests(
+        rows,
+        {"variant": "full"},
+        value,
+        ["Placebo"],
+        labels,
+        comp_labels,
+        "greater",
+        "less",
+    )
+    assert {r["family"] for r in rows} == {"snr"}
+    assert len(rows) == len(at.MASK_LABELS) * n_components

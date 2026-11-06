@@ -1,55 +1,81 @@
 #!/bin/bash
 #PBS -N PSILO_CORRCA_TRACKS_06B_BAND
 #PBS -l walltime=2:00:00
-#PBS -l select=1:ncpus=4:mem=200gb:scratch_local=80gb
+#PBS -l select=1:ncpus=8:mem=300gb:scratch_local=100gb
 #PBS -m ae
 #PBS -j oe
 
 # ---------------------------------------------------------------------------
-# Stage-06b CorrCA — condition comparison on the JOINED_TRACKS condition.
+# Stage-06b CorrCA — condition comparison on the JOINED_TRACKS condition,
+# then the ASSR SNR / condition-contrast grid on the stored fit.
 #
-# Runs scripts/run_corrca_condition_tracks.py (the same code as
-# notebooks/06b-corrca-condition-comparison/corrca_channel_joined_tracks.ipynb)
-# on full data. Each matched participant is one subject whose Placebo track is
-# followed by their Psilocybin track; CorrCA fits ONE channel filter per
-# component over both, so a component is the same spatial combination in both
-# conditions by construction. The projected sources are then split back into
-# the two segments, and each component's ISC is measured per condition — the
-# cleanest inter-condition synchrony contrast CorrCA offers.
+# 1. FIT: scripts/run_corrca_condition_tracks.py (the same code as
+#    notebooks/06b-corrca-condition-comparison/corrca_channel_joined_tracks.ipynb)
+#    on full data. Each matched participant is one subject whose Placebo track is
+#    followed by their Psilocybin track; CorrCA fits ONE channel filter per
+#    component over both, so a component is the same spatial combination in both
+#    conditions by construction. The projected sources are split back into the
+#    two segments and each component's ISC is measured per condition.
+#    Z-scoring is per condition before concatenation (--zscore_mode
+#    per_condition): an overall power difference is normalised away.
+#
+#    Six fits from the ONE loaded tensor, in this order:
+#      1. full montage                    2. full montage on log power ('_log')
+#      3. ASSR ROI alone ('_roi')         4. every other electrode ('_non_roi')
+#      5. '_log_roi'                      6. '_log_non_roi'
+#    Each cut is made BEFORE the z-scoring (ROI -> z-score -> PCA -> CorrCA). The
+#    log-power fits take log10 of the power (floored at the dtype's smallest
+#    normal number) BEFORE any z-scoring. Both full-montage fits also draw their
+#    filter read through the ROI alone (roi_masked_*) and through the rest of the
+#    head (non_roi_masked_*). --skip_log_power / --skip_roi_fit /
+#    --skip_non_roi_fit drop fits.
+#    The fits run in parallel, each in its own forked process reading the one
+#    loaded tensor; --parallel_fits caps how many at once (see MEMORY).
+#
+#    A fit whose store for this N_PCA already exists is READ BACK, not refit
+#    (--skip_stored), and every figure is still drawn from it; the data is
+#    loaded either way, for the masked maps and any missing fit. A store
+#    fitted on other data is refused. qsub -v FORCE_FIT=1 refits all six.
 #
 # GAMMA BAND: the frequency axis is cut to 30-50 Hz (--band_range 30 50) BEFORE
 # the fit, so the filter is chosen on gamma-band samples only and the 40 Hz
 # steady state is not blended with the low-frequency onset response. Stored and
-# plotted under the band token '30-50hz' (plots under bands/), beside the
-# broadband run rather than over it.
+# plotted under the band token '30-50hz' (plots under bands/, a '30-50hz_'
+# prefix), beside the broadband run rather than over it; the grid reads that
+# store with --band 30-50hz.
 #
-# Z-scoring is per condition before concatenation (--zscore_mode per_condition):
-# an overall power difference is normalised away. Use --zscore_mode joint to keep
-# the amplitude contrast.
+# 2. SNR GRID: scripts/run_corrca_snr_grid.py (the same code as
+#    corrca_component_analysis_joined_tracks.ipynb) on all six stores, in
+#    the fit order. The stored sources are unsplit; the grid
+#    slices each condition's segment back out before cutting its trials. Same
+#    trials, three ASSR references and three test families (contrast,
+#    discrimination, snr; exact Wilcoxon over participants, uncorrected) as
+#    stage 06. Signal variants: full, roi_masked, non_roi_masked,
+#    storing their trial-normalised TF maps (--masked_tf_maps).
+#    A '_non_roi' store has no ASSR
+#    electrode: only its full rows, against the ASSR-mask (full) reference.
 #
-# Plots (panels "CC <k>"):
-#   - shared_mean_topomaps              per-participant topographies, ONE row
-#   - condition_mean_tf_maps / ..._onset
-#   - participants/*
-#   - corrca_shared_topomaps
-#   - corrca_condition_isc (+ 3 CSVs)
+# qsub -v N_PCA=10 fits / reads another component count (default 5).
 #
-# ROI FIT. Every run also fits a second time on the binary ASSR ROI alone
-# (ROI -> z-score -> PCA -> CorrCA), from the same loaded tensor, stored and drawn
-# as the '_roi' variant beside the full-montage one; the full fit also draws
-# 'roi_masked_*' TF maps (its filter restricted to the ROI). --skip_roi_fit /
-# --skip_roi_masked drop them. Walltime allows for the second fit and figure set.
-#
-# Output:
-#   plots/06b-corrca-condition-comparison/JoinedTracks_ASSR/
-#       bands/corrca_channel_joined_tracks/pca_<N>/
+# Output (the grid in a snr_grid/ subdirectory of the fit's):
+#   plots/06b-corrca-condition-comparison/JoinedTracks_ASSR/bands/
+#       corrca_channel_joined_tracks/pca_<N>/       # + _log, _roi, _non_roi,
+#                                         _log_roi, _log_non_roi
+#           condition_mean_*, participants/, corrca_*,
+#           roi_masked_*, non_roi_masked_*             # fit
+#           snr_grid/<selection>/<window>/*.png        # SNR grid: p-values,
+#                                     SNR, trial courses only
 #   data/processed/assr/iva_results/JoinedTracks/
-#       corrca_channel_joined_tracks__ASSR__30-50hz__pca<N>.npz   (unsplit)
+#       corrca_channel_joined_tracks{,_log,_roi,_non_roi,_log_roi,_log_non_roi}__ASSR__30-50hz__pca<N>.npz   (unsplit)
+#   results/assr/assr_snr_grid__corrca_channel_joined_tracks{,_log,_roi,_non_roi,_log_roi,_log_non_roi}__30-50hz__pca<N>*
 #
-# MEMORY. Same shape as the stage-06 tracks job (upper bound ~290 GB for the
-# full ASSR extent: per-condition tensors, standardised segments and the
-# concatenation coexist briefly). Do not reduce mem without also setting
-# --n_times, which here applies PER CONDITION.
+# MEMORY (499 GB is the hard cap). The band is cut after loading, so the load is
+# the broadband one (the joined broadband tensor, ~44 GB, stays beside the ~18 GB
+# 30-50 Hz cut). Each running fit holds about three copies of its prepared input
+# at its peak — a full-montage gamma fit ~55 GB — and --parallel_fits 3 lets three
+# full-montage fits' worth run at once (cut fits count as their share of the
+# channels: ROI ~0.2, non-ROI ~0.8), so ~230 GB. Check resources_used.mem after a
+# run.
 # ---------------------------------------------------------------------------
 
 set -e
@@ -68,7 +94,8 @@ DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
 SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
 
 export TMPDIR=$SCRATCHDIR
-export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4
+# Up to four fits run at once (--parallel_fits), two BLAS threads each.
+export OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2
 
 test -n "$SCRATCHDIR" || {
   echo >&2 "SCRATCHDIR is not set!"
@@ -82,31 +109,63 @@ cd "$DATADIR" || {
 
 cd "$SCRATCHDIR"
 
+N_PCA="${N_PCA:-5}"
+FORCE_FIT="${FORCE_FIT:-0}"
+echo "PCA dimensions: $N_PCA, force fit: $FORCE_FIT"
+
+# The runner heredoc below is quoted, so these are read from the container
+# environment at run time rather than substituted here.
+export SINGULARITYENV_N_PCA="$N_PCA" APPTAINERENV_N_PCA="$N_PCA"
+export SINGULARITYENV_FORCE_FIT="$FORCE_FIT" APPTAINERENV_FORCE_FIT="$FORCE_FIT"
+
 cat << 'EOF' > run_inside.sh
 #!/bin/bash
+# A failed fit must not leave the grid reading a stale store.
+set -e
 source /opt/myproject/.venv/bin/activate
 
-WAVELET_DIR="/mnt/data/processed"
-STORE_DIR="/mnt/data/processed"
+DATA_DIR="/mnt/data/processed"
 
-COMMON_ARGS=(
-    --experiment assr
-    --conditions Placebo Psilocybin
-    --gamma 0.0
-    --wavelet_data_dir "$WAVELET_DIR"
-    --reuse_wavelets
-    --store_components
-    --store_dir "$STORE_DIR"
-    --n_jobs -1
-)
+SKIP_STORED=(--skip_stored)
+if [ "${FORCE_FIT:-0}" = "1" ]; then
+    SKIP_STORED=()
+fi
 
-echo "=== 30-50 Hz at $(date) ==="
+echo "=== fit at $(date) ==="
 python /mnt/scripts/run_corrca_condition_tracks.py \
-    --n_pca 5 \
+    --experiment assr \
+    --conditions Placebo Psilocybin \
+    --n_pca "${N_PCA:-5}" \
+    --gamma 0.0 \
     --band_range 30 50 \
     --zscore_mode per_condition \
-    "${COMMON_ARGS[@]}"
+    --wavelet_data_dir "$DATA_DIR" \
+    --reuse_wavelets \
+    --store_components \
+    --store_dir "$DATA_DIR" \
+    "${SKIP_STORED[@]}" \
+    --save_dir /mnt/plots \
+    --n_jobs -1 \
+    --parallel_fits 3
 
+echo "=== SNR grid at $(date) ==="
+python /mnt/scripts/run_corrca_snr_grid.py \
+    --experiment assr \
+    --variant corrca_channel_joined_tracks \
+    --music_type ASSR \
+    --band 30-50hz \
+    --conditions Placebo Psilocybin \
+    --n_pca "${N_PCA:-5}" \
+    --halfwidths 0 5 \
+    --stimulus_intervals 0:0.5 0.2:0.5 \
+    --signal_variants full roi_masked non_roi_masked \
+    --masked_tf_maps \
+    --contrast_alternative greater \
+    --snr_alternative less \
+    --store_dir "$DATA_DIR" \
+    --wavelet_data_dir "$DATA_DIR" \
+    --results_dir /mnt/results/assr \
+    --save_dir /mnt/plots
 EOF
 
 chmod +x run_inside.sh

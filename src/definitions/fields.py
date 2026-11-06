@@ -261,6 +261,13 @@ class IvaVariants(Enum):
       — the same two CorrCA joins fitted on the binary ASSR ROI only (the electrodes of
       ``config/assr_electrodes/``), cut BEFORE the z-scoring, so their channel axis is
       that subset rather than the montage.
+    * ``*_NON_ROI`` — the same fits on every electrode BUT the ROI, cut likewise before
+      the z-scoring: what the rest of the head carries on its own.
+    * :attr:`CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS` (+ ``_ROI``, ``_NON_ROI``) — CorrCA
+      fitted on one real condition alone, one participant per subject: the time-axis
+      join reduced to a single track. Stored under that condition, one per condition.
+    * ``*_LOG`` (+ ``_LOG_ROI``, ``_LOG_NON_ROI``) — every CorrCA fit above with the
+      power ``log10``-transformed BEFORE the z-scoring.
     """
 
     CHANNEL = "iva_channel"
@@ -272,6 +279,34 @@ class IvaVariants(Enum):
     CORRCA_CHANNEL_JOINED_TRACKS = "corrca_channel_joined_tracks"
     CORRCA_CHANNEL_JOINED_SEPARATE_ROI = "corrca_channel_joined_separate_roi"
     CORRCA_CHANNEL_JOINED_TRACKS_ROI = "corrca_channel_joined_tracks_roi"
+    CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS = "corrca_channel_individual_conditions"
+    CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS_ROI = (
+        "corrca_channel_individual_conditions_roi"
+    )
+    CORRCA_CHANNEL_JOINED_SEPARATE_NON_ROI = "corrca_channel_joined_separate_non_roi"
+    CORRCA_CHANNEL_JOINED_TRACKS_NON_ROI = "corrca_channel_joined_tracks_non_roi"
+    CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS_NON_ROI = (
+        "corrca_channel_individual_conditions_non_roi"
+    )
+    CORRCA_CHANNEL_JOINED_SEPARATE_LOG = "corrca_channel_joined_separate_log"
+    CORRCA_CHANNEL_JOINED_SEPARATE_LOG_ROI = "corrca_channel_joined_separate_log_roi"
+    CORRCA_CHANNEL_JOINED_SEPARATE_LOG_NON_ROI = (
+        "corrca_channel_joined_separate_log_non_roi"
+    )
+    CORRCA_CHANNEL_JOINED_TRACKS_LOG = "corrca_channel_joined_tracks_log"
+    CORRCA_CHANNEL_JOINED_TRACKS_LOG_ROI = "corrca_channel_joined_tracks_log_roi"
+    CORRCA_CHANNEL_JOINED_TRACKS_LOG_NON_ROI = (
+        "corrca_channel_joined_tracks_log_non_roi"
+    )
+    CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS_LOG = (
+        "corrca_channel_individual_conditions_log"
+    )
+    CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS_LOG_ROI = (
+        "corrca_channel_individual_conditions_log_roi"
+    )
+    CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS_LOG_NON_ROI = (
+        "corrca_channel_individual_conditions_log_non_roi"
+    )
 
 
 class JicaVariants(Enum):

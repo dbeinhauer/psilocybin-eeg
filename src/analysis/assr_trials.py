@@ -76,6 +76,9 @@ FULL_MASK_LABEL = f"{BINARY_FILTER_LABEL} (full)"
 PCA_MASK_LABEL = f"{BINARY_FILTER_LABEL} (PCA)"
 PCA_Z_MASK_LABEL = f"{BINARY_FILTER_LABEL} (PCA, z)"
 MASK_LABELS = (FULL_MASK_LABEL, PCA_MASK_LABEL, PCA_Z_MASK_LABEL)
+#: The PCA operator on ``log10`` power, then z-scored: what a log-power decomposition
+#: (stage 06b ``*_log``) was handed. Only those read-outs add it, after the three.
+LOG_PCA_Z_MASK_LABEL = f"{BINARY_FILTER_LABEL} (log, PCA, z)"
 
 #: Filename-safe slug per reference row, so a figure written per reference says which
 #: one it is without a space or a comma in the path.

@@ -1,0 +1,175 @@
+#!/bin/bash
+#PBS -N PSILO_CORRCA_INDIVIDUAL_06B_BAND
+#PBS -l walltime=5:00:00
+#PBS -l select=1:ncpus=8:mem=200gb:scratch_local=100gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-06b CorrCA — each condition ALONE (Placebo only, then Psilocybin
+# only), then the ASSR SNR grid on each stored fit.
+#
+# 1. FIT: scripts/run_corrca_individual_conditions.py — the JOINED_TRACKS fit
+#    reduced to one track, run once per condition. Every participant the
+#    condition has is one subject; CorrCA fits that condition its OWN channel
+#    filters, so 'CC 1' of Placebo and 'CC 1' of Psilocybin are different spatial
+#    combinations, compared by topography and synchrony, not row by row. No
+#    paired ISC test. Sign: one per component, from the shared pattern against
+#    the ASSR electrode mask.
+#
+#    Six fits from the ONE loaded tensor, in this order:
+#      1. full montage                    2. full montage on log power ('_log')
+#      3. ASSR ROI alone ('_roi')         4. every other electrode ('_non_roi')
+#      5. '_log_roi'                      6. '_log_non_roi'
+#    Each cut is made BEFORE the z-scoring (ROI -> z-score -> PCA -> CorrCA). The
+#    log-power fits take log10 of the power (floored at the dtype's smallest
+#    normal number) BEFORE any z-scoring. Both full-montage fits also draw their
+#    filter read through the ROI alone (roi_masked_*) and through the rest of the
+#    head (non_roi_masked_*). --skip_log_power / --skip_roi_fit /
+#    --skip_non_roi_fit drop fits.
+#    The fits run in parallel, each in its own forked process reading the one
+#    loaded tensor; --parallel_fits caps how many at once (see MEMORY).
+#
+#    A fit whose store for this N_PCA already exists is READ BACK, not refit
+#    (--skip_stored), and every figure is still drawn from it; the data is
+#    loaded either way, for the masked maps and any missing fit. A store
+#    fitted on other data is refused. qsub -v FORCE_FIT=1 refits all six.
+#
+# GAMMA BAND: the frequency axis is cut to 30-50 Hz (--band_range 30 50) BEFORE
+# the fit, so the filter is chosen on gamma-band samples only and the 40 Hz
+# steady state is not blended with the low-frequency onset response. Stored and
+# plotted under the band token '30-50hz' (plots under bands/, a '30-50hz_'
+# prefix), beside the broadband run rather than over it; the grid reads that
+# store with --band 30-50hz.
+#
+# 2. SNR GRID: scripts/run_corrca_snr_grid.py on each condition's six
+#    stores, in the fit order, each on that condition alone. Same
+#    trials and three ASSR references as stage 06; with nothing to contrast, only the
+#    snr family is tested (exact Wilcoxon over participants, uncorrected) and the
+#    p-value summary is not drawn. Signal variants: full, roi_masked, non_roi_masked,
+#    storing their trial-normalised TF maps (--masked_tf_maps).
+#
+# qsub -v N_PCA=10 fits / reads another component count (default 5).
+#
+# Output (the grid in a snr_grid/ subdirectory of the fit's):
+#   plots/06b-corrca-condition-comparison/IndividualConditions_ASSR/bands/
+#       corrca_channel_individual_conditions/<Condition>/pca_<N>/   # + _log, _roi, _non_roi,
+#                                         _log_roi, _log_non_roi
+#           condition_mean_*, participants/, corrca_*,
+#           roi_masked_*, non_roi_masked_*             # fit
+#           snr_grid/<selection>/<window>/*.png        # SNR grid: p-values,
+#                                     SNR, trial courses only
+#   data/processed/assr/iva_results/<Condition>/
+#       corrca_channel_individual_conditions{,_log,_roi,_non_roi,_log_roi,_log_non_roi}__ASSR__30-50hz__pca<N>.npz
+#   results/assr/assr_snr_grid__corrca_channel_individual_conditions{,_log,_roi,_non_roi,_log_roi,_log_non_roi}__<Condition>__30-50hz__pca<N>*
+#
+# MEMORY (499 GB is the hard cap). The band is cut after loading, so the load is
+# the broadband one (one condition's broadband tensor, ~29 GB, stays beside the
+# ~12 GB 30-50 Hz cut). Each running fit holds about three copies of its prepared
+# input at its peak — a full-montage gamma fit ~37 GB — and --parallel_fits 3 lets
+# three full-montage fits' worth run at once (cut fits count as their share of
+# the channels: ROI ~0.2, non-ROI ~0.8), so ~150 GB. The conditions run one after
+# the other, hence the walltime. Check resources_used.mem after a run.
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+# Up to four fits run at once (--parallel_fits), two BLAS threads each.
+export OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+N_PCA="${N_PCA:-5}"
+FORCE_FIT="${FORCE_FIT:-0}"
+echo "PCA dimensions: $N_PCA, force fit: $FORCE_FIT"
+
+# The runner heredoc below is quoted, so these are read from the container
+# environment at run time rather than substituted here.
+export SINGULARITYENV_N_PCA="$N_PCA" APPTAINERENV_N_PCA="$N_PCA"
+export SINGULARITYENV_FORCE_FIT="$FORCE_FIT" APPTAINERENV_FORCE_FIT="$FORCE_FIT"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+# A failed fit must not leave the grid reading a stale store.
+set -e
+source /opt/myproject/.venv/bin/activate
+
+DATA_DIR="/mnt/data/processed"
+
+SKIP_STORED=(--skip_stored)
+if [ "${FORCE_FIT:-0}" = "1" ]; then
+    SKIP_STORED=()
+fi
+
+echo "=== fit at $(date) ==="
+python /mnt/scripts/run_corrca_individual_conditions.py \
+    --experiment assr \
+    --conditions Placebo Psilocybin \
+    --n_pca "${N_PCA:-5}" \
+    --gamma 0.0 \
+    --band_range 30 50 \
+    --wavelet_data_dir "$DATA_DIR" \
+    --reuse_wavelets \
+    --store_components \
+    --store_dir "$DATA_DIR" \
+    "${SKIP_STORED[@]}" \
+    --save_dir /mnt/plots \
+    --n_jobs -1 \
+    --parallel_fits 3
+
+echo "=== SNR grid at $(date) ==="
+python /mnt/scripts/run_corrca_snr_grid.py \
+    --experiment assr \
+    --variant corrca_channel_individual_conditions \
+    --music_type ASSR \
+    --band 30-50hz \
+    --conditions Placebo Psilocybin \
+    --n_pca "${N_PCA:-5}" \
+    --halfwidths 0 5 \
+    --stimulus_intervals 0:0.5 0.2:0.5 \
+    --signal_variants full roi_masked non_roi_masked \
+    --masked_tf_maps \
+    --contrast_alternative greater \
+    --snr_alternative less \
+    --store_dir "$DATA_DIR" \
+    --wavelet_data_dir "$DATA_DIR" \
+    --results_dir /mnt/results/assr \
+    --save_dir /mnt/plots
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch

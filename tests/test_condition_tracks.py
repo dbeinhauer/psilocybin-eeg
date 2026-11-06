@@ -748,3 +748,21 @@ class TestSelectParticipants:
     def test_empty_selection_raises(self, pooled):
         with pytest.raises(ValueError, match="No participants selected"):
             pooled.select_participants([])
+
+
+@pytest.mark.parametrize("zscore_mode", ZSCORE_MODES)
+def test_standardising_a_raw_join_matches_standardising_at_the_join(
+    tracks, participants, zscore_mode
+):
+    """Stage 06b joins the tracks raw and standardises each fit's input afterwards."""
+    from scripts.analysis_common import standardise_joined_tracks
+
+    at_join = concatenate_condition_tracks(
+        tracks, participants, zscore_mode=zscore_mode
+    )
+    raw = concatenate_condition_tracks(tracks, participants, zscore_mode="none")
+    np.testing.assert_allclose(
+        standardise_joined_tracks(raw.data.data, raw.boundaries, zscore_mode),
+        at_join.data.data,
+        atol=1e-12,
+    )

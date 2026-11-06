@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from src.analysis.wavelet_ica import log10_power
 from src.analysis.assr_variants import (
     project_condition,
     store_channel_index,
@@ -119,4 +120,29 @@ def test_the_two_masked_filters_add_up_to_the_full_one(cache, filters):
             projected.outside_tf_z[row][:, GRID_BINS],
             projected.outside_z[row],
             rtol=1e-5,
+        )
+
+
+def test_a_log_power_store_reads_its_masked_rows_on_the_log_cache(cache, filters):
+    wavelet_set, arrays = cache
+    raw = _project(wavelet_set, filters)
+    log = _project(wavelet_set, filters, log_power=True)
+    # The references shared by every store stay on raw power.
+    for name in ("reference_raw", "pca_z", "roi_raw"):
+        np.testing.assert_allclose(getattr(log, name), getattr(raw, name), rtol=1e-6)
+    assert raw.pca_log_z is None
+    binary = ROI / ROI.sum()
+    for row, p in enumerate(PARTICIPANTS):
+        fitted = zscore_time(log10_power(arrays[p][:, GRID_BINS]))
+        np.testing.assert_allclose(
+            log.masked_z[row],
+            np.tensordot(filters * ROI, fitted, axes=([1], [0])),
+            rtol=1e-4,
+            atol=1e-5,
+        )
+        np.testing.assert_allclose(
+            log.pca_log_z[row, 0],
+            np.tensordot(binary, fitted, axes=([0], [0])),
+            rtol=1e-4,
+            atol=1e-5,
         )

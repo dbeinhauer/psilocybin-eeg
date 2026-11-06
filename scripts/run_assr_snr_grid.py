@@ -799,9 +799,10 @@ def _accumulate_tests(
     """Append every test row for one grid cell to *rows_out*.
 
     *mask_labels* are the reference rows of *labels* the learned rows are tested against.
+    A single condition has nothing to contrast, so only its ``snr`` rows are added.
     """
     # 4b — condition contrast per source
-    for s, source in enumerate(labels):
+    for s, source in enumerate(labels if len(conditions) > 1 else ()):
         rows_out.append(
             {
                 **cell,
@@ -815,7 +816,7 @@ def _accumulate_tests(
             }
         )
     # 4c — discrimination gain vs each reference
-    for mask in mask_labels:
+    for mask in mask_labels if len(conditions) > 1 else ():
         ref = labels.index(mask)
         for source in ic_labels:
             s = labels.index(source)

@@ -4,8 +4,9 @@ decomposition (stage 06b).
 
 The CorrCA companion of ``run_assr_snr_grid.py`` (stage 06): the same trials, the same
 three ASSR references, the same three test families and the same figures, read off a
-store written by ``run_corrca_condition_comparison.py`` / ``run_corrca_condition_tracks.py``
-with ``--store_components``. What changes is where the spatial operators come from:
+store written by ``run_corrca_condition_comparison.py``,
+``run_corrca_condition_tracks.py`` or ``run_corrca_individual_conditions.py`` with
+``--store_components``. What changes is where the spatial operators come from:
 
 * **The filter is the fitted one.** CorrCA stores its shared filters
   (``corrca_filters``), so they are read back rather than recovered by inverting each
@@ -38,17 +39,38 @@ the unit, exact Wilcoxon, uncorrected): ``contrast`` (Placebo − Psilocybin per
 ``discrimination`` (does a component separate the conditions better than a reference)
 and ``snr`` (is a component's response weaker than a reference's, per condition).
 
-**ROI stores.** Every run reads the join's ``_roi`` store too, after the full one: the
-second fit the two stage-06b fit scripts make on the ASSR electrodes alone. The cache is
-read on those electrodes only, and ``roi_masked`` coincides with ``full`` by
-construction — every weight is already inside the ROI — which is a free check that the
-store and the cache agree. A missing ``_roi`` store is skipped with a warning;
-``--skip_roi`` skips it outright.
+**Every store of the run.** The full store first, then — in the order the fit scripts
+made them — its log-power twin (``_log``), the fits on the ASSR electrodes alone
+(``_roi``) and on every other electrode (``_non_roi``), and their log-power twins
+(``_log_roi``, ``_log_non_roi``). A missing one is skipped with a warning;
+``--skip_log_power`` / ``--skip_roi`` / ``--skip_non_roi`` skip them outright.
 
-**Masked TF maps.** With ``--masked_tf_maps`` the masked variants also get full
-trial-normalised TF maps, like the stored sources' ``tf_baseline``: the cache is then
-read at every frequency of the store, not only at the 40 Hz selections, which costs
-several times the read time.
+An ROI store's cache is read on its electrodes only, and ``roi_masked`` coincides with
+``full`` by construction — every weight is already inside the ROI — which is a free
+check that the store and the cache agree. A non-ROI store holds no ASSR electrode, so
+its cache is read on the full montage with the filters zero on the ASSR electrodes:
+only its ``full`` rows are tested, and only against ``ASSR-mask (full)`` — a
+reference read through its subspace would be identically zero.
+
+**Log-power stores.** A ``*_log*`` store was fitted on ``log10`` power, z-scored. Its
+masked rows read the cache the same way (log, then z-score), and it gets a fourth
+reference, ``ASSR-mask (log, PCA, z)``: the PCA mask on that same signal, the
+like-for-like reference for what the decomposition was handed. The other three
+references stay as for every store, so the two variants share them.
+
+**Individual conditions.** ``--variant corrca_channel_individual_conditions`` reads
+the per-condition stores, one pass per ``--conditions`` entry, each on its own
+condition alone. Their filters differ between the conditions, so there is nothing to
+contrast: only the ``snr`` family is tested and the p-value summary is not drawn.
+
+**Masked TF maps.** With ``--masked_tf_maps`` the masked variants' full
+trial-normalised TF maps are stored too, like the stored sources' ``tf_baseline``: the
+cache is then read at every frequency of the store, not only at the 40 Hz selections,
+which costs several times the read time.
+
+**Figures.** Only the statistical ones, per grid cell. The TF maps and topographies
+are the fit's, drawn in its own directory; the trial-normalised maps computed here are
+stored, not drawn.
 
 Outputs::
 
@@ -58,12 +80,12 @@ Outputs::
     results/<experiment>/assr_snr_grid__<variant>__<spectrum>__pca<N>__tf_baseline.npz
         # tf_baseline__<Condition>; with --masked_tf_maps also
         # tf_baseline__<signal variant>__<Condition> for the masked variants
-    plots/06b-corrca-condition-comparison/<Condition>_<Music>/<spectrum>/
-        corrca_snr_grid/pca_<N>/                # corrca_snr_grid_roi/ for a '_roi' store
-            masked_filter_topomaps.png       # what the roi_masked rows read
-            non_roi_masked_filter_topomaps.png  # what the non_roi_masked rows read
-            tf_baseline_maps.png             # every component, trial-normalised
-            tf_baseline_maps__<masked variant>.png  # with --masked_tf_maps
+        # an individual condition's files carry it: <variant>__<Condition>__<spectrum>
+    plots/06b-corrca-condition-comparison/<Join>_<Music>/<spectrum>/
+        <variant>/pca_<N>/snr_grid/   # inside the fit's own directory; <variant>_roi/,
+                                      # <variant>_non_roi/ for those stores;
+                                      # IndividualConditions_<Music>/<spectrum>/
+                                      # <variant>/<Condition>/pca_<N>/snr_grid/
             <selection>/<window>/
                 pvalue_summary__<variant>.png
                 snr_by_condition__<variant>.png
@@ -90,11 +112,18 @@ import matplotlib
 
 matplotlib.use("Agg")  # headless: no display on a compute node
 
-import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from scripts.analysis_common import (  # noqa: E402
+    CORRCA_INDIVIDUAL_VARIANTS,
+    CORRCA_LOG_OF,
+    CORRCA_LOG_VARIANTS,
+    corrca_plots_dir,
+    corrca_run_plan,
+)
 
 # The cache/onset conventions and the test bookkeeping are stage 06's, so both stages
 # read the same trials and write the same CSV schema.
@@ -128,12 +157,8 @@ from src.io.saving import (  # noqa: E402
     save_snr_values,
 )
 from src.io.wavelet_store import find_wavelet_set, wavelet_label_dir  # noqa: E402
-from src.visualization.assr_filter_plots import (
-    plot_masked_filter_topomaps,
-)  # noqa: E402
 from src.visualization.assr_snr_plots import (  # noqa: E402
     plot_cell,
-    plot_condition_tf_grid,
     plot_courses,
     plot_snr,
 )
@@ -141,16 +166,9 @@ from src.visualization.corrca_plots import COMPONENT_PREFIX  # noqa: E402
 
 _logger = logging.getLogger(__name__)
 
-_STAGE_DIR = "06b-corrca-condition-comparison"
-_ANALYSIS_DIR = "corrca_snr_grid"
-#: The fits on the ASSR electrodes alone, whose figures go to their own directory.
-_ROI_OF = {
-    IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE: (
-        IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE_ROI
-    ),
-    IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS: IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS_ROI,
-}
-_ROI_VARIANTS = tuple(_ROI_OF.values())
+#: The grid's own subdirectory of the fit's plot directory, so its figures never sit
+#: among the fit's.
+_PLOTS_SUBDIR = "snr_grid"
 _MASK_LABELS = at.MASK_LABELS
 _FULL_LABEL = at.FULL_MASK_LABEL
 _SIGNAL_VARIANTS = ("full", "roi_masked", "non_roi_masked")
@@ -161,14 +179,12 @@ _MASKED = {
     "roi_masked": ("masked", "masked_z", "masked_tf_z"),
     "non_roi_masked": ("outside", "outside_z", "outside_tf_z"),
 }
-_MASKED_FILTER_FIGURE = "masked_filter_topomaps.png"
-_OUTSIDE_FILTER_FIGURE = "non_roi_masked_filter_topomaps.png"
-_TF_BASELINE_FIGURE = "tf_baseline_maps.png"
+_LOG_LABEL = at.LOG_PCA_Z_MASK_LABEL
+#: Every reference row project_condition can give, in the order its blocks stack.
+_REFERENCE_ORDER = (*_MASK_LABELS, _LOG_LABEL)
 _STORE_CONDITIONS = {
     IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE: ConditionVariants.JOINED_SEPARATE,
     IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS: ConditionVariants.JOINED_TRACKS,
-    IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE_ROI: ConditionVariants.JOINED_SEPARATE,
-    IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS_ROI: ConditionVariants.JOINED_TRACKS,
 }
 
 
@@ -182,14 +198,25 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     stored.add_argument(
         "--variant",
         default=IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE.value,
-        choices=[v.value for v in _ROI_OF],
-        help="Which stage-06b join to read: subject axis (separate) or time axis. "
-        "Its '_roi' store (the fit on the ASSR electrodes alone) is read after it.",
+        choices=[v.value for v in CORRCA_LOG_OF],
+        help="Which stage-06b run to read: subject axis (separate), time axis, or "
+        "each condition alone. Its full store is read first, then its '_log', "
+        "'_roi', '_non_roi', '_log_roi' and '_log_non_roi' ones — the fit order.",
+    )
+    stored.add_argument(
+        "--skip_log_power",
+        action="store_true",
+        help="Do not read the three log-power ('*_log') stores.",
     )
     stored.add_argument(
         "--skip_roi",
         action="store_true",
-        help="Read only the full-montage store, not the join's '_roi' one.",
+        help="Do not read the '_roi' store.",
+    )
+    stored.add_argument(
+        "--skip_non_roi",
+        action="store_true",
+        help="Do not read the '_non_roi' store.",
     )
     stored.add_argument("--music_type", default=MusicTypeVariants.ASSR.value)
     stored.add_argument("--band", default=None)
@@ -211,7 +238,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--conditions",
         nargs="+",
         default=None,
-        help="Two conditions, contrast order. Default Placebo Psilocybin.",
+        help="Two conditions, contrast order; for the individual-condition stores, "
+        "the conditions to read, each on its own. Default Placebo Psilocybin.",
     )
     data.add_argument(
         "--mask_sum",
@@ -320,27 +348,54 @@ def corrca_operators(
 
 
 def run(args: argparse.Namespace) -> None:
-    """Run the grid on the join's full-montage store, then on its ``_roi`` store."""
+    """Run the grid on every store of the run, in the order the fits were made.
+
+    The full montage, its log-power twin, then the ROI and non-ROI fits and their
+    log-power twins. Only the full store must exist. An individual-condition run has
+    one set of stores per condition, each read alone.
+    """
     variant = IvaVariants(args.variant)
-    run_store(args, variant)
-    if args.skip_roi:
-        return
-    run_store(args, _ROI_OF[variant], optional=True)
+    plan = corrca_run_plan(
+        variant,
+        argparse.Namespace(
+            skip_log_power=args.skip_log_power,
+            skip_roi_fit=args.skip_roi,
+            skip_non_roi_fit=args.skip_non_roi,
+        ),
+    )
+    if variant in CORRCA_INDIVIDUAL_VARIANTS:
+        stores = [
+            (ConditionVariants(c), [c])
+            for c in at.resolve_conditions(args.conditions or list(REAL_CONDITIONS))
+        ]
+    else:
+        stores = [(_STORE_CONDITIONS[variant], args.conditions)]
+    for store_condition, conditions in stores:
+        for fit, _channels, _log_power in plan:
+            run_store(args, fit, store_condition, conditions, optional=fit != variant)
 
 
 def run_store(
-    args: argparse.Namespace, variant: IvaVariants, *, optional: bool = False
+    args: argparse.Namespace,
+    variant: IvaVariants,
+    store_condition: ConditionVariants,
+    conditions: list[str] | None,
+    *,
+    optional: bool = False,
 ) -> None:
     """Run the full grid for one stored CorrCA decomposition.
 
+    :param store_condition: The store's condition: the join, or the one real
+        condition of an individual-condition fit.
+    :param conditions: Conditions to read, in contrast order; ``None`` is Placebo
+        then Psilocybin. A single condition tests only the ``snr`` family.
     :param optional: Skip, with a warning, when the store does not exist.
     """
     experiment = ExperimentNames(args.experiment)
-    store_condition = _STORE_CONDITIONS[variant]
     per_recording = store_condition == ConditionVariants.JOINED_SEPARATE
     music_type = MusicTypeVariants(args.music_type)
     coordinate_system = CoordinateSystems(args.coordinate_system)
-    conditions = at.resolve_conditions(args.conditions or list(REAL_CONDITIONS))
+    conditions = at.resolve_conditions(conditions or list(REAL_CONDITIONS))
 
     # ---- 1. store and operators -------------------------------------------
     try:
@@ -365,28 +420,71 @@ def run_store(
             "stage-06b CorrCA run with --store_components."
         )
     store_channels = list(results.channel_names)
+    shared_filters = np.asarray(results.extras["corrca_filters"], dtype=float)
+    # A fit cut to the non-ROI electrodes holds no ASSR electrode, so the cache is read
+    # on the full montage instead — the references then read the same electrodes as
+    # every other store's — and the stored filters are embedded with zeros on the ASSR
+    # electrodes. z-scoring is per channel, so the embedded filters read exactly what
+    # the fit saw. A reference read through the component subspace is identically zero
+    # there, so only the full-montage reference is kept.
+    no_roi = not assr_electrode_mask(
+        store_channels, coordinate_system, strict=False
+    ).any()
+    read_channels = store_channels
+    if no_roi:
+        read_channels = list(
+            find_wavelet_set(
+                wavelet_label_dir(
+                    args.wavelet_data_dir,
+                    experiment,
+                    f"{conditions[0]}_{music_type.value}",
+                )
+            ).channel_names
+        )
+        position = {name: i for i, name in enumerate(read_channels)}
+        embedded = np.zeros((len(read_channels), shared_filters.shape[1]))
+        embedded[[position[name] for name in store_channels]] = shared_filters
+        shared_filters = embedded
     electrode_mask = assr_electrode_mask(
-        store_channels, coordinate_system, strict=not args.lenient_mask
+        read_channels, coordinate_system, strict=not args.lenient_mask
     )
     binary = at.binary_filter_weights(electrode_mask, normalize=not args.mask_sum)
-    ops = corrca_operators(results.extras["corrca_filters"], binary, electrode_mask)
+    ops = corrca_operators(shared_filters, binary, electrode_mask)
     n_components = ops["filters"].shape[0]
     n_rows = results.n_subjects
-    n_channels = len(store_channels)
+    n_channels = len(read_channels)
     comp_labels = [f"{COMPONENT_PREFIX} {k + 1}" for k in range(n_components)]
-    labels = comp_labels + list(_MASK_LABELS)
+    # A log-power fit is also read against the PCA mask on log power, then z-scored —
+    # what it was handed.
+    log_power = variant in CORRCA_LOG_VARIANTS
+    if no_roi:
+        mask_labels = (_FULL_LABEL,)
+    elif log_power:
+        mask_labels = (*_MASK_LABELS, _LOG_LABEL)
+    else:
+        mask_labels = _MASK_LABELS
+    # Rows of the (binary raw, PCA raw, PCA z[, PCA log z]) reference block kept.
+    reference_rows = [_REFERENCE_ORDER.index(m) for m in mask_labels]
+    labels = comp_labels + list(mask_labels)
     full_mask_column = labels.index(_FULL_LABEL)
     anchor = str(results.extras.get("polarity_anchor", np.asarray("none")))
     _logger.info(
         f"variant {variant.value}: one shared filter, {n_components} component(s), "
-        f"{int(electrode_mask.sum())} ASSR electrode(s); sign anchor '{anchor}'"
+        f"{int(electrode_mask.sum())} ASSR electrode(s) read"
+        + (" beside the store's non-ROI ones" if no_roi else "")
+        + f"; sign anchor '{anchor}'"
     )
-    for k in range(n_components):
-        _logger.info(
-            f"  {comp_labels[k]}: |w| kept by the ROI restriction "
-            f"{ops['masked_share'][k]:.1%}"
-        )
     signals = list(args.signal_variants)
+    if no_roi:
+        # Its filters have no ASSR weight: roi_masked is zero and non_roi_masked = full.
+        _logger.info("a non-ROI store: only the full rows, against the full reference.")
+        signals = ["full"]
+    else:
+        for k in range(n_components):
+            _logger.info(
+                f"  {comp_labels[k]}: |w| kept by the ROI restriction "
+                f"{ops['masked_share'][k]:.1%}"
+            )
     if "non_roi_masked" in signals and electrode_mask.all():
         _logger.info(
             "every store channel is an ASSR electrode: no non_roi_masked rows."
@@ -463,7 +561,7 @@ def run_store(
             binary,
             np.broadcast_to(ops["pca_row"], (n_rows, n_channels)),
             union,
-            store_channels,
+            read_channels,
             args.n_times,
             np.flatnonzero(electrode_mask),
             np.broadcast_to(ops["masked"], (n_rows, n_components, n_channels)),
@@ -473,6 +571,7 @@ def run_store(
                 else None
             ),
             tf_freq_indices=tf_bins,
+            log_power=log_power,
         )
         for condition in conditions
     }
@@ -548,49 +647,23 @@ def run_store(
         if args.band is None
         else SpectrumTypeVariants.BANDS.value
     )
-    plots_dir = ProjectPaths.analysis_plots_dir(
-        _STAGE_DIR,
-        f"{store_condition.value}_{music_type.value}",
-        spectrum=spectrum,
-        analysis_type=(
-            f"{_ANALYSIS_DIR}_roi" if variant in _ROI_VARIANTS else _ANALYSIS_DIR
-        ),
-        n_pca=args.n_pca,
-        root=args.save_dir,
+    # Inside the fit's own directory, in a subdirectory of its own.
+    plots_dir = (
+        corrca_plots_dir(
+            variant,
+            store_condition,
+            music_type,
+            band=args.band,
+            n_pca=args.n_pca,
+            root=args.save_dir,
+        )
+        / _PLOTS_SUBDIR
     )
     plot_prefix = "" if args.band is None else f"{args.band}_"
+    # Only the statistical figures: the TF maps and topographies are the fit's, drawn
+    # in its own directory.
     if not args.skip_plots:
         plots_dir.mkdir(parents=True, exist_ok=True)
-        _write_filter_plot(
-            plots_dir,
-            plot_prefix,
-            results,
-            ops,
-            electrode_mask,
-            coordinate_system,
-            masked_signals,
-        )
-        tf_figure = Path(_TF_BASELINE_FIGURE)
-        for signal, maps in {"full": tf_baseline, **masked_tf}.items():
-            what = "stored sources" if signal == "full" else f"{signal} filter"
-            name = (
-                tf_figure.name
-                if signal == "full"
-                else f"{tf_figure.stem}__{signal}{tf_figure.suffix}"
-            )
-            plot_condition_tf_grid(
-                {c: maps[c].mean(axis=1) for c in conditions},
-                {c: [""] * n_components for c in conditions},
-                conditions,
-                times,
-                np.asarray(results.freqs),
-                args.center_freq,
-                f"{variant.value}: {what}, trial-normalised — group mean "
-                f"(n={n_participants})",
-                plots_dir / f"{plot_prefix}{name}",
-                component_prefix=COMPONENT_PREFIX,
-                colorbar_label="baseline SD",
-            )
 
     # ---- 6. the grid: selection x window ----------------------------------
     rows_out: list[dict] = []
@@ -610,9 +683,14 @@ def run_store(
                 [
                     proj.reference_raw[:, :, take, :].mean(axis=2),
                     proj.pca_z[:, :, take, :].mean(axis=2),
+                    *(
+                        []
+                        if proj.pca_log_z is None
+                        else [proj.pca_log_z[:, :, take, :].mean(axis=2)]
+                    ),
                 ],
                 axis=1,
-            )  # (P, 3, T)
+            )[:, reference_rows]  # (P, references, T)
             bands = {
                 "full": np.stack(
                     [src[:, bins, :].mean(axis=1) for src in stored[condition]]
@@ -682,6 +760,7 @@ def run_store(
                     comp_labels,
                     args.contrast_alternative,
                     args.snr_alternative,
+                    mask_labels=mask_labels,
                 )
                 if not args.skip_plots:
                     _write_cell_plots(
@@ -699,6 +778,7 @@ def run_store(
                         rows_out,
                         n_participants,
                         polarity_note,
+                        mask_labels,
                     )
 
     # ---- 7. one CSV for the whole grid ------------------------------------
@@ -708,8 +788,13 @@ def run_store(
         else ProjectPaths.PROJECT_ROOT / "results" / experiment.value
     )
     results_root.mkdir(parents=True, exist_ok=True)
+    store_token = (
+        f"{variant.value}__{store_condition.value}"
+        if variant in CORRCA_INDIVIDUAL_VARIANTS
+        else variant.value
+    )
     csv_path = results_root / (
-        f"assr_snr_grid__{variant.value}__{spectrum}__pca{args.n_pca}.csv"
+        f"assr_snr_grid__{store_token}__{spectrum}__pca{args.n_pca}.csv"
     )
     frame = pd.DataFrame(rows_out)
     frame.to_csv(csv_path, index=False)
@@ -741,40 +826,6 @@ def run_store(
     )
 
 
-def _write_filter_plot(
-    plots_dir,
-    plot_prefix,
-    results,
-    ops,
-    electrode_mask,
-    coordinate_system,
-    masked_signals,
-) -> None:
-    """The restricted shared filters the masked rows read, once per run."""
-    try:
-        info = results.topo_info(coordinate_system)
-    except (ValueError, FileNotFoundError) as exc:
-        _logger.warning(f"no topography layout for this store ({exc}); skipping.")
-        return
-    mask = np.asarray(electrode_mask, dtype=bool)
-    figures = {
-        "roi_masked": ("masked", int(mask.sum()), _MASKED_FILTER_FIGURE),
-        "non_roi_masked": ("outside", int((~mask).sum()), _OUTSIDE_FILTER_FIGURE),
-    }
-    # roi_masked's figure is drawn whatever the variants, as before.
-    for signal in dict.fromkeys(["roi_masked", *masked_signals]):
-        operator, n_kept, figure = figures[signal]
-        plot_masked_filter_topomaps(
-            ops[operator],
-            info,
-            weight_share=ops[f"{operator}_share"],
-            n_mask_channels=n_kept,
-            variant=signal,
-            save_path=plots_dir / f"{plot_prefix}{figure}",
-        )
-    plt.close("all")
-
-
 def _write_cell_plots(
     plots_dir,
     plot_prefix,
@@ -790,20 +841,26 @@ def _write_cell_plots(
     rows_out,
     n_participants,
     polarity_note,
+    mask_labels,
 ) -> None:
-    """The stage-06 three figures for one grid cell, with components named ``CC``."""
+    """The stage-06 three figures for one grid cell, with components named ``CC``.
+
+    A single condition has no contrast, so it gets no p-value summary and no
+    contrast box on its courses. *mask_labels* are the store's reference rows.
+    """
     tag = f"{cell['variant']}__{cell['selection']}__{cell['window']}"
     variant = cell["variant"]
     cell_dir = plots_dir / cell["selection"] / cell["window"]
     cell_dir.mkdir(parents=True, exist_ok=True)
     frame = pd.DataFrame([r for r in rows_out if all(r[k] == cell[k] for k in cell)])
+    paired = len(conditions) > 1
     cell_tables = {
-        "contrast": frame[frame["family"] == "contrast"],
+        "contrast": frame[frame["family"] == "contrast"] if paired else None,
         **{
             f"discrimination:{m}": frame[
                 (frame["family"] == "discrimination") & (frame["reference"] == m)
             ]
-            for m in _MASK_LABELS
+            for m in (mask_labels if paired else ())
         },
         **{
             f"snr:{m}:{c}": frame[
@@ -811,21 +868,23 @@ def _write_cell_plots(
                 & (frame["reference"] == m)
                 & (frame["condition"] == c)
             ]
-            for m in _MASK_LABELS
+            for m in mask_labels
             for c in conditions
         },
     }
-    plot_cell(
-        cell_tables,
-        value,
-        conditions,
-        labels,
-        comp_labels,
-        alpha,
-        f"Condition contrast & discrimination — {tag}, n={n_participants}",
-        cell_dir / f"{plot_prefix}pvalue_summary__{variant}.png",
-        component_prefix=COMPONENT_PREFIX,
-    )
+    if paired:
+        plot_cell(
+            cell_tables,
+            value,
+            conditions,
+            labels,
+            comp_labels,
+            alpha,
+            f"Condition contrast & discrimination — {tag}, n={n_participants}",
+            cell_dir / f"{plot_prefix}pvalue_summary__{variant}.png",
+            component_prefix=COMPONENT_PREFIX,
+            mask_labels=mask_labels,
+        )
     plot_snr(
         cell_tables,
         value,
@@ -836,6 +895,7 @@ def _write_cell_plots(
         f"n={n_participants}",
         cell_dir / f"{plot_prefix}snr_by_condition__{variant}.png",
         component_prefix=COMPONENT_PREFIX,
+        mask_labels=mask_labels,
     )
     plot_courses(
         course,
@@ -847,6 +907,7 @@ def _write_cell_plots(
         alpha,
         f"Trial course per spatial filter — {tag}, n={n_participants}\n{polarity_note}",
         cell_dir / f"{plot_prefix}trial_course_by_source__{variant}.png",
+        mask_labels=mask_labels,
     )
 
 
