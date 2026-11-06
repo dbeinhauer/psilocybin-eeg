@@ -137,10 +137,10 @@ what the wavelet transform ran on, so its sample indices address exactly the tim
 maps are on.
 
 **The window comes from the paradigm, not the recording.** `AssrEpoch` sets the baseline
-and post-onset span; the recording only *caps* the latter (`iva_quality.onset_window`
-shortens `post` by the shortest inter-onset gap) so an epoch can never reach the next
-stimulus. Both conditions then share the shorter `post`, so trials are contrastable sample
-for sample.
+and post-onset span (the one place to change them); the recording only *caps* the
+latter (`iva_quality.onset_window` shortens `post` to what the shortest inter-onset gap
+leaves after the baseline) so an epoch can never overlap the next. Both conditions then
+share the shorter `post`, so trials are contrastable sample for sample.
 
 **Each trial is referenced to its own pre-stimulus window** (`baseline_normalise`), not to
 a condition- or participant-level average. 40 Hz power drifts across the recording and
@@ -173,7 +173,8 @@ then an SNR in baseline SD, so it compares across conditions, components and met
 it is drawn without the per-participant equal weighting (`equalize=False`), which would
 undo that unit. The SD is per recording, hence per condition: every decomposition's
 sources are z-scored per condition upstream, and only a per-condition SD cancels that
-scale. A 100 ms baseline is short at the bottom of the map, but on CorrCA CC1 the pooled
+scale. The 100 ms baseline this was measured on is short at the bottom of the map, but
+on CorrCA CC1 the pooled
 within-window SD is a near-constant fraction of the total baseline SD from 1 to 50 Hz
 (0.2–0.4), so the divisor does not single out the low frequencies.
 

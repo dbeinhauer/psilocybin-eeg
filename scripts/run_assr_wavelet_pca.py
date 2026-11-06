@@ -22,10 +22,9 @@ Pipeline (per subject):
    removing the 1/f tilt so the PCA is not dominated by absolute low-frequency
    power.
 2. **Trial average.** The z-scored power is epoch-averaged around every ``fam+``
-   onset. The epoch keeps a fixed ``pre_pad`` before onset and the paradigm's
-   post-onset span — ``0.5`` s stimulus + ``0.5`` s post-stimulus (see
-   :class:`src.definitions.constants.AssrEpoch`) — capped by the shortest
-   inter-onset gap so no epoch overlaps a neighbouring stimulus.
+   onset, on the paradigm's epoch (:class:`src.definitions.constants.AssrEpoch`),
+   its post-onset span capped by the shortest inter-onset gap so no epoch overlaps
+   another.
 3. **Channel PCA.** Each ``(freq, time)`` bin is an observation and each channel
    a variable; PCA is fit over the ``(n_freqs*win, n_channels)`` matrix and each
    kept component's score map, reshaped to ``(n_freqs, win)``, is stored.
@@ -1079,9 +1078,9 @@ def run(args: argparse.Namespace) -> None:
     participants = [idx_to_pid[s] for s in sorted(idx_to_pid)]
 
     sfreq = args.sfreq
-    pre = int(round(args.pre_pad * sfreq))
-    # Paradigm window, only capped by the shortest gap so epochs never overlap.
-    post = min(int(round(args.post_window * sfreq)), int(gaps.min()))
+    # The paradigm window, its post-onset span capped so epochs never overlap.
+    pre = AssrEpoch.pre_onset_samples(sfreq)
+    post = AssrEpoch.post_onset_samples(sfreq, min_gap=int(gaps.min()))
     epoch_times = np.arange(-pre, post) / sfreq
     stim_mask = AssrEpoch.stimulus_mask(epoch_times)  # driven interval
     base_mask = epoch_times < 0.0  # pre-onset baseline
@@ -1105,13 +1104,6 @@ def run(args: argparse.Namespace) -> None:
         f"zscore_vs_recording={args.zscore_vs_recording}",
         flush=True,
     )
-    if pre + post > int(gaps.min()):
-        print(
-            f"  WARNING: epoch ({pre + post} samples) exceeds the shortest "
-            f"inter-onset gap ({int(gaps.min())}) — the pre-onset baseline reaches "
-            f"into the previous stimulus.",
-            flush=True,
-        )
 
     # ---- Wavelet: single streaming pass, PCA per subject --------------------
     print(f"Reading wavelets of {len(participants)} participant(s) ...", flush=True)
@@ -1452,23 +1444,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         type=float,
         default=250.0,
         help="Sampling rate of the concatenated / wavelet data.",
-    )
-    parser.add_argument(
-        "--pre_pad",
-        type=float,
-        default=AssrEpoch.PRE_ONSET_S,
-        help="Baseline kept before each onset (s).",
-    )
-    parser.add_argument(
-        "--post_window",
-        type=float,
-        default=AssrEpoch.POST_ONSET_S,
-        help=(
-            f"Post-onset epoch length (s), capped by the shortest inter-onset gap. "
-            f"Default {AssrEpoch.POST_ONSET_S} s = "
-            f"{AssrEpoch.STIMULUS_DURATION_S} s stimulus + "
-            f"{AssrEpoch.POST_STIMULUS_S} s post-stimulus."
-        ),
     )
     parser.add_argument(
         "--assr_freq",

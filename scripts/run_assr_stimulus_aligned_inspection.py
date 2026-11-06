@@ -48,7 +48,7 @@ import pandas as pd  # noqa: E402
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.analysis import assr_trials as at  # noqa: E402
-from src.definitions.constants import ProjectPaths  # noqa: E402
+from src.definitions.constants import AssrEpoch, ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
     ConditionVariants,
     CoordinateSystems,
@@ -536,15 +536,16 @@ def run_inspection(args: argparse.Namespace) -> None:
     participants = [idx_to_pid[s] for s in range(n_subj)]
 
     sfreq = args.sfreq
-    pre = int(round(-args.epoch_tmin * sfreq))
-    post = int(round(args.epoch_tmax * sfreq))
+    # The paradigm window, its post-onset span capped so epochs never overlap.
+    pre = AssrEpoch.pre_onset_samples(sfreq)
+    post = AssrEpoch.post_onset_samples(sfreq, min_gap=int(np.diff(onsets).min()))
     epoch_times = np.arange(-pre, post) / sfreq
-    topo_tmax = args.topo_tmax if args.topo_tmax is not None else args.epoch_tmax
+    topo_tmax = args.topo_tmax if args.topo_tmax is not None else epoch_times[-1]
     topo_post_mask = (epoch_times >= args.topo_tmin) & (epoch_times <= topo_tmax)
     topo_freq_mask = (freqs >= args.topo_freq_min) & (freqs <= args.topo_freq_max)
     print(
         f"n_subjects={n_subj}, n_channels={n_channels}, n_freqs={n_freqs}, "
-        f"epoch=[{args.epoch_tmin}, {args.epoch_tmax}] s ({pre + post} samples)",
+        f"epoch=[{epoch_times[0]:.3f}, {epoch_times[-1]:.3f}] s ({pre + post} samples)",
         flush=True,
     )
 
@@ -667,15 +668,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Sampling rate of the concatenated / wavelet data.",
     )
     parser.add_argument(
-        "--epoch_tmin",
-        type=float,
-        default=-0.1,
-        help="Epoch start relative to onset (s).",
-    )
-    parser.add_argument(
-        "--epoch_tmax", type=float, default=1.0, help="Epoch end relative to onset (s)."
-    )
-    parser.add_argument(
         "--assr_freq",
         type=float,
         default=40.0,
@@ -691,7 +683,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--topo_tmax",
         type=float,
         default=None,
-        help="Topomap post-onset window end (s); default = epoch_tmax.",
+        help="Topomap post-onset window end (s); default = the epoch's end.",
     )
     parser.add_argument(
         "--topo_freq_min",

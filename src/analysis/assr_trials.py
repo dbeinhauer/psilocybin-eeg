@@ -705,16 +705,17 @@ def epoch_geometry(
     """``(usable onsets, pre, post)`` for one recording's time axis.
 
     The paradigm decides the window (:class:`~src.definitions.constants.AssrEpoch`) and
-    the recording only *caps* it: ``post`` is shortened by the shortest inter-onset gap
-    so an epoch can never reach the next stimulus. Deriving the length from the observed
-    gap alone would make the window a property of whatever jitter the recording happened
-    to have rather than of the paradigm.
+    the recording only *caps* it: ``post`` is shortened to what the shortest inter-onset
+    gap leaves after the baseline, so no two epochs overlap. Deriving the length from
+    the observed gap alone would make the window a property of whatever jitter the
+    recording happened to have rather than of the paradigm.
 
     :param onsets: Onset sample indices, local to this time axis.
     :param n_times: Length of the time axis.
     :param sfreq: Sampling frequency in Hz.
     :return: The onsets falling inside the axis, and the pre/post sample counts.
-    :raises ValueError: If no onset falls inside the axis.
+    :raises ValueError: If no onset falls inside the axis, or the shortest gap cannot
+        hold the baseline plus the stimulus.
     """
     inside = np.asarray(onsets, dtype=int)
     inside = inside[(inside >= 0) & (inside < n_times)]
@@ -835,8 +836,8 @@ def roi_channelwise_snr(
 
        The divisor is pooled over trials rather than taken per trial, and that is not
        a detail. A
-       25-sample baseline SD varies about four times more than sampling theory predicts
-       (measured spread 63% against 14%), with a quarter of channel-trials landing below
+       25-sample (0.1 s) baseline SD varies about four times more than sampling theory
+       predicts (measured spread 63% against 14%), with a quarter of channel-trials landing below
        0.3x their pooled value. A channel that happens to be quiet before one onset is
        then divided by a spuriously small number, which inflates its **whole epoch** —
        so any slow post-stimulus drift becomes a large *sustained* deviation. Because
@@ -961,14 +962,14 @@ def baseline_normalise(
 
     The two halves of that ``z`` are estimated differently, and deliberately. The
     **mean** is taken per trial, because removing the slow drift in level between trials
-    is the whole point — and at 25 samples a mean is a well-behaved estimator (standard
-    error ``sd/5``, symmetric). The **SD** is pooled across trials, because at 25 samples
-    it is *not*: measured on this cohort it varies ~4x more than sampling theory allows,
+    is the whole point — and even at 25 samples a mean is a well-behaved estimator
+    (standard error ``sd/5``, symmetric). The **SD** is pooled across trials, because at
+    25 samples it is *not*: measured on this cohort's 0.1 s baseline it varies ~4x more than sampling theory allows,
     heavy-tailed, with a quarter of trials landing below 0.3x their pooled value. A trial
     that draws a quiet baseline is then divided by a spuriously small number, which
     inflates that trial's WHOLE epoch and turns any slow post-stimulus drift into a large
     sustained deviation. Pooling estimates the same quantity — the per-trial value is a
-    noisy draw from it — from ``trials x baseline samples`` instead of 25.
+    noisy draw from it — from ``trials x baseline samples`` instead of one trial's.
     * ``rel = x / baseline - 1`` — the relative change, as a readable percentage, but
       written only where the baseline is positive; every other trial is ``NaN``,
       deliberately, so a downstream mean cannot average a sign-flipped value. That makes
@@ -992,7 +993,7 @@ def baseline_normalise(
 
     baseline = array[..., mask].mean(axis=-1, keepdims=True)
     # The MEAN is per trial, the SD is pooled ACROSS trials — see the note above on why
-    # the two estimators are treated differently at 25 baseline samples.
+    # the two estimators are treated differently on a short baseline.
     per_trial = array[..., mask].std(axis=-1, ddof=1, keepdims=True)
     spread = np.sqrt((per_trial**2).mean(axis=-2, keepdims=True))
 

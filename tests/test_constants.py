@@ -14,7 +14,7 @@ from src.definitions.fields import (
 )
 
 SFREQ = 250.0
-ASSR_MIN_GAP = 313  # shortest observed inter-onset gap in the ASSR dataset
+ASSR_MIN_GAP = 312  # shortest aligned inter-onset gap in the ASSR dataset
 
 
 class TestProjectPaths:
@@ -151,7 +151,7 @@ class TestAssrEpochTiming:
     """Paradigm timing values and their sample conversions."""
 
     def test_paradigm_timing_values(self):
-        assert AssrEpoch.PRE_ONSET_S == 0.1
+        assert AssrEpoch.PRE_ONSET_S == 0.3
         assert AssrEpoch.STIMULUS_DURATION_S == 0.5
         assert AssrEpoch.POST_STIMULUS_S == 0.5
         # The fallback offset for recordings without a per-recording calibration:
@@ -170,7 +170,7 @@ class TestAssrEpochTiming:
         )
 
     def test_sample_counts_at_the_project_sampling_rate(self):
-        assert AssrEpoch.pre_onset_samples(SFREQ) == 25
+        assert AssrEpoch.pre_onset_samples(SFREQ) == 75
         assert AssrEpoch.post_onset_samples(SFREQ) == 250
 
     @pytest.mark.parametrize("sfreq", [100.0, 250.0, 500.0, 1000.0])
@@ -184,23 +184,29 @@ class TestAssrEpochTiming:
 
 
 class TestAssrEpochCapping:
-    """The shortest inter-onset gap caps the window so epochs never overlap."""
+    """The post-onset span takes what the shortest gap leaves after the baseline."""
 
-    def test_full_epoch_fits_inside_the_assr_inter_onset_gap(self):
+    def test_assr_epoch_fills_the_shortest_gap(self):
         pre = AssrEpoch.pre_onset_samples(SFREQ)
         post = AssrEpoch.post_onset_samples(SFREQ, min_gap=ASSR_MIN_GAP)
-        assert pre + post <= ASSR_MIN_GAP
+        assert pre + post == ASSR_MIN_GAP
 
-    def test_min_gap_caps_the_window(self):
-        assert AssrEpoch.post_onset_samples(SFREQ, min_gap=100) == 100
+    def test_min_gap_caps_post_at_the_room_after_the_baseline(self):
+        pre = AssrEpoch.pre_onset_samples(SFREQ)
+        stimulus = round(AssrEpoch.STIMULUS_DURATION_S * SFREQ)
+        post = AssrEpoch.post_onset_samples(SFREQ, min_gap=pre + stimulus + 10)
+        assert post == stimulus + 10
+
+    def test_gap_shorter_than_baseline_plus_stimulus_is_rejected(self):
+        pre = AssrEpoch.pre_onset_samples(SFREQ)
+        stimulus = round(AssrEpoch.STIMULUS_DURATION_S * SFREQ)
+        with pytest.raises(ValueError, match="overlap"):
+            AssrEpoch.post_onset_samples(SFREQ, min_gap=pre + stimulus - 1)
 
     def test_min_gap_wider_than_paradigm_does_not_extend_the_window(self):
         assert AssrEpoch.post_onset_samples(
             SFREQ, min_gap=10_000
         ) == AssrEpoch.post_onset_samples(SFREQ)
-
-    def test_post_onset_is_at_least_one_sample(self):
-        assert AssrEpoch.post_onset_samples(SFREQ, min_gap=1) == 1
 
     @pytest.mark.parametrize("bad_gap", [0, -5])
     def test_non_positive_min_gap_is_rejected(self, bad_gap):
@@ -224,11 +230,11 @@ class TestAssrEpochStimulusMask:
         assert not mask[times < 0.0].any()
         assert not mask[times >= AssrEpoch.STIMULUS_DURATION_S].any()
 
-    def test_is_half_the_post_onset_window(self):
-        """Why the mask exists: the post-onset window is half silence."""
+    def test_is_shorter_than_the_post_onset_window(self):
+        """Why the mask exists: the post-onset window outlasts the stimulus."""
         times = assr_epoch_times()
         mask = AssrEpoch.stimulus_mask(times)
-        assert mask.sum() == pytest.approx((times >= 0.0).sum() / 2, rel=0.02)
+        assert mask.sum() < (times >= 0.0).sum()
 
     def test_shape_and_dtype(self):
         times = assr_epoch_times()
