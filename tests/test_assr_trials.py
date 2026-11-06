@@ -557,9 +557,15 @@ class TestEpochGeometry:
         assert post == AssrEpoch.post_onset_samples(250.0, min_gap=400)
 
     def test_short_gap_caps_the_post_window(self):
+        # 300-sample gaps leave 300 - pre after the baseline, under the paradigm's span.
+        onsets = np.array([100, 400, 700])
+        _inside, pre, post = at.epoch_geometry(onsets, 1000, 250.0)
+        assert pre + post == 300
+
+    def test_gap_without_room_for_the_stimulus_is_refused(self):
         onsets = np.array([100, 150, 200])
-        _inside, _pre, post = at.epoch_geometry(onsets, 1000, 250.0)
-        assert post == 50
+        with pytest.raises(ValueError, match="overlap"):
+            at.epoch_geometry(onsets, 1000, 250.0)
 
     def test_drops_onsets_outside_the_axis(self):
         inside, _pre, _post = at.epoch_geometry(np.array([10, 500, 5000]), 1000, 250.0)

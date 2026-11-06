@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import mne
 
-from src.definitions.constants import ProjectPaths
+from src.definitions.constants import AssrEpoch, ProjectPaths
 from src.definitions.fields import (
     REAL_CONDITIONS,
     ChannelTypes,
@@ -766,7 +766,7 @@ class DatasetHandler(LoggerMixin):
         exclusion_categories: list[ExclusionCategories],
         conditions: Sequence[ConditionVariants] = REAL_CONDITIONS,
         stimulus_label: str = DEFAULT_STIMULUS_LABEL,
-        keep_tail_sec: float = 0.1,
+        keep_tail_sec: float = AssrEpoch.PRE_ONSET_S,
         pre_window_sec: float | None = None,
         post_window_sec: float | None = None,
         data_type_to_load: PreprocessedDataVariants = PreprocessedDataVariants.RAW_AFTER_ICA,
@@ -780,7 +780,9 @@ class DatasetHandler(LoggerMixin):
         Each over-long interval is trimmed from the front to the group-wide minimum
         for that interval, preserving ``keep_tail_sec`` of continuous data before
         every onset. The resulting recordings have equal length with stimulus onsets
-        at identical sample positions.
+        at identical sample positions. The plan is refused when the shortest interval
+        cannot hold the :class:`~src.definitions.constants.AssrEpoch` baseline plus
+        the stimulus.
 
         The aligner is fitted over **every** recording of *conditions* at once, so all
         conditions come out with the same length and the same stimuli. Selecting a
@@ -845,6 +847,7 @@ class DatasetHandler(LoggerMixin):
             pre_window_sec=pre_window_sec,
             post_window_sec=post_window_sec,
             onset_offset_s=onset_offset_s,
+            min_post_onset_sec=AssrEpoch.STIMULUS_DURATION_S,
         )
         # Report the geometry the group agreed on. When every recording really does
         # carry the same stimuli at the same timing, common_count equals every entry of

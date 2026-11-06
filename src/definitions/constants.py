@@ -15,20 +15,28 @@ class AssrEpoch:
 
     Single source of truth for every onset-locked ASSR analysis, so the evoked
     epoch, the wavelet epoch and the onset-locked quality references all cut the
-    same window. The stimulus is a 500 ms train; the epoch keeps a short
-    pre-onset baseline and then the stimulus plus an equally long post-stimulus
-    interval, so a response outlasting the stimulus is still visible.
+    same window. The stimulus is a 500 ms train; the epoch keeps a pre-onset
+    baseline, then the stimulus and a post-stimulus interval, so a response
+    outlasting the stimulus is still visible.
 
-    Never derive the epoch length from the observed inter-onset gap alone: that
-    makes the window a property of whatever jitter the recording happened to
-    have rather than of the paradigm. Use :meth:`post_onset_samples`, which
-    applies the paradigm length and only *caps* it by the shortest gap.
+    The window is set HERE and nowhere else: :attr:`PRE_ONSET_S` is also the
+    continuous data the stimulus alignment keeps before every onset (its
+    ``keep_tail_sec``), so changing it re-cuts every product from ``RAW_CROPPED``
+    onwards (re-run the stimulus alignment and the wavelet store; the coarse crop
+    keeps 0.5 s before the first onset, which bounds it).
+
+    The baseline is fixed; the post-onset span is :attr:`POST_ONSET_S` at most and
+    otherwise whatever the shortest inter-onset gap leaves after the baseline
+    (:meth:`post_onset_samples`), so no two epochs overlap and none crosses a splice.
+    On the ASSR data (shortest aligned gap 1.247 s) that is ~0.947 s. A gap that
+    leaves less than the stimulus itself is refused.
     """
 
-    PRE_ONSET_S = 0.1  # Baseline kept before each onset (negative time).
+    PRE_ONSET_S = 0.3  # Baseline kept before each onset (negative time).
     STIMULUS_DURATION_S = 0.5  # Length of the stimulus train itself.
-    POST_STIMULUS_S = 0.5  # Interval kept after stimulus offset.
-    POST_ONSET_S = 1.0  # Total post-onset span (stimulus + post-stimulus).
+    # Longest interval kept after stimulus offset; shortened to fit the gap.
+    POST_STIMULUS_S = 0.5
+    POST_ONSET_S = STIMULUS_DURATION_S + POST_STIMULUS_S  # Longest post-onset span.
 
     # FALLBACK offset added to a stimulus marker annotation (``fam+``) to obtain
     # the acoustic onset of the train, used only for recordings absent from the
@@ -84,26 +92,37 @@ class AssrEpoch:
         Post-onset epoch length in samples, capped so epochs never overlap.
 
         :param sfreq: Sampling frequency in Hz.
-        :param min_gap: Shortest inter-onset gap in samples. When given and
-            shorter than the paradigm window, it caps the returned length so no
-            epoch reaches the next stimulus.
-        :return: Number of samples kept after each onset (at least 1).
-        :raises ValueError: If *min_gap* is not positive.
+        :param min_gap: Shortest inter-onset gap in samples. When given, the
+            post-onset span is capped at what the gap leaves after the baseline, so
+            the whole epoch (pre + post) fits inside it.
+        :return: Number of samples kept after each onset.
+        :raises ValueError: If *min_gap* is not positive, or leaves less than the
+            stimulus after the baseline.
         """
         post = int(round(AssrEpoch.POST_ONSET_S * sfreq))
         if min_gap is not None:
             if min_gap <= 0:
                 raise ValueError(f"min_gap must be positive; got {min_gap}.")
-            post = min(post, int(min_gap))
-        return max(1, post)
+            room = int(min_gap) - AssrEpoch.pre_onset_samples(sfreq)
+            stimulus = int(round(AssrEpoch.STIMULUS_DURATION_S * sfreq))
+            if room < stimulus:
+                raise ValueError(
+                    f"The shortest inter-onset gap of {min_gap} samples "
+                    f"({min_gap / sfreq:.3f} s) leaves {room} samples after the "
+                    f"{AssrEpoch.PRE_ONSET_S} s baseline, less than the "
+                    f"{AssrEpoch.STIMULUS_DURATION_S} s stimulus: the epochs would "
+                    "overlap. Shorten AssrEpoch.PRE_ONSET_S."
+                )
+            post = min(post, room)
+        return post
 
     @staticmethod
     def stimulus_mask(epoch_times: np.ndarray) -> np.ndarray:
         """
         Boolean mask selecting the stimulus interval of an epoch.
 
-        Restricting to the driven interval matters for steady-state measures: a
-        1 s epoch around a 500 ms stimulus is half silence, which dilutes any
+        Restricting to the driven interval matters for steady-state measures: the
+        post-onset window outlasts the 500 ms stimulus by silence, which dilutes any
         stimulus-locked estimate computed over the whole post-onset window.
 
         :param epoch_times: ``(win,)`` epoch times in seconds, ``0`` at onset.

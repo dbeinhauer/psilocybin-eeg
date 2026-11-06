@@ -331,9 +331,10 @@ class StimulusAligner(LoggerMixin):
         onset_samples: list[np.ndarray],
         recording_lengths: list[int],
         sfreq: float,
-        keep_tail_sec: float = 0.1,
+        keep_tail_sec: float = AssrEpoch.PRE_ONSET_S,
         pre_window_sec: float | None = None,
         post_window_sec: float | None = None,
+        min_post_onset_sec: float | None = None,
     ):
         """
         :param onset_samples: Per recording, the sorted stimulus-onset sample indices.
@@ -345,7 +346,12 @@ class StimulusAligner(LoggerMixin):
             group-minimum); a value caps the edge at that many seconds.
         :param post_window_sec: Optional cap on the window kept after the last onset.
             ``None`` (default) keeps the per-subject shortest available lead-out.
-        :raises ValueError: If fewer than two onsets are common to all recordings.
+        :param min_post_onset_sec: The shortest span an analysis must be able to cut
+            after each onset. When given, every interval must hold ``keep_tail_sec``
+            plus this much of continuous data before its splice.
+        :raises ValueError: If fewer than two onsets are common to all recordings, an
+            interval is shorter than ``keep_tail_sec``, or (with
+            *min_post_onset_sec*) than ``keep_tail_sec`` plus it.
         """
         if len(onset_samples) != len(recording_lengths):
             raise ValueError(
@@ -387,6 +393,7 @@ class StimulusAligner(LoggerMixin):
         # Per-interval target length (minimum across recordings), and edge windows
         # clamped to what every recording can actually provide.
         self.interval_targets = self._compute_interval_targets()
+        self._check_epoch_fits(min_post_onset_sec)
         self.pre_target, self.post_target = self._compute_edge_targets()
 
         # Aligned onset positions in the spliced output (identical for all recordings).
@@ -414,6 +421,22 @@ class StimulusAligner(LoggerMixin):
         # Shape: (n_recordings, common_count - 1)
         gaps = np.stack([np.diff(o) for o in self._onsets], axis=0)
         return gaps.min(axis=0).astype(int)
+
+    def _check_epoch_fits(self, min_post_onset_sec: float | None) -> None:
+        """Raise when the shortest interval cannot hold the kept tail (and epoch).
+
+        The splice of interval ``k`` falls ``keep_tail`` before onset ``k + 1``, so
+        ``target - keep_tail`` is all an epoch can read after onset ``k``.
+        """
+        shortest = int(self.interval_targets.min())
+        post = 0 if min_post_onset_sec is None else self._to_samples(min_post_onset_sec)
+        if self.keep_tail + post > shortest:
+            raise ValueError(
+                f"The shortest inter-onset interval ({shortest} samples, "
+                f"{shortest / self.sfreq:.3f} s) cannot hold {self.keep_tail} samples "
+                f"before an onset plus {post} after the previous one: epochs would "
+                "overlap or cross a splice. Shorten AssrEpoch.PRE_ONSET_S."
+            )
 
     def _compute_edge_targets(self) -> tuple[int, int]:
         """
@@ -481,9 +504,8 @@ class StimulusAligner(LoggerMixin):
         removed: list[tuple[int, int]] = []
         for i in range(self.common_count - 1):
             target = int(self.interval_targets[i])
-            tail = min(self.keep_tail, target)
-            remove_start = int(onsets[i]) + (target - tail)
-            remove_end = int(onsets[i + 1]) - tail
+            remove_start = int(onsets[i]) + (target - self.keep_tail)
+            remove_end = int(onsets[i + 1]) - self.keep_tail
             if remove_end > remove_start:
                 removed.append((remove_start, remove_end))
 
@@ -662,10 +684,11 @@ def resolve_per_recording_offsets(
 def align_raws(
     raws: list[mne.io.Raw],
     stimulus_label: str = DEFAULT_STIMULUS_LABEL,
-    keep_tail_sec: float = 0.1,
+    keep_tail_sec: float = AssrEpoch.PRE_ONSET_S,
     pre_window_sec: float | None = None,
     post_window_sec: float | None = None,
     onset_offset_s: float | Sequence[float] = 0.0,
+    min_post_onset_sec: float | None = None,
 ) -> tuple[list[mne.io.Raw], StimulusAligner]:
     """
     Align stimulus onsets across a group of recordings by trimming inter-stimulus
@@ -686,8 +709,11 @@ def align_raws(
         between recordings, which is what makes their onsets land on a common
         acoustic time rather than a common *marker* time — see
         :class:`StimulusMarker`.
+    :param min_post_onset_sec: Shortest span after each onset the intervals must
+        hold, see :class:`StimulusAligner`.
     :return: Tuple of (aligned recordings, the fitted :class:`StimulusAligner`).
-    :raises ValueError: If a sequence of offsets does not match the recording count.
+    :raises ValueError: If a sequence of offsets does not match the recording count,
+        or the epoch does not fit the shortest interval.
     """
     sfreq = raws[0].info["sfreq"]
     offsets = resolve_per_recording_offsets(onset_offset_s, len(raws))
@@ -704,6 +730,7 @@ def align_raws(
         keep_tail_sec=keep_tail_sec,
         pre_window_sec=pre_window_sec,
         post_window_sec=post_window_sec,
+        min_post_onset_sec=min_post_onset_sec,
     )
 
     aligned = [

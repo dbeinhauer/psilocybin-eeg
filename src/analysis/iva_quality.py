@@ -132,7 +132,7 @@ REF_POLARITY_CHANNEL = "Cz"  # anchors the reference topomap's global sign
 
 ASSR_FREQ = 40.0  # frequency (Hz) used by the "40 Hz-only" time variant
 EPOCH_PRE_S = AssrEpoch.PRE_ONSET_S  # pre-onset baseline in the averaged epoch
-EPOCH_POST_S = AssrEpoch.POST_ONSET_S  # post-onset span (capped at shortest gap)
+EPOCH_POST_S = AssrEpoch.POST_ONSET_S  # longest post-onset span (capped by the gap)
 RESP_DURATION_S = AssrEpoch.STIMULUS_DURATION_S  # rigid expected-response window
 
 # ---------------------------------------------------------------------------
@@ -217,12 +217,13 @@ def epoch_average(
 
 
 def onset_window(onsets: np.ndarray, n_times: int, sfreq: float) -> tuple[int, int]:
-    """``(pre, post)`` epoch length in samples; ``post`` never overlaps the next onset.
+    """``(pre, post)`` epoch length in samples; no epoch overlaps the next one.
 
     :param onsets: Onset sample indices.
     :param n_times: Length of the time axis the epochs are cut from.
     :param sfreq: Sampling frequency in Hz.
     :return: ``(pre, post)`` sample counts around each onset.
+    :raises ValueError: If the shortest gap cannot hold the baseline plus the stimulus.
     """
     onsets_in = onsets[onsets < n_times]
     min_gap = int(np.diff(onsets_in).min()) if len(onsets_in) > 1 else None

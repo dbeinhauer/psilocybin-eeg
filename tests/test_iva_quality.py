@@ -11,6 +11,8 @@ from scipy.stats import ConstantInputWarning, pearsonr
 
 from src.analysis.iva_quality import (
     ASSR_FREQ,
+    EPOCH_POST_S,
+    EPOCH_PRE_S,
     RESP_DURATION_S,
     SUBJECT_SIGN_ANCHOR,
     TF_ANCHOR_HALFWIDTH_HZ,
@@ -49,8 +51,9 @@ N_TIMES = 600
 
 @pytest.fixture
 def onsets() -> np.ndarray:
-    """Evenly spaced onsets that all fit inside ``N_TIMES``."""
-    return np.arange(20, N_TIMES - 130, 60)
+    """Onsets one whole epoch apart, every epoch inside ``N_TIMES``."""
+    pre, post = round(EPOCH_PRE_S * SFREQ), round(EPOCH_POST_S * SFREQ)
+    return np.arange(pre, N_TIMES - post + 1, pre + post)
 
 
 @pytest.fixture
@@ -130,19 +133,23 @@ class TestEpochAverage:
 
 class TestOnsetWindow:
     def test_post_capped_by_shortest_gap(self) -> None:
-        # Gaps of 30 samples are shorter than EPOCH_POST_S * sfreq (= 100).
-        pre, post = onset_window(np.arange(0, 300, 30), N_TIMES, SFREQ)
-        assert post == 30
-        assert pre == 10  # EPOCH_PRE_S = 0.1 s at 100 Hz
+        # 100-sample gaps leave 100 - pre after the baseline, under EPOCH_POST_S.
+        pre, post = onset_window(np.arange(0, 500, 100), N_TIMES, SFREQ)
+        assert pre + post == 100
 
-    def test_uncapped_when_onsets_far_apart(self) -> None:
-        _pre, post = onset_window(np.array([0, 500]), 1000, SFREQ)
-        assert post == 100  # EPOCH_POST_S = 1.0 s at 100 Hz
+    def test_gap_without_room_for_the_stimulus_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="overlap"):
+            onset_window(np.arange(0, 300, 30), N_TIMES, SFREQ)
+
+    def test_window_is_the_paradigm_s(self) -> None:
+        pre, post = onset_window(np.array([0, 500]), 1000, SFREQ)
+        assert pre == round(EPOCH_PRE_S * SFREQ)
+        assert post == round(EPOCH_POST_S * SFREQ)
 
     def test_ignores_onsets_past_the_time_axis(self) -> None:
-        # The 5-sample gap lies beyond n_times and must not shrink the window.
+        # The 5-sample gap lies beyond n_times and must not be checked.
         _pre, post = onset_window(np.array([10, 900, 905]), 500, SFREQ)
-        assert post == 100
+        assert post == round(EPOCH_POST_S * SFREQ)
 
 
 class TestOnsetAverage:

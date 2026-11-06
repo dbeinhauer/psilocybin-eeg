@@ -32,7 +32,7 @@ from src.preprocessing.stimulus_alignment import (
     apply_keep_segments_to_array,  # noqa: F401 — re-exported for caller convenience
 )
 from src.filtering.dataset_filter import DatasetFilter
-from src.definitions.constants import ProjectPaths
+from src.definitions.constants import AssrEpoch, ProjectPaths
 from src.definitions.fields import (
     ALIGNMENT_EXCLUSIONS,
     REAL_CONDITIONS,
@@ -388,7 +388,7 @@ class EEGSummarizedAnalyzer(LoggerMixin):
         resample_freq: float = 250.0,
         n_jobs: int = -1,
         stimulus_label: Optional[str] = None,
-        keep_tail_sec: float = 0.1,
+        keep_tail_sec: float = AssrEpoch.PRE_ONSET_S,
         pre_window_sec: Optional[float] = None,
         post_window_sec: Optional[float] = None,
     ) -> tuple[
@@ -535,6 +535,7 @@ class EEGSummarizedAnalyzer(LoggerMixin):
             keep_tail_sec=keep_tail_sec,
             pre_window_sec=pre_window_sec,
             post_window_sec=post_window_sec,
+            min_post_onset_sec=AssrEpoch.STIMULUS_DURATION_S,
         )
         plan = aligner.resampled(resample_freq, [raw.n_times for raw in raws])
 

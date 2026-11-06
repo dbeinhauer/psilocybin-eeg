@@ -32,6 +32,7 @@ from src.analysis.iva_condition_comparison import (  # noqa: E402
     decompose_channel_iva,
     slice_to_band,
 )
+from src.definitions.constants import AssrEpoch  # noqa: E402
 from src.definitions.frequency import band_token, resolve_band_range  # noqa: E402
 from src.analysis.data_representations import (  # noqa: E402
     AnalysisData,
@@ -57,8 +58,9 @@ COHORT = {
     ConditionVariants.PLACEBO: [21, 3, 11, 7],
     ConditionVariants.PSILOCYBIN: [3, 11, 7, 33],
 }
-# ASSR-like: one stimulus every 315 samples, plus one past the end of the window.
-ONSETS = np.append(np.arange(60, N_TIMES, 315), 99_999)
+# ASSR-like: one stimulus every 315 samples, the first with a whole baseline before
+# it, plus one past the end of the window.
+ONSETS = np.append(np.arange(AssrEpoch.pre_onset_samples(SFREQ), N_TIMES, 315), 99_999)
 FREQS = np.linspace(1.0, 50.0, N_FREQS)
 
 

@@ -262,8 +262,9 @@ class TestLoadPreAlignmentData:
         mock_dataset_handler.excluded_participants_metadata = pd.DataFrame()
         mock_dataset_handler_cls.return_value = mock_dataset_handler
 
-        # Two subjects: 3 s and 4 s recordings, two fam+ onsets each.
-        raw1 = _make_mock_raw(2, int(3 * sfreq), sfreq, [0.5, 1.5])
+        # Two subjects: 3 s and 4 s recordings, two fam+ onsets each, further apart
+        # than the ASSR epoch, which a shorter gap would refuse.
+        raw1 = _make_mock_raw(2, int(3 * sfreq), sfreq, [0.5, 1.8])
         raw2 = _make_mock_raw(2, int(4 * sfreq), sfreq, [0.5, 2.0])
         mock_dataset_handler.load_data_file.side_effect = [raw1, raw2]
 

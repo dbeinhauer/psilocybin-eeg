@@ -204,6 +204,35 @@ class TestStimulusAlignerValidation:
         with pytest.raises(ValueError):
             StimulusAligner([np.array([0, 700])], [700, 700], SFREQ)
 
+    def test_tail_longer_than_the_shortest_interval_raises(self):
+        with pytest.raises(ValueError, match="splice"):
+            StimulusAligner([np.array([0, 700])], [1000], SFREQ, keep_tail_sec=0.8)
+
+    def test_interval_without_room_for_the_stimulus_raises(self):
+        # 300 ms before + 500 ms after an onset cannot share a 700 ms interval.
+        with pytest.raises(ValueError, match="overlap"):
+            StimulusAligner(
+                [np.array([0, 700]), np.array([0, 900])],
+                [1000, 1000],
+                SFREQ,
+                keep_tail_sec=0.3,
+                min_post_onset_sec=0.5,
+            )
+
+    def test_interval_filled_exactly_is_accepted(self):
+        aligner = StimulusAligner(
+            [np.array([0, 700]), np.array([0, 900])],
+            [1000, 1000],
+            SFREQ,
+            keep_tail_sec=0.3,
+            min_post_onset_sec=0.4,
+        )
+        assert aligner.interval_targets.tolist() == [700]
+
+    def test_tail_defaults_to_the_assr_baseline(self):
+        aligner = StimulusAligner([np.array([0, 2000])], [3000], SFREQ)
+        assert aligner.keep_tail == AssrEpoch.pre_onset_samples(SFREQ)
+
 
 def _make_raw_with_onsets(onset_ms, n_ms, sfreq=SFREQ):
     """Build a tiny annotated Raw: a ramp signal + fam+ onsets at given ms."""
