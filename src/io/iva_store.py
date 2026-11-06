@@ -48,8 +48,10 @@ error when the variant never produced it.
 from __future__ import annotations
 
 import dataclasses
+import errno
 import logging
 import re
+import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -73,6 +75,10 @@ _logger = logging.getLogger(__name__)
 
 #: Bumped whenever the on-disk key set changes in a way a reader must notice.
 FORMAT_VERSION = 1
+
+#: A store the shared storage has only just been handed can refuse reads with EBUSY
+#: for a while (seen minutes after the fit job wrote it): retries and wait between.
+_BUSY_RETRIES, _BUSY_WAIT_S = 10, 60.0
 
 #: Filename suffix of every store entry.
 STORE_SUFFIX = ".npz"
@@ -840,6 +846,20 @@ def save_iva_components(
 # ---------------------------------------------------------------------------
 
 
+def _wait_until_readable(path: Path) -> None:
+    """Wait out EBUSY on a file just written to the shared storage."""
+    for attempt in range(_BUSY_RETRIES):
+        try:
+            with open(path, "rb") as handle:
+                handle.read(1)
+            return
+        except OSError as exc:
+            if exc.errno != errno.EBUSY or attempt == _BUSY_RETRIES - 1:
+                raise
+            _logger.warning(f"{path} is busy (EBUSY); retrying in {_BUSY_WAIT_S:.0f}s.")
+            time.sleep(_BUSY_WAIT_S)
+
+
 def load_iva_components(
     path: Path | str | None = None,
     *,
@@ -900,6 +920,7 @@ def load_iva_components(
     if not path.is_file():
         raise FileNotFoundError(f"No stored IVA components at {path}.")
 
+    _wait_until_readable(path)
     with np.load(path, allow_pickle=False) as stored:
         keys = set(stored.files)
         required = {
