@@ -9,6 +9,7 @@ import pytest
 import numpy as np
 
 from src.analysis.wavelet_ica import (
+    log10_power,
     zscore_by_time,
     align_iva_component_signs,
     iva_component_patterns,
@@ -328,3 +329,12 @@ class TestNormalizePatternsPerSubject:
             normalize_patterns_per_subject(np.zeros((3, 4, 5, 6)))  # not 3-D
         with pytest.raises(ValueError):
             normalize_patterns_per_subject(np.zeros((0, 4, 5)))  # no subjects
+
+
+def test_log10_power_floors_zero_bins_instead_of_minus_infinity():
+    power = np.array([[0.0, 1.0, 100.0]], dtype=np.float32)
+    logged = log10_power(power)
+    assert logged.dtype == np.float32
+    assert np.all(np.isfinite(logged))
+    np.testing.assert_allclose(logged[0, 1:], [0.0, 2.0])
+    np.testing.assert_array_equal(power, [[0.0, 1.0, 100.0]])

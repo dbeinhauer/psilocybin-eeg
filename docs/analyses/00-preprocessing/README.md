@@ -96,6 +96,7 @@ same three steps, each run on Placebo and Psilocybin **separately**:
 | `2_roi_zscore_pca` | binary ASSR ROI → z-score → channel PCA |
 | `3_pca_zscore` | channel PCA (all channels) → z-score of each PC |
 | `4_roi_pca_zscore` | binary ASSR ROI → channel PCA → z-score of each PC |
+| `5_log_zscore_pca` … `8_roi_log_pca_zscore` | 1-4 on `log10` power, the log taken first (before the z-score), as 06b's `*_log` |
 
 The PCA is fit as stage 00 fits it, on the onset-averaged stack; its loadings are then
 applied to the continuous recording, giving each PC a continuous source, and a PC's TF
@@ -111,7 +112,8 @@ variance there.
 The SNR grid reads each source the way 06b reads its `full` variant (selection averaged,
 every trial referenced to its own pre-stimulus window, median over trials), against the
 binary ROI built exactly as 06b's `ASSR-mask (full)` — on the same 12 paired participants
-that row reproduces 06b's numbers to < 1e-8.
+that row reproduces 06b's numbers to < 1e-8. The ROI row stays on raw power for the log
+pipelines too, so all eight are read against one reference.
 
 ## Outputs
 

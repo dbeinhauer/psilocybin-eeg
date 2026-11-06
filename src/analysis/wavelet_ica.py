@@ -26,6 +26,22 @@ def _validate_4d(data: np.ndarray) -> None:
         )
 
 
+def log10_power(data: np.ndarray) -> np.ndarray:
+    """``log10`` of wavelet power, floored at the dtype's smallest normal number.
+
+    The log-power variant of stage 06b applies it BEFORE any z-scoring, so a
+    component is fitted on relative (multiplicative) power changes rather than on
+    absolute ones dominated by the strongest bursts. The floor is stage 08's: a zero
+    bin maps to a large finite value rather than ``-inf``.
+
+    :return: A new array of the same shape and floating dtype.
+    """
+    data = np.asarray(data)
+    if not np.issubdtype(data.dtype, np.floating):
+        data = data.astype(np.float64)
+    return np.log10(np.maximum(data, np.finfo(data.dtype).tiny))
+
+
 def zscore_by_time(data: np.ndarray) -> np.ndarray:
     """Z-score a 4-D wavelet-power tensor along the time axis.
 

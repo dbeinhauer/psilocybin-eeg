@@ -1,6 +1,6 @@
 """
 ASSR channel-PCA time-frequency maps before any joint decomposition, Placebo against
-Psilocybin, by four orders of the same three steps.
+Psilocybin, by four orders of the same three steps, each also on ``log10`` power.
 
 The question is what the recordings show around the ``fam+`` onsets before IVA or CorrCA
 touch them. Each pipeline reduces one recording to its first ``--n_components`` channel
@@ -13,6 +13,9 @@ PCs, and every pipeline runs on Placebo and Psilocybin **separately**:
 3. ``3_pca_zscore`` — the channel PCA first, on raw power, then each component's power
    z-scored against the whole recording.
 4. ``4_roi_pca_zscore`` — the ROI, then the PCA, then the z-score.
+5-8. ``5_log_zscore_pca`` ... ``8_roi_log_pca_zscore`` — 1-4 on ``log10`` power
+   (:func:`~src.analysis.wavelet_ica.log10_power`, stage 06b's ``*_log``): the log is
+   taken per channel/frequency before anything else, so before the z-score in all four.
 
 The PCA is fit as stage 00 fits it: on the onset-averaged ``(channels, freqs, time)``
 stack, each ``(freq, time)`` bin one observation. Its loadings are then applied to the
@@ -28,7 +31,8 @@ variant: the selection's bins averaged, trials cut, every trial referenced to it
 pre-stimulus window, the median over trials. The reference row is the binary ROI built
 exactly as 06b builds ``ASSR-mask (full)``
 (:func:`~src.analysis.assr_trials.roi_channelwise_snr` on raw power, one scale shared by
-both conditions), so on the same cohort its numbers are 06b's. Tests are 06b's
+both conditions), so on the same cohort its numbers are 06b's; it stays on raw power
+for the log pipelines too, so all eight are read against one reference. Tests are 06b's
 (participants as the unit, exact Wilcoxon, uncorrected): ``contrast`` (Placebo −
 Psilocybin per source), ``discrimination`` and ``snr`` (each PC against the ROI).
 
@@ -87,6 +91,7 @@ from src.analysis.pca_polarity import (  # noqa: E402
     align_pc1_signs,
     topography_consistency,
 )
+from src.analysis.wavelet_ica import log10_power  # noqa: E402
 from src.definitions.constants import AssrEpoch, ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
     REAL_CONDITIONS,
@@ -119,12 +124,13 @@ _PC_PREFIX = "PC"
 
 @dataclass(frozen=True)
 class Pipeline:
-    """One order of ROI restriction, z-scoring and channel PCA."""
+    """One order of ROI restriction, z-scoring and channel PCA, on raw or log power."""
 
     name: str
     roi_first: bool
     zscore_first: bool
     title: str
+    log_power: bool = False
 
 
 PIPELINES = (
@@ -132,6 +138,34 @@ PIPELINES = (
     Pipeline("2_roi_zscore_pca", True, True, "binary ROI → z-score → channel PCA"),
     Pipeline("3_pca_zscore", False, False, "channel PCA → z-score (all channels)"),
     Pipeline("4_roi_pca_zscore", True, False, "binary ROI → channel PCA → z-score"),
+    Pipeline(
+        "5_log_zscore_pca",
+        False,
+        True,
+        "log10 → z-score → channel PCA (all channels)",
+        True,
+    ),
+    Pipeline(
+        "6_roi_log_zscore_pca",
+        True,
+        True,
+        "binary ROI → log10 → z-score → channel PCA",
+        True,
+    ),
+    Pipeline(
+        "7_log_pca_zscore",
+        False,
+        False,
+        "log10 → channel PCA → z-score (all channels)",
+        True,
+    ),
+    Pipeline(
+        "8_roi_log_pca_zscore",
+        True,
+        False,
+        "binary ROI → log10 → channel PCA → z-score",
+        True,
+    ),
 )
 _BY_NAME = {p.name: p for p in PIPELINES}
 
@@ -178,7 +212,8 @@ def pipeline_sources(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """One recording's channel PCs, z-scored before or after the projection.
 
-    :param data: ``(C, F, T)`` raw wavelet power of the channels in scope.
+    :param data: ``(C, F, T)`` wavelet power of the channels in scope — raw, or
+        ``log10`` for the log pipelines.
     :param onsets: Onset samples on this time axis.
     :param pre: Samples kept before each onset.
     :param post: Samples kept after each onset.
@@ -516,6 +551,11 @@ def run(args: argparse.Namespace) -> None:
                 dtype=np.float32,
             )
             roi_block = block[roi_index]
+            # The log is per channel/frequency, so it commutes with the ROI cut: taken
+            # once per recording, shared by every log pipeline.
+            log_block = (
+                log10_power(block) if any(p.log_power for p in pipelines) else None
+            )
             course, value, scale = roi_reference(roi_block, onsets, grid)
             for s in grid.selections:
                 roi_course[c][s][i] = course[s]
@@ -523,8 +563,9 @@ def run(args: argparse.Namespace) -> None:
             for key, v in value.items():
                 roi_value[c][key][i] = v
             for p in pipelines:
+                signal = log_block if p.log_power else block
                 tf_maps, loadings, explained, sources = pipeline_sources(
-                    roi_block if p.roi_first else block,
+                    signal[roi_index] if p.roi_first else signal,
                     onsets,
                     pre,
                     post,
@@ -543,7 +584,7 @@ def run(args: argparse.Namespace) -> None:
                     result.course[s][i] = course[s]
                 for key, v in value.items():
                     result.value[key][i] = v
-            del block, roi_block
+            del block, roi_block, log_block
         print(f"  reduced {i + 1}/{n_subj} ({participant})", flush=True)
 
     # 06b's shared ROI scale: per selection, each condition's median recording ROI
@@ -747,7 +788,7 @@ def run(args: argparse.Namespace) -> None:
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="ASSR channel-PCA TF maps by four orders of ROI / z-score / PCA, "
-        "Placebo vs Psilocybin, with 06b's 'full' SNR grid.",
+        "on raw and log10 power, Placebo vs Psilocybin, with 06b's 'full' SNR grid.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--experiment", default=ExperimentNames.ASSR.value)
@@ -766,7 +807,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         nargs="+",
         default=[p.name for p in PIPELINES],
         choices=[p.name for p in PIPELINES],
-        help="Which orders of ROI / z-score / PCA to run.",
+        help="Which orders of ROI / z-score / PCA to run (5-8: on log10 power).",
     )
     parser.add_argument(
         "--n_components",

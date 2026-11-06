@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -N ASSR_ROI_TF_VARIANTS_00
-#PBS -l walltime=0:40:00
-#PBS -l select=1:ncpus=2:mem=200gb:scratch_local=100gb
+#PBS -l walltime=1:20:00
+#PBS -l select=1:ncpus=8:mem=400gb:scratch_local=100gb
 #PBS -m ae
 #PBS -j oe
 
@@ -9,12 +9,13 @@
 # Stage-00 ASSR channel-PCA TF maps before any joint decomposition (IVA, CorrCA),
 # Placebo vs Psilocybin (scripts/run_assr_roi_tf_variants.py).
 #
-# Four pipelines, each run on Placebo and Psilocybin separately, each keeping the
+# Eight pipelines, each run on Placebo and Psilocybin separately, each keeping the
 # first N_COMPONENTS channel PCs:
 #   1_zscore_pca        z-score vs recording -> channel PCA (all channels)
 #   2_roi_zscore_pca    binary ASSR ROI -> z-score -> channel PCA
 #   3_pca_zscore        channel PCA (all channels) -> z-score of each PC
 #   4_roi_pca_zscore    binary ASSR ROI -> channel PCA -> z-score of each PC
+#   5-8_*_log_*         1-4 on log10 power (log taken first, so before the z-score)
 # One figure per pipeline (rows Placebo / Psilocybin / Placebo - Psilocybin,
 # one column per PC), the same per participant, and 06b's SNR / contrast grid in
 # its 'full' reading (40 Hz and 35-45 Hz, windows 0-0.5 s and 0.2-0.5 s;
