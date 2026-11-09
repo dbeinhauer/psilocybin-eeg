@@ -50,6 +50,7 @@ from __future__ import annotations
 import dataclasses
 import errno
 import logging
+import os
 import re
 import time
 from collections.abc import Iterable, Mapping, Sequence
@@ -832,7 +833,13 @@ def save_iva_components(
         processed_data_dir=processed_data_dir,
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(path, **payload)
+    # Written aside, then renamed into place: a reader in another process (a parallel
+    # fit, a full disk) never sees a half-written store. Not '*.npz', so
+    # list_iva_results never lists it.
+    partial = path.with_name(f"{path.name}.partial")
+    with open(partial, "wb") as handle:
+        np.savez_compressed(handle, **payload)
+    os.replace(partial, path)
     log.info(
         f"[{condition.value}_{music_type.value}] stored {variant.value} components "
         f"({', '.join(sorted(resolved))}) for {len(labels)} recording(s) as "
