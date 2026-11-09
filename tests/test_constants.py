@@ -153,7 +153,7 @@ class TestAssrEpochTiming:
     def test_paradigm_timing_values(self):
         assert AssrEpoch.PRE_ONSET_S == 0.3
         assert AssrEpoch.STIMULUS_DURATION_S == 0.5
-        assert AssrEpoch.POST_STIMULUS_S == 0.5
+        assert AssrEpoch.POST_STIMULUS_S == 0.4
         # The fallback offset for recordings without a per-recording calibration:
         # the median of the 38 measured ASSR shifts.
         assert AssrEpoch.MARKER_ONSET_OFFSET_S == -0.4245
@@ -171,7 +171,7 @@ class TestAssrEpochTiming:
 
     def test_sample_counts_at_the_project_sampling_rate(self):
         assert AssrEpoch.pre_onset_samples(SFREQ) == 75
-        assert AssrEpoch.post_onset_samples(SFREQ) == 250
+        assert AssrEpoch.post_onset_samples(SFREQ) == 225
 
     @pytest.mark.parametrize("sfreq", [100.0, 250.0, 500.0, 1000.0])
     def test_sample_counts_scale_with_sampling_rate(self, sfreq):
@@ -186,10 +186,11 @@ class TestAssrEpochTiming:
 class TestAssrEpochCapping:
     """The post-onset span takes what the shortest gap leaves after the baseline."""
 
-    def test_assr_epoch_fills_the_shortest_gap(self):
+    def test_assr_epoch_fits_the_shortest_gap(self):
         pre = AssrEpoch.pre_onset_samples(SFREQ)
         post = AssrEpoch.post_onset_samples(SFREQ, min_gap=ASSR_MIN_GAP)
-        assert pre + post == ASSR_MIN_GAP
+        assert pre + post <= ASSR_MIN_GAP
+        assert post == AssrEpoch.post_onset_samples(SFREQ)  # not shortened
 
     def test_min_gap_caps_post_at_the_room_after_the_baseline(self):
         pre = AssrEpoch.pre_onset_samples(SFREQ)

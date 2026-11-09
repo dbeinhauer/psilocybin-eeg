@@ -28,14 +28,16 @@ class AssrEpoch:
     The baseline is fixed; the post-onset span is :attr:`POST_ONSET_S` at most and
     otherwise whatever the shortest inter-onset gap leaves after the baseline
     (:meth:`post_onset_samples`), so no two epochs overlap and none crosses a splice.
-    On the ASSR data (shortest aligned gap 1.247 s) that is ~0.947 s. A gap that
-    leaves less than the stimulus itself is refused.
+    On the ASSR data (shortest aligned gap 1.247 s) that leaves ~0.947 s, so the
+    0.9 s span always fits. A gap that leaves less than the stimulus itself is
+    refused. The post-onset span is read at analysis time only: changing it needs no
+    re-alignment, only the analyses re-run.
     """
 
     PRE_ONSET_S = 0.3  # Baseline kept before each onset (negative time).
     STIMULUS_DURATION_S = 0.5  # Length of the stimulus train itself.
     # Longest interval kept after stimulus offset; shortened to fit the gap.
-    POST_STIMULUS_S = 0.5
+    POST_STIMULUS_S = 0.4
     POST_ONSET_S = STIMULUS_DURATION_S + POST_STIMULUS_S  # Longest post-onset span.
 
     # FALLBACK offset added to a stimulus marker annotation (``fam+``) to obtain
