@@ -51,7 +51,10 @@
 #    trials, three ASSR references and three test families (contrast,
 #    discrimination, snr; exact Wilcoxon over participants, uncorrected) as
 #    stage 06. Signal variants: full, roi_masked, non_roi_masked,
-#    storing their trial-normalised TF maps (--masked_tf_maps).
+#    plus swapped_filter (the raw <-> log twin store's filters on this
+#    store's input; its CC 1-2 TF maps and the topomap r CSV are drawn
+#    into the fit's directory),
+#    all storing their trial-normalised TF maps (--masked_tf_maps).
 #    A '_non_roi' store has no ASSR
 #    electrode: only its full rows, against the ASSR-mask (full) reference.
 #
@@ -62,7 +65,9 @@
 #       corrca_channel_joined_tracks/pca_<N>/       # + _log, _roi, _non_roi,
 #                                         _log_roi, _log_non_roi
 #           condition_mean_*, participants/, corrca_*,
-#           roi_masked_*, non_roi_masked_*             # fit
+#           roi_masked_*, non_roi_masked_*,            # fit
+#           swapped_filter_* (CC 1-2: the raw <-> log twin's filters
+#             on this fit's input; drawn by the SNR grid, after all fits)
 #           snr_grid/<selection>/<window>/*.png        # SNR grid: p-values,
 #                                     SNR, trial courses only
 #   data/processed/assr/iva_results/JoinedTracks/
@@ -158,7 +163,7 @@ python /mnt/scripts/run_corrca_snr_grid.py \
     --n_pca "${N_PCA:-5}" \
     --halfwidths 0 5 \
     --stimulus_intervals 0:0.5 0.2:0.5 \
-    --signal_variants full roi_masked non_roi_masked \
+    --signal_variants full roi_masked non_roi_masked swapped_filter \
     --masked_tf_maps \
     --contrast_alternative greater \
     --snr_alternative less \

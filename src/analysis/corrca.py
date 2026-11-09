@@ -437,6 +437,30 @@ def anchor_component_signs(
     return decomposition.oriented(flip), flip, strength
 
 
+def matched_component_correlation(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Pearson r over channels between component *k* of *a* and component *k* of *b*.
+
+    Components are matched by index only, never re-paired. The sign is kept, so a
+    component the two fits oriented oppositely reads negative.
+
+    :param a: ``(K, C)`` patterns (or filters transposed) of one fit.
+    :param b: ``(K', C)`` the same of another fit on the same channels.
+    :return: ``(min(K, K'),)`` correlations; NaN for a constant component.
+    :raises ValueError: If the channel axes differ.
+    """
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    if a.ndim != 2 or b.ndim != 2 or a.shape[1] != b.shape[1]:
+        raise ValueError(
+            f"a and b must be (K, C) on the same channels; got {a.shape}, {b.shape}."
+        )
+    k = min(a.shape[0], b.shape[0])
+    a = a[:k] - a[:k].mean(axis=1, keepdims=True)
+    b = b[:k] - b[:k].mean(axis=1, keepdims=True)
+    norm = np.linalg.norm(a, axis=1) * np.linalg.norm(b, axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(norm > 0, (a * b).sum(axis=1) / norm, np.nan)
+
+
 def condition_isc(
     sources_by_condition: Mapping[str, np.ndarray],
     participants_by_condition: Mapping[str, Sequence[str]],

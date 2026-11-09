@@ -319,6 +319,33 @@ mask on that same log-then-z-scored signal, the like-for-like reference for what
 decomposition was handed. The other three references are the raw-power ones every
 store carries, so the two variants can be compared on them directly.
 
+### Swapped filters: what the log does to the topography
+
+To separate the effect of the log on the **spatial filter** from its effect on the
+**signal**, every store is also read through its twin's filters. The twin is the same
+run and electrode cut on the other power scale (`CORRCA_SWAPPED_OF`: raw <-> log).
+So the raw fit's directory holds `swapped_filter_*` TF maps of the *log* fit's
+filters on z-scored power, and the log fit's directory the raw fit's filters on
+z-scored log power. Within one directory the data stay fixed and only the topography
+changes, and the SNR grid's `swapped_filter` rows sit against the same references as
+`full`.
+
+- **Drawn by the SNR grid, not the fit.** The fits run in parallel, so when one fit
+  finishes its twin may still be fitting or writing its store. The grid starts only
+  after every fit is stored, and with `--masked_tf_maps` it already projects the twin's
+  filters at every frequency, so it draws `swapped_filter_condition_mean_tf_maps`
+  (+ `_onset`, + `participants/`) into the fit's own directory. It uses the fit's
+  plotting calls and stimulus average, for the leading `--swapped_components`
+  (default 2). A missing twin store is a warning, not an error.
+- Component *k* is paired with the twin's component *k*, never re-matched. Each keeps
+  its own sign anchor (§1), so the ASSR-anchored fits should agree in sign. The non-ROI
+  fits are unanchored, so a negative r there can be a sign flip.
+- `swapped_filter_topomap_correlation.csv` (in the fit's directory, one row per
+  component) holds the Pearson r over channels of the two shared forward patterns
+  (`pattern_r`, the topomaps) and of the two filters (`filter_r`). The figure titles
+  carry `pattern_r`, and the grid logs both.
+- The SNR rows cover every component, as for the other signal variants.
+
 ## 6. Not here yet
 
 - **Cross-validated ISC.** Fit on all but one participant and score the held-out one.

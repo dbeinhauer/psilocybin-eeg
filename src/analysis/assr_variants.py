@@ -84,6 +84,10 @@ class ProjectedVariants:
     #: ``None`` unless asked for.
     masked_tf_z: np.ndarray | None = None
     outside_tf_z: np.ndarray | None = None
+    #: Another fit's filters (the raw <-> log twin) on the same input as ``masked_z``,
+    #: and at the ``tf_freq_indices`` bins; ``None`` unless asked for.
+    swapped_z: np.ndarray | None = None
+    swapped_tf_z: np.ndarray | None = None
     #: The PCA mask on ``log10`` power, then z-scored — the reference a log-power
     #: decomposition is read against; ``None`` unless *log_power*.
     pca_log_z: np.ndarray | None = None
@@ -125,6 +129,7 @@ def project_condition(
     masked_filters: np.ndarray,
     *,
     outside_filters: np.ndarray | None = None,
+    swapped_filters: np.ndarray | None = None,
     tf_freq_indices: np.ndarray | None = None,
     log_power: bool = False,
 ) -> ProjectedVariants:
@@ -148,6 +153,8 @@ def project_condition(
         every weight outside the anchor electrodes zeroed.
     :param outside_filters: ``(rows, components, channels)`` the same filters with the
         anchor electrodes zeroed instead, for :attr:`ProjectedVariants.outside_z`.
+    :param swapped_filters: ``(rows, components, channels)`` another fit's filters, read
+        like the masked ones, for :attr:`ProjectedVariants.swapped_z`.
     :param tf_freq_indices: Cache bins at which to also project the masked filters
         (:attr:`ProjectedVariants.masked_tf_z`, ``outside_tf_z``).
     :param log_power: The decomposition was fitted on ``log10`` power: its masked
@@ -177,12 +184,15 @@ def project_condition(
     roi_raw = _empty(roi_index.size)
     masked_z = _empty(n_comp)
     outside_z = None if outside_filters is None else _empty(n_comp)
-    masked_tf_z = outside_tf_z = None
+    swapped_z = None if swapped_filters is None else _empty(n_comp)
+    masked_tf_z = outside_tf_z = swapped_tf_z = None
     pca_log_z = _empty(1) if log_power else None
     if tf_at is not None:
         masked_tf_z = _empty(n_comp, tf_at.size)
         if outside_filters is not None:
             outside_tf_z = _empty(n_comp, tf_at.size)
+        if swapped_filters is not None:
+            swapped_tf_z = _empty(n_comp, tf_at.size)
 
     _logger.info(
         f"[{condition}] reading {len(participants)} participant(s) from "
@@ -223,11 +233,15 @@ def project_condition(
         masked_z[row] = at.project_channels(masked_filters[store], block_fit)
         if outside_z is not None:
             outside_z[row] = at.project_channels(outside_filters[store], block_fit)
+        if swapped_z is not None:
+            swapped_z[row] = at.project_channels(swapped_filters[store], block_fit)
         if tf_at is not None:
             tf_z = wide_fit[:, tf_at]
             masked_tf_z[row] = at.project_channels(masked_filters[store], tf_z)
             if outside_tf_z is not None:
                 outside_tf_z[row] = at.project_channels(outside_filters[store], tf_z)
+            if swapped_tf_z is not None:
+                swapped_tf_z[row] = at.project_channels(swapped_filters[store], tf_z)
         _logger.info(
             f"[{condition}]   {name} ({row + 1}/{len(participants)}, "
             f"{time.time() - started:.0f}s)"
@@ -241,5 +255,7 @@ def project_condition(
         outside_z=outside_z,
         masked_tf_z=masked_tf_z,
         outside_tf_z=outside_tf_z,
+        swapped_z=swapped_z,
+        swapped_tf_z=swapped_tf_z,
         pca_log_z=pca_log_z,
     )

@@ -319,6 +319,16 @@ CORRCA_LOG_OF = {
 CORRCA_LOG_VARIANTS = frozenset(
     variant for full in CORRCA_LOG_OF.values() for variant in CORRCA_FITS[full]
 )
+#: Each fit's twin on the other power scale (raw <-> log), on the same electrode cut:
+#: the fit whose filters the ``swapped_filter`` reading applies to this fit's input.
+CORRCA_SWAPPED_OF = {
+    a: b
+    for raw, log in CORRCA_LOG_OF.items()
+    for pair in zip(CORRCA_FITS[raw], CORRCA_FITS[log])
+    for a, b in (pair, pair[::-1])
+}
+#: Label of the swapped-filter reading: figure prefix and SNR-grid signal variant.
+CORRCA_SWAPPED_READING = "swapped_filter"
 
 
 class CorrcaFit(NamedTuple):
@@ -943,12 +953,7 @@ def roi_masked_corrca_sources(
         (the ``non_roi_masked`` reading); the two masked filters add up to the full one.
     :return: ``(S, K, F, T)``, or ``None`` when the montage has no ASSR electrode.
     """
-    from src.analysis.assr_trials import (
-        mask_weight_share,
-        project_channels,
-        restrict_filters_to_mask,
-    )
-    from src.analysis.wavelet_ica import zscore_by_time
+    from src.analysis.assr_trials import mask_weight_share, restrict_filters_to_mask
     from src.io.loading import assr_electrode_mask
 
     try:
@@ -975,11 +980,38 @@ def roi_masked_corrca_sources(
         f"{int(mask.sum())} electrode(s); |w| kept "
         + ", ".join(f"CC {k + 1} {v:.0%}" for k, v in enumerate(share))
     )
+    return project_corrca_sources(data_4d, masked)
+
+
+def project_corrca_sources(data_4d: np.ndarray, filters: np.ndarray) -> np.ndarray:
+    """``(K, C)`` *filters* applied to *data_4d* z-scored along time as the fit did.
+
+    One subject at a time, so no second full z-scored copy is held.
+
+    :param data_4d: ``(S, C, F, T)`` a fit's prepared input.
+    :return: ``(S, K, F, T)``.
+    """
+    from src.analysis.assr_trials import project_channels
+    from src.analysis.wavelet_ica import zscore_by_time
+
     n_subjects, _n_channels, n_freqs, n_times = data_4d.shape
     sources = np.empty((n_subjects, filters.shape[0], n_freqs, n_times))
     for s in range(n_subjects):
-        sources[s] = project_channels(masked, zscore_by_time(data_4d[s : s + 1])[0])
+        sources[s] = project_channels(filters, zscore_by_time(data_4d[s : s + 1])[0])
     return sources
+
+
+def read_corrca_filters(path: Path) -> tuple[list[str], np.ndarray, np.ndarray]:
+    """``(channel_names, filters, shared_patterns)`` of a stage-06b store, both ``(K, C)``.
+
+    Reads only these arrays, not the store's sources.
+    """
+    with np.load(path, allow_pickle=False) as stored:
+        return (
+            [str(name) for name in stored["channel_names"]],
+            np.asarray(stored["extra__corrca_filters"], dtype=float).T,
+            np.asarray(stored["extra__corrca_shared_patterns"], dtype=float),
+        )
 
 
 def anchor_corrca_signs(

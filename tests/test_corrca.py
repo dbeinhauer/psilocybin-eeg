@@ -24,6 +24,7 @@ from src.analysis.corrca import (
     forward_patterns,
     isc_from_covariances,
     leave_one_out_isc,
+    matched_component_correlation,
     paired_condition_test,
     projected_isc,
 )
@@ -350,3 +351,16 @@ def test_anchor_reads_the_mask_mean_not_the_contrast(decomposition):
     _oriented, flip, strength = anchor_component_signs(shifted, mask)
     assert np.all(flip == -1.0)
     assert np.all(strength > 0.0)
+
+
+def test_matched_component_correlation_pairs_by_index_and_keeps_sign():
+    rng = np.random.default_rng(0)
+    a = rng.standard_normal((3, 20))
+    b = np.stack([2.0 * a[0] + 5.0, -a[1], a[0]])
+    r = matched_component_correlation(a, b)
+    assert r[0] == pytest.approx(1.0)
+    assert r[1] == pytest.approx(-1.0)
+    # Component 3 is matched to component 3, not to the copy of component 1.
+    assert abs(r[2]) < 1.0
+    with pytest.raises(ValueError):
+        matched_component_correlation(a, b[:, :10])

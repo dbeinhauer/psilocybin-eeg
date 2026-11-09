@@ -54,6 +54,9 @@ Figures (panels labelled ``CC <k>``):
   - ``non_roi_masked_*`` — the same with the ASSR electrodes zeroed instead: what the
     rest of the head carries. The two add up to the full maps. ``--skip_roi_masked``
     drops both.
+  - ``swapped_filter_*`` TF maps (the raw <-> log twin's filters on this fit's input)
+    are drawn into this directory by ``run_corrca_snr_grid.py``, after every fit is
+    stored, not here.
 
 Every run then fits twice more from the same loaded tensor, the channel axis cut
 BEFORE the z-scoring: on the binary ASSR ROI alone (ROI → z-score → PCA → CorrCA),
@@ -379,7 +382,9 @@ def run_corrca_condition_comparison(
         )
 
         def _draw_tf_maps(
-            tf_sources: np.ndarray, tf_prefix: str, tf_shared: dict
+            tf_sources: np.ndarray,
+            tf_prefix: str,
+            tf_shared: dict,
         ) -> list:
             """The whole-recording and stimulus-averaged TF grids, group and participant."""
             plot_condition_mean_tf_maps(
