@@ -346,6 +346,23 @@ changes, and the SNR grid's `swapped_filter` rows sit against the same reference
   carry `pattern_r`, and the grid logs both.
 - The SNR rows cover every component, as for the other signal variants.
 
+### Band-swapped filters: broadband <-> 30-50 Hz
+
+`scripts/run_corrca_band_swap.py` (job `run_band_swap.pbs`) does the same swap
+across the frequency cut instead of the power scale. It is read-only and pairs each
+broadband store with its 30-50 Hz twin, with the same run, electrode cut and `--n_pca`.
+The broadband fit's directory gets `band_swapped_filter_*` TF maps of the band fit's
+filters on broadband input, at every frequency. The band fit's directory gets
+`30-50hz_band_swapped_filter_*` maps of the broadband filters on the band input.
+Each directory gets the `..._topomap_correlation.csv` (`pattern_r`, `filter_r`, as
+above), and `results/assr/corrca_band_swap__*.csv` collects every pair of a run.
+
+The z-score is per (channel, frequency), so the band fit's input is the broadband
+input at 30-50 Hz exactly. The broadband filters on the band input therefore just
+reproduce the broadband fit's own sources there, on the band's colour scale. The
+informative direction is the band filters read at every frequency: what a topography
+chosen on gamma alone picks up below 30 Hz.
+
 ## 6. Not here yet
 
 - **Cross-validated ISC.** Fit on all but one participant and score the held-out one.

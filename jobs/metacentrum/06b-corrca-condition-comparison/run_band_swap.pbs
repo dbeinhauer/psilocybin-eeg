@@ -1,0 +1,120 @@
+#!/bin/bash
+#PBS -N PSILO_CORRCA_06B_BAND_SWAP
+#PBS -l walltime=4:00:00
+#PBS -l select=1:ncpus=2:mem=48gb:scratch_local=10gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-06b CorrCA — band-swapped filters, READ-ONLY: nothing is fitted.
+#
+# scripts/run_corrca_band_swap.py pairs every broadband store with its
+# 30-50 Hz twin (same run, same electrode cut, same N_PCA) and reads each fit
+# through the other's filters:
+#   - the 30-50 Hz fit's filters on the broadband fit's input (every
+#     frequency, 1-50 Hz) -> drawn into the BROADBAND fit's directory
+#   - the broadband fit's filters on the 30-50 Hz fit's input (30-50 Hz)
+#     -> drawn into the BAND fit's directory
+# Input as each fit saw it: log10 first for a '*_log*' fit, z-scored along
+# time per (channel, frequency), per condition. TF maps of CC 1-2 (whole
+# recording + stimulus average + participants/), plus the topomap / filter
+# Pearson r of every component (the same CSV as the raw <-> log
+# swapped_filter reading).
+#
+# Needs the stores of BOTH runs: run_condition_{separate,tracks}.pbs and
+# their _gamma twins (and the individual-condition ones, if wanted). A missing
+# store skips only its pair, with a warning; a run with no store at all only
+# logs "nothing to do".
+#
+# One pass over the wavelet cache per condition and run serves all six pairs.
+#
+# qsub -v N_PCA=10 reads another component count (default 5).
+#
+# Output:
+#   plots/06b-corrca-condition-comparison/<Join>_ASSR/broadband/<variant>/pca_<N>/
+#       band_swapped_filter_condition_mean_tf_maps{,_onset}.png
+#       band_swapped_filter_topomap_correlation.csv, participants/band_swapped_filter_*
+#   plots/06b-corrca-condition-comparison/<Join>_ASSR/bands/<variant>/pca_<N>/
+#       30-50hz_band_swapped_filter_*   (the same, the other way round)
+#   results/assr/corrca_band_swap__<variant>__30-50hz__pca<N>.csv  (every pair)
+#
+# MEMORY: one participant's broadband block (~2.4 GB float32, full montage)
+# plus its raw and log z-scored copies and the float64 upcast of a projection,
+# ~15 GB at peak, beside the CC 1-2 projections of six pairs x two conditions
+# (~4 GB). CPU: numpy z-scoring is single-threaded; the projections use BLAS.
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+export OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+N_PCA="${N_PCA:-5}"
+echo "PCA dimensions: $N_PCA"
+
+# The runner heredoc below is quoted, so this is read from the container
+# environment at run time rather than substituted here.
+export SINGULARITYENV_N_PCA="$N_PCA" APPTAINERENV_N_PCA="$N_PCA"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+set -e
+source /opt/myproject/.venv/bin/activate
+
+DATA_DIR="/mnt/data/processed"
+
+for VARIANT in corrca_channel_joined_separate corrca_channel_joined_tracks \
+               corrca_channel_individual_conditions; do
+    echo "=== band swap: $VARIANT at $(date) ==="
+    python /mnt/scripts/run_corrca_band_swap.py \
+        --experiment assr \
+        --variant "$VARIANT" \
+        --music_type ASSR \
+        --band 30-50hz \
+        --conditions Placebo Psilocybin \
+        --n_pca "${N_PCA:-5}" \
+        --swapped_components 2 \
+        --store_dir "$DATA_DIR" \
+        --wavelet_data_dir "$DATA_DIR" \
+        --results_dir /mnt/results/assr \
+        --save_dir /mnt/plots
+done
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch
