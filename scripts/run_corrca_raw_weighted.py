@@ -5,7 +5,7 @@ and their mean over all electrodes (stage 06b).
 Read-only: every store must already exist, and nothing is fitted. For each fit of each
 run (full, ``_log``, ``_roi``, ``_non_roi``, ``_log_roi``, ``_log_non_roi``) and each
 spectrum (broadband, and the ``--bands`` twins), the leading ``--components`` shared
-forward patterns are read from the store. These are the ``corrca_shared_topomaps``:
+forward patterns are read from the store (``corrca_shared_patterns``):
 one topography per component, the same for both conditions. Each is taken in absolute
 value: the patterns were fitted on wavelet power, so their sign says where power
 co-varies, not where the voltage is positive. An ROI or non-ROI fit weighs every

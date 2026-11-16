@@ -6,7 +6,8 @@ runs (:mod:`src.visualization.iva_condition_plots`). What CorrCA adds, and what 
 drawn here, is what has no IVA counterpart:
 
 * the **shared** forward pattern of each component — CorrCA fits one filter for every
-  recording, so there is one group topography the model itself defines;
+  recording, so there is one group topography the model itself defines — and the
+  shared spatial **filter** itself, the channel weights that produce the TF maps;
 * the **synchrony per condition** — the ISC of each component within each condition,
   from the same filters, with every participant's leave-one-out ISC paired across
   conditions. The stage-06 IVA runs draw it too, on their sign-anchored sources;
@@ -52,13 +53,17 @@ def plot_shared_topomaps(
     image_interp: str = "cubic",
     contours: int = 4,
     cmap="RdBu_r",
+    title: str = "Shared CorrCA topographies (pooled fit)",
 ):
-    """One row of shared forward patterns, one column per component.
+    """One row of shared channel maps, one column per component.
 
-    Each panel is on its own symmetric scale: CorrCA fixes a component's scale, not a
-    common one across components.
+    Draws the forward patterns by default; the filters (``CorrcaResult.filters.T``)
+    go through the same layout with their own *title*. Each panel is on its own
+    symmetric scale: CorrCA fixes a component's scale, not a common one across
+    components.
 
-    :param patterns: ``(K, C)`` shared forward patterns (``CorrcaResult.patterns``).
+    :param patterns: ``(K, C)`` shared maps — forward patterns
+        (``CorrcaResult.patterns``) or filters (``CorrcaResult.filters.T``).
     :param isc: ``(K,)`` ISC of the fit, shown in each title.
     :param info: MNE ``Info`` for the topomap layout.
     :param n_channels: Number of channels on the channel axis.
@@ -71,6 +76,7 @@ def plot_shared_topomaps(
     :param contours: Number of contour lines; ``0`` for none.
     :param cmap: Colour map (a name or a ``Colormap``), on each panel's symmetric
         scale.
+    :param title: Figure title, before the dataset label.
     :return: The figure, or ``None`` when *comp_indices* is empty.
     """
     from mne.viz import plot_topomap
@@ -102,7 +108,7 @@ def plot_shared_topomaps(
             f"{COMPONENT_PREFIX} {k + 1}\nISC {isc[k]:.3f}  (|max| {vlim:.3g})",
             fontsize=8,
         )
-    title = f"Shared CorrCA topographies (pooled fit) — {label}"
+    title = f"{title} — {label}"
     if alignment_note is not None:
         title += f"\nsign: {alignment_note}"
     fig.suptitle(title, fontsize=11)

@@ -38,12 +38,13 @@ between-recording term includes each participant's own Placebo-Psilocybin pair.
 
 Figures (panels labelled ``CC <k>``):
 
-  - ``condition_mean_topomaps`` / ``condition_mean_tf_maps`` /
+  - ``condition_mean_tf_maps`` /
     ``condition_mean_tf_maps_onset`` — rows = conditions plus their difference,
     columns = components (drawn by :mod:`src.visualization.iva_condition_plots`)
   - ``participants/*`` — per component, Placebo row above Psilocybin row, one column
     per participant
-  - ``corrca_shared_topomaps`` — the shared forward pattern of each component
+  - ``shared_spatial_topomap_filter`` — the shared spatial filter ``W`` itself, the
+    channel weights that, applied to the z-scored power, give the TF maps
   - ``corrca_condition_isc`` — per-component synchrony per condition, paired
   - ``corrca_condition_isc.csv`` / ``corrca_participant_isc.csv`` /
     ``corrca_condition_isc_test.csv`` — the numbers behind it
@@ -151,7 +152,6 @@ from src.io.iva_store import save_iva_components  # noqa: E402
 from src.visualization.corrca_plots import COMPONENT_PREFIX  # noqa: E402
 from src.visualization.iva_condition_plots import (  # noqa: E402
     plot_condition_mean_tf_maps,
-    plot_condition_mean_topomaps,
     plot_participant_condition_tf_maps,
     plot_participant_condition_topomaps,
 )
@@ -355,19 +355,6 @@ def run_corrca_condition_comparison(
         }
         _logger.info(f"[{label}] writing figures to {out_dir}")
 
-        plot_condition_mean_topomaps(
-            patterns,
-            subject_participants,
-            subject_conditions,
-            condition_rows,
-            topo_info,
-            n_ch,
-            comp_indices,
-            show_difference=show_difference,
-            save_path=out_dir / f"{prefix}condition_mean_topomaps.png",
-            **shared,
-        )
-        plt.close("all")
         written = plot_participant_condition_topomaps(
             patterns,
             subject_participants,

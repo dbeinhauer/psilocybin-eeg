@@ -89,10 +89,9 @@ def test_writes_the_condition_grids_and_the_synchrony_report(tmp_path, stub_load
     main(_argv(tmp_path))
     out = _out_dir(tmp_path)
     for name in (
-        "condition_mean_topomaps.png",
         "condition_mean_tf_maps.png",
         "condition_mean_tf_maps_onset.png",
-        "corrca_shared_topomaps.png",
+        "shared_spatial_topomap_filter.png",
         "corrca_condition_isc.png",
     ):
         assert (out / name).exists(), name

@@ -105,11 +105,15 @@ central difference from IVA, and it has three consequences:
   the absolute one. The stored `polarity_anchor_strength` is
   `|mask mean| / RMS of the pattern`; below 0.1 the sign is close to a coin toss.
 - **Topographies.** The model's own topography is the shared forward pattern
-  `A = R_w W` (figure `corrca_shared_topomaps`). Each subject also gets a descriptive
-  pattern, `A_s = R_ss W (Wᵀ R_ss W)⁻¹`: the shared component seen through that
-  subject's covariance. Those per-subject patterns feed the condition topography grids.
+  `A = R_w W`, stored as `corrca_shared_patterns` but not drawn. Each subject also
+  gets a descriptive pattern, `A_s = R_ss W (Wᵀ R_ss W)⁻¹`: the shared component seen
+  through that subject's covariance. Those per-subject patterns feed the per-participant topographies.
   Because they share one filter, they agree with each other more than IVA's free
   per-recording topographies do. Don't read that agreement as evidence of synchrony.
+  The filter `W` itself — the channel weights that, applied to each subject's
+  time-z-scored power, give the TF maps — is drawn as `shared_spatial_topomap_filter`.
+  It is what produces the maps, not where the component sits on the scalp: a filter
+  also weights electrodes negatively to cancel noise, so read the pattern for location.
 - **Sources.** `wᵀ x_s` reshaped to `(F, T)` is each subject's component TF map. The
   maps are comparable across subjects in both scale and sign, so a plain group mean
   does not cancel.
@@ -177,14 +181,14 @@ keeps the `(conditions, K)` group ISC.
 ```
 plots/06b-corrca-condition-comparison/<JoinedSeparate|JoinedTracks>_<MusicType>/
     <broadband|bands>/<variant>/pca_<n>/
-        condition_mean_topomaps.png      (separate) | shared_mean_topomaps.png (tracks)
         condition_mean_tf_maps.png, condition_mean_tf_maps_onset.png
-        corrca_shared_topomaps.png, corrca_condition_isc.png
+        shared_spatial_topomap_filter.png
+        corrca_condition_isc.png
         corrca_condition_isc.csv, corrca_participant_isc.csv, corrca_condition_isc_test.csv
         participants/*_cc<k>_participants_*.png
 plots/06b-corrca-condition-comparison/IndividualConditions_<MusicType>/
     <broadband|bands>/corrca_channel_individual_conditions/<Condition>/pca_<n>/
-        the same, with condition_mean_topomaps.png and no _test.csv
+        the same, with no _test.csv
 data/processed/<experiment>/iva_results/<JoinedSeparate|JoinedTracks|Condition>/
     <variant>__<MusicType>__<spectrum>__pca<n>.npz        (--store_components)
 ```
@@ -428,7 +432,7 @@ It multiplies the **raw concatenated voltages** electrode by electrode with four
 weightings:
 
 - `|CC 1|` and `|CC 2|`: each fit's **shared forward pattern** (the
-  `corrca_shared_topomaps`) in absolute value. The patterns were fitted on wavelet
+  stored `corrca_shared_patterns`) in absolute value. The patterns were fitted on wavelet
   power, so their sign says where power co-varies, not where the voltage is positive;
   only the magnitude, "where the component lives", is used. An ROI or non-ROI fit
   weighs every electrode it did not see at zero.

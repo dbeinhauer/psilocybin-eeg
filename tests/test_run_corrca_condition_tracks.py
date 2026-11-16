@@ -99,10 +99,9 @@ def test_writes_the_grids_and_the_synchrony_report(tmp_path, stub_loaders):
     main(_argv(tmp_path))
     out = _out_dir(tmp_path)
     for name in (
-        "shared_mean_topomaps.png",
+        "shared_spatial_topomap_filter.png",
         "condition_mean_tf_maps.png",
         "condition_mean_tf_maps_onset.png",
-        "corrca_shared_topomaps.png",
         "corrca_condition_isc.png",
     ):
         assert (out / name).exists(), name
@@ -164,7 +163,7 @@ def test_skip_stored_reads_the_store_back_and_still_draws(tmp_path, stub_loaders
     main(_argv(tmp_path / "second", *stored, "--skip_stored"))
     out = _out_dir(tmp_path / "second")
     for name in (
-        "shared_mean_topomaps.png",
+        "shared_spatial_topomap_filter.png",
         "condition_mean_tf_maps.png",
         "corrca_condition_isc.png",
     ):
@@ -207,7 +206,7 @@ def test_individual_conditions_fit_each_condition_alone(tmp_path, stub_loaders):
             / condition.value
             / f"pca_{N_PCA}"
         )
-        assert (out / "condition_mean_topomaps.png").exists()
+        assert (out / "shared_spatial_topomap_filter.png").exists()
         # One condition: its synchrony, but no paired test.
         per_participant = pd.read_csv(out / "corrca_participant_isc.csv")
         assert set(per_participant["condition"]) == {condition.value}

@@ -1145,8 +1145,8 @@ def write_corrca_condition_report(
     """Write the CorrCA-only products of a stage-06b run: the ISC tables and figures.
 
     Three CSVs (group ISC per condition, per-participant leave-one-out ISC, the paired
-    test) and two figures (the shared topographies and the per-condition synchrony),
-    all in *out_dir* beside the condition grids.
+    test) and two figures (the shared spatial filters and the per-condition
+    synchrony), all in *out_dir* beside the condition grids.
     """
     import matplotlib.pyplot as plt
 
@@ -1155,15 +1155,17 @@ def write_corrca_condition_report(
     if tests is not None:
         tests.to_csv(out_dir / f"{prefix}corrca_condition_isc_test.csv", index=False)
 
+    # The filter W itself: its weights on the time-z-scored power give the TF maps.
     plot_shared_topomaps(
-        model.patterns,
+        model.filters.T,
         model.isc,
         info,
         n_channels,
         comp_indices,
         label=label,
         alignment_note=alignment_note,
-        save_path=out_dir / f"{prefix}corrca_shared_topomaps.png",
+        title="Shared CorrCA spatial filters W (applied to z-scored power)",
+        save_path=out_dir / f"{prefix}shared_spatial_topomap_filter.png",
     )
     plt.close("all")
     plot_condition_isc(

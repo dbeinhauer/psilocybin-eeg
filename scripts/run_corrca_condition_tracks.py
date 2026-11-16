@@ -38,11 +38,10 @@ in ``docs/analyses/06b-corrca-condition-comparison/``.
 
 Figures (panels labelled ``CC <k>``):
 
-  - ``shared_mean_topomaps`` — per-participant topographies, one row (shared)
   - ``condition_mean_tf_maps`` / ``condition_mean_tf_maps_onset`` — rows =
     conditions plus their difference, on the split TF maps
   - ``participants/*`` — per component, one column per participant
-  - ``corrca_shared_topomaps`` — the model's shared forward pattern per component
+  - ``shared_spatial_topomap_filter`` — the shared spatial filter ``W`` per component
   - ``corrca_condition_isc`` and the three ``corrca_*.csv`` tables — synchrony per
     condition
   - ``roi_masked_condition_mean_tf_maps`` (+ ``_onset``, + ``participants/roi_masked_*``)
@@ -156,7 +155,6 @@ from src.io.iva_store import save_iva_components  # noqa: E402
 from src.visualization.corrca_plots import COMPONENT_PREFIX  # noqa: E402
 from src.visualization.iva_condition_plots import (  # noqa: E402
     plot_condition_mean_tf_maps,
-    plot_condition_mean_topomaps,
     plot_participant_condition_tf_maps,
     plot_participant_condition_topomaps,
 )
@@ -412,24 +410,11 @@ def run_corrca_condition_tracks(
 
         # The per-participant topographies span both tracks: ONE row, not a fabricated
         # comparison. A single track is simply that condition's row.
-        if len(condition_rows) > 1:
-            shared_row = " + ".join(condition_rows) + " (shared)"
-            topomaps_name = "shared_mean_topomaps.png"
-        else:
-            shared_row = condition_rows[0]
-            topomaps_name = "condition_mean_topomaps.png"
-        plot_condition_mean_topomaps(
-            patterns,
-            participants,
-            [shared_row] * len(participants),
-            [shared_row],
-            topo_info,
-            n_ch,
-            comp_indices,
-            save_path=out_dir / f"{prefix}{topomaps_name}",
-            **shared,
+        shared_row = (
+            " + ".join(condition_rows) + " (shared)"
+            if len(condition_rows) > 1
+            else condition_rows[0]
         )
-        plt.close("all")
         written = plot_participant_condition_topomaps(
             patterns,
             participants,
