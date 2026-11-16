@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -N PSILO_CORRCA_06B_BAND_SWAP
-#PBS -l walltime=4:00:00
-#PBS -l select=1:ncpus=2:mem=48gb:scratch_local=10gb
+#PBS -l walltime=6:00:00
+#PBS -l select=1:ncpus=2:mem=100gb:scratch_local=100gb
 #PBS -m ae
 #PBS -j oe
 
@@ -9,11 +9,15 @@
 # Stage-06b CorrCA — band-swapped filters, READ-ONLY: nothing is fitted.
 #
 # scripts/run_corrca_band_swap.py pairs every broadband store with its
-# 30-50 Hz twin (same run, same electrode cut, same N_PCA) and reads each fit
-# through the other's filters:
-#   - the 30-50 Hz fit's filters on the broadband fit's input (every
-#     frequency, 1-50 Hz) -> drawn into the BROADBAND fit's directory
-#   - the broadband fit's filters on the 30-50 Hz fit's input (30-50 Hz)
+# band twin (same run, same electrode cut, same N_PCA) and reads each fit
+# through the other's filters, once per band in BANDS (default
+# "30-50hz 1-30hz"):
+#   - the band fit's filters on the broadband fit's input (every
+#     frequency, 1-50 Hz) -> drawn into the BROADBAND fit's directory, with
+#     the band's inner edge (30 Hz) marked beside the 40 Hz line. For 1-30hz
+#     this is the main reading: does a topography chosen below 30 Hz also
+#     carry the 40 Hz response above the edge?
+#   - the broadband fit's filters on the band fit's input (the band only)
 #     -> drawn into the BAND fit's directory
 # Input as each fit saw it: log10 first for a '*_log*' fit, z-scored along
 # time per (channel, frequency), per condition. TF maps of CC 1-2 (whole
@@ -22,26 +26,45 @@
 # swapped_filter reading).
 #
 # Needs the stores of BOTH runs: run_condition_{separate,tracks}.pbs and
-# their _gamma twins (and the individual-condition ones, if wanted). A missing
-# store skips only its pair, with a warning; a run with no store at all only
-# logs "nothing to do".
+# their band twins, _gamma (30-50hz) and _1_30hz (and the individual-condition
+# ones, if wanted). A missing store skips only its pair, with a warning; a run
+# with no store at all only logs "nothing to do".
 #
-# One pass over the wavelet cache per condition and run serves all six pairs.
+# One pass over the wavelet cache per condition, run and band serves all six
+# pairs.
+#
+# Then the SNR GRID of the same reading (scripts/run_corrca_snr_grid.py
+# --swap_band <band>): every broadband store read through its band twin's
+# filters at 40 Hz (0 and +-5 Hz selections, windows 0-0.5 s and 0.2-0.5 s),
+# against the store's usual ASSR references, with the stage-06 tests
+# (contrast, discrimination, snr). Its figures go into the broadband fit's
+# snr_grid/ beside the store's own grid, named band_swapped_filter_<band>; its
+# results into corrca_band_swap_snr__* files, so the store's own grid files are
+# never touched. The grid reads only the 40 Hz bins of the cache.
 #
 # qsub -v N_PCA=10 reads another component count (default 5).
+# qsub -v BANDS=1-30hz reads one band only.
+# qsub -v STEPS=snr runs only the SNR grid (STEPS=tf only the TF maps;
+#   default both).
 #
 # Output:
 #   plots/06b-corrca-condition-comparison/<Join>_ASSR/broadband/<variant>/pca_<N>/
-#       band_swapped_filter_condition_mean_tf_maps{,_onset}.png
-#       band_swapped_filter_topomap_correlation.csv, participants/band_swapped_filter_*
+#       band_swapped_filter_<band>_condition_mean_tf_maps{,_onset}.png
+#       band_swapped_filter_<band>_topomap_correlation.csv,
+#       participants/band_swapped_filter_<band>_*
 #   plots/06b-corrca-condition-comparison/<Join>_ASSR/bands/<variant>/pca_<N>/
-#       30-50hz_band_swapped_filter_*   (the same, the other way round)
-#   results/assr/corrca_band_swap__<variant>__30-50hz__pca<N>.csv  (every pair)
+#       <band>_band_swapped_filter_*   (the same, the other way round)
+#   results/assr/corrca_band_swap__<variant>__<band>__pca<N>.csv  (every pair)
+#   plots/06b-corrca-condition-comparison/<Join>_ASSR/broadband/<variant>/pca_<N>/
+#       snr_grid/<selection>/<window>/
+#           {pvalue_summary,snr_by_condition,trial_course_by_source}__band_swapped_filter_<band>.png
+#   results/assr/corrca_band_swap_snr__<variant>__<band>__pca<N>{.csv,__courses.npz,__values.npz}
 #
 # MEMORY: one participant's broadband block (~2.4 GB float32, full montage)
 # plus its raw and log z-scored copies and the float64 upcast of a projection,
 # ~15 GB at peak, beside the CC 1-2 projections of six pairs x two conditions
-# (~4 GB). CPU: numpy z-scoring is single-threaded; the projections use BLAS.
+# (~4 GB). The SNR grid holds one ~1 GB store and the 40 Hz bins. CPU: numpy
+# z-scoring is single-threaded; the projections use BLAS.
 # ---------------------------------------------------------------------------
 
 set -e
@@ -75,11 +98,15 @@ cd "$DATADIR" || {
 cd "$SCRATCHDIR"
 
 N_PCA="${N_PCA:-5}"
-echo "PCA dimensions: $N_PCA"
+BANDS="${BANDS:-30-50hz 1-30hz}"
+STEPS="${STEPS:-tf snr}"
+echo "PCA dimensions: $N_PCA, bands: $BANDS, steps: $STEPS"
 
-# The runner heredoc below is quoted, so this is read from the container
+# The runner heredoc below is quoted, so these are read from the container
 # environment at run time rather than substituted here.
 export SINGULARITYENV_N_PCA="$N_PCA" APPTAINERENV_N_PCA="$N_PCA"
+export SINGULARITYENV_BANDS="$BANDS" APPTAINERENV_BANDS="$BANDS"
+export SINGULARITYENV_STEPS="$STEPS" APPTAINERENV_STEPS="$STEPS"
 
 cat << 'EOF' > run_inside.sh
 #!/bin/bash
@@ -87,15 +114,18 @@ set -e
 source /opt/myproject/.venv/bin/activate
 
 DATA_DIR="/mnt/data/processed"
+VARIANTS="corrca_channel_joined_separate corrca_channel_joined_tracks
+          corrca_channel_individual_conditions"
 
-for VARIANT in corrca_channel_joined_separate corrca_channel_joined_tracks \
-               corrca_channel_individual_conditions; do
-    echo "=== band swap: $VARIANT at $(date) ==="
+if [[ " ${STEPS:-tf snr} " == *" tf "* ]]; then
+for BAND in ${BANDS:-30-50hz 1-30hz}; do
+for VARIANT in $VARIANTS; do
+    echo "=== band swap: $VARIANT, $BAND at $(date) ==="
     python /mnt/scripts/run_corrca_band_swap.py \
         --experiment assr \
         --variant "$VARIANT" \
         --music_type ASSR \
-        --band 30-50hz \
+        --band "$BAND" \
         --conditions Placebo Psilocybin \
         --n_pca "${N_PCA:-5}" \
         --swapped_components 2 \
@@ -104,6 +134,31 @@ for VARIANT in corrca_channel_joined_separate corrca_channel_joined_tracks \
         --results_dir /mnt/results/assr \
         --save_dir /mnt/plots
 done
+done
+fi
+
+if [[ " ${STEPS:-tf snr} " == *" snr "* ]]; then
+for BAND in ${BANDS:-30-50hz 1-30hz}; do
+for VARIANT in $VARIANTS; do
+    echo "=== band-swap SNR grid: $VARIANT, $BAND at $(date) ==="
+    python /mnt/scripts/run_corrca_snr_grid.py \
+        --experiment assr \
+        --variant "$VARIANT" \
+        --music_type ASSR \
+        --swap_band "$BAND" \
+        --conditions Placebo Psilocybin \
+        --n_pca "${N_PCA:-5}" \
+        --halfwidths 0 5 \
+        --stimulus_intervals 0:0.5 0.2:0.5 \
+        --contrast_alternative greater \
+        --snr_alternative less \
+        --store_dir "$DATA_DIR" \
+        --wavelet_data_dir "$DATA_DIR" \
+        --results_dir /mnt/results/assr \
+        --save_dir /mnt/plots
+done
+done
+fi
 EOF
 
 chmod +x run_inside.sh

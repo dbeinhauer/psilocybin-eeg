@@ -1,0 +1,153 @@
+#!/bin/bash
+#PBS -N PSILO_CORRCA_JOINED_06B_1_30HZ
+#PBS -l walltime=2:00:00
+#PBS -l select=1:ncpus=4:mem=350gb:scratch_local=100gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-06b CorrCA — condition comparison on the JOINED_SEPARATE condition.
+#
+# 1. FIT: scripts/run_corrca_condition_comparison.py (the same code as
+#    notebooks/06b-corrca-condition-comparison/corrca_channel_joined_separate.ipynb)
+#    on full data. Placebo and Psilocybin are pooled on the SUBJECT axis (2P
+#    recordings); Correlated Component Analysis fits ONE channel filter per
+#    component, shared by every recording, maximising the inter-recording
+#    correlation of the projected wavelet power (samples = time × frequency).
+#    --n_pca is the dimension of the pooled covariance subspace = component count.
+#    Sign: one per component, from the shared pattern against the ASSR electrode
+#    mask (never per recording — the filter is shared).
+#
+#    Six fits from the ONE loaded tensor, in this order:
+#      1. full montage                    2. full montage on log power ('_log')
+#      3. ASSR ROI alone ('_roi')         4. every other electrode ('_non_roi')
+#      5. '_log_roi'                      6. '_log_non_roi'
+#    Each cut is made BEFORE the z-scoring (ROI -> z-score -> PCA -> CorrCA). The
+#    log-power fits take log10 of the power (floored at the dtype's smallest
+#    normal number) BEFORE any z-scoring. Both full-montage fits also draw their
+#    filter read through the ROI alone (roi_masked_*) and through the rest of the
+#    head (non_roi_masked_*). --skip_log_power / --skip_roi_fit /
+#    --skip_non_roi_fit drop fits.
+#    The fits run in parallel, each in its own forked process reading the one
+#    loaded tensor; --parallel_fits caps how many at once (see MEMORY).
+#
+#    A fit whose store for this N_PCA already exists is READ BACK, not refit
+#    (--skip_stored), and every figure is still drawn from it; the data is
+#    loaded either way, for the masked maps and any missing fit. A store
+#    fitted on other data is refused. qsub -v FORCE_FIT=1 refits all six.
+#
+# 1-30 HZ BAND (everything below gamma): the frequency axis is cut to 1-30 Hz
+# (--band_range 1 30) BEFORE the fit, so the filter is chosen on delta-beta
+# samples only, the counterpart of the 30-50 Hz (_gamma) run. Stored and plotted
+# under the band token '1-30hz' (plots under bands/, a '1-30hz_' prefix), beside
+# the broadband and 30-50 Hz runs rather than over either.
+#
+# FIT ONLY: no SNR grid. The grid reads its 'full' rows at 40 Hz on the store's
+# own bins, which a 1-30 Hz store does not have (it refuses such a store). Whether
+# these filters carry the 40 Hz response is read by run_band_swap.pbs instead:
+# the 1-30 Hz filters applied to the broadband input, at every frequency
+# (band_swapped_filter_1-30hz_* in the broadband fit's directory). Submit it
+# after this job (qsub -v BANDS=1-30hz run_band_swap.pbs).
+#
+# qsub -v N_PCA=10 fits another component count (default 5).
+#
+# Output:
+#   plots/06b-corrca-condition-comparison/JoinedSeparate_ASSR/bands/
+#       corrca_channel_joined_separate/pca_<N>/       # + _log, _roi, _non_roi,
+#                                         _log_roi, _log_non_roi
+#           condition_mean_*, participants/, corrca_*,
+#           roi_masked_*, non_roi_masked_*,            # fit
+#   data/processed/assr/iva_results/JoinedSeparate/
+#       corrca_channel_joined_separate{,_log,_roi,_non_roi,_log_roi,_log_non_roi}__ASSR__1-30hz__pca<N>.npz
+#
+# MEMORY (499 GB is the hard cap). The band is cut after loading, so the load is
+# the broadband one (the joined broadband tensor, ~44 GB, stays beside the ~26 GB
+# 1-30 Hz cut: 30 of the 50 bins). Each running fit holds about three copies of
+# its prepared input at its peak — a full-montage 1-30 Hz fit ~80 GB — and
+# --parallel_fits 2 lets two full-montage fits' worth run at once (cut fits count
+# as their share of the channels: ROI ~0.2, non-ROI ~0.8), so ~230 GB. Do not
+# raise --parallel_fits without raising mem. Check resources_used.mem after a
+# run.
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+# Up to four fits run at once (--parallel_fits), one BLAS thread each: one per CPU.
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+N_PCA="${N_PCA:-5}"
+FORCE_FIT="${FORCE_FIT:-0}"
+echo "PCA dimensions: $N_PCA, force fit: $FORCE_FIT"
+
+# The runner heredoc below is quoted, so these are read from the container
+# environment at run time rather than substituted here.
+export SINGULARITYENV_N_PCA="$N_PCA" APPTAINERENV_N_PCA="$N_PCA"
+export SINGULARITYENV_FORCE_FIT="$FORCE_FIT" APPTAINERENV_FORCE_FIT="$FORCE_FIT"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+set -e
+source /opt/myproject/.venv/bin/activate
+
+DATA_DIR="/mnt/data/processed"
+
+SKIP_STORED=(--skip_stored)
+if [ "${FORCE_FIT:-0}" = "1" ]; then
+    SKIP_STORED=()
+fi
+
+echo "=== fit at $(date) ==="
+python /mnt/scripts/run_corrca_condition_comparison.py \
+    --experiment assr \
+    --conditions Placebo Psilocybin \
+    --n_pca "${N_PCA:-5}" \
+    --gamma 0.0 \
+    --band_range 1 30 \
+    --wavelet_data_dir "$DATA_DIR" \
+    --reuse_wavelets \
+    --store_components \
+    --store_dir "$DATA_DIR" \
+    "${SKIP_STORED[@]}" \
+    --save_dir /mnt/plots \
+    --n_jobs -1 \
+    --parallel_fits 2
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch

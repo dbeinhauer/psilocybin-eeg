@@ -38,7 +38,11 @@ script default) runs the fits one after another in one process.
 
 Every job has a `*_gamma.pbs` twin that decomposes only 30–50 Hz (`--band_range 30 50`,
 stored and plotted as `30-50hz`, under `bands/`), whose grid reads the gamma store
-(`--band 30-50hz`).
+(`--band 30-50hz`). Every job also has a `*_1_30hz.pbs` twin that decomposes only the band
+below gamma, 1–30 Hz (`--band_range 1 30`, token `1-30hz`; the 30 Hz bin belongs to both
+bands). It fits only and runs no SNR grid. The grid reads its `full` rows at 40 Hz on the
+store's own bins, and it refuses a store whose band does not contain that frequency. These
+jobs run `P = 2`, since a 1–30 Hz fit carries 30 of the 50 bins.
 
 The notebooks in `notebooks/06b-corrca-condition-comparison/` select parameters at
 reduced scale: `corrca_channel_joined_*` for the decomposition (`BAND_RANGE = (30, 50)`
@@ -224,7 +228,12 @@ the same three exact-Wilcoxon test families:
 | `snr` | is a component's response weaker than a reference's, per condition? | one-sided `less` |
 
 It draws the same figures per grid cell: `pvalue_summary__<variant>`,
-`snr_by_condition__<variant>` and `trial_course_by_source__<variant>`.
+`snr_by_condition__<variant>` and `trial_course_by_source__<variant>`. It adds
+`trial_course_by_participant__<variant>`: each participant's median-over-trials course
+for CC 1, CC 2 and the `ASSR-mask (PCA, z)` reference (what the fit was handed;
+`ASSR-mask (full)` in a non-ROI store, which has no other), with one row per
+condition. A participant keeps the same line style in every panel, and the bold
+line is the all-participant mean, the centre line of `trial_course_by_source`.
 
 **What CorrCA changes:**
 
@@ -346,22 +355,131 @@ changes, and the SNR grid's `swapped_filter` rows sit against the same reference
   carry `pattern_r`, and the grid logs both.
 - The SNR rows cover every component, as for the other signal variants.
 
-### Band-swapped filters: broadband <-> 30-50 Hz
+### Band-swapped filters: broadband <-> 30-50 Hz and 1-30 Hz
 
 `scripts/run_corrca_band_swap.py` (job `run_band_swap.pbs`) does the same swap
 across the frequency cut instead of the power scale. It is read-only and pairs each
-broadband store with its 30-50 Hz twin, with the same run, electrode cut and `--n_pca`.
-The broadband fit's directory gets `band_swapped_filter_*` TF maps of the band fit's
-filters on broadband input, at every frequency. The band fit's directory gets
-`30-50hz_band_swapped_filter_*` maps of the broadband filters on the band input.
+broadband store with its band twin (`--band 30-50hz` or `--band 1-30hz`; the job runs
+both, or `qsub -v BANDS=1-30hz` for one), with the same run, electrode cut and
+`--n_pca`. The broadband fit's directory gets `band_swapped_filter_<band>_*` TF maps of
+the band fit's filters on broadband input, at every frequency. The band's inner edge
+(30 Hz for both bands) is marked there beside the 40 Hz line. The band fit's directory
+gets `<band>_band_swapped_filter_*` maps of the broadband filters on the band input.
 Each directory gets the `..._topomap_correlation.csv` (`pattern_r`, `filter_r`, as
-above), and `results/assr/corrca_band_swap__*.csv` collects every pair of a run.
+above), and `results/assr/corrca_band_swap__*__<band>__*.csv` collects every pair of a
+run.
 
 The z-score is per (channel, frequency), so the band fit's input is the broadband
-input at 30-50 Hz exactly. The broadband filters on the band input therefore just
+input at the band's bins exactly. The broadband filters on the band input therefore just
 reproduce the broadband fit's own sources there, on the band's colour scale. The
-informative direction is the band filters read at every frequency: what a topography
-chosen on gamma alone picks up below 30 Hz.
+informative direction is the band filters read at every frequency. For `30-50hz` it shows
+what a topography chosen on gamma alone picks up below 30 Hz. For `1-30hz` it shows the
+reverse: whether a topography chosen on delta to beta also carries the 40 Hz steady state
+above the edge, and so whether the low-frequency onset response and the 40 Hz response
+share one spatial map.
+
+The same job then runs the SNR grid on that informative direction:
+`run_corrca_snr_grid.py --swap_band <band>` reads every broadband store through its band
+twin's filters at 40 Hz and tests the `band_swapped_filter_<band>` rows against the
+store's usual references, with the same selections, windows and three test families as
+the store's own grid (`qsub -v STEPS=snr` runs this part alone). Its figures sit in the
+broadband fit's `snr_grid/` as `*__band_swapped_filter_<band>.png`. Its results go to
+`results/assr/corrca_band_swap_snr__<variant>__<band>__pca<N>*`, kept apart so the
+store's own `assr_snr_grid__*` files are never overwritten. The TF maps stay
+`run_corrca_band_swap.py`'s, so this pass reads only the 40 Hz bins.
+
+### The SNR grid and onset TF maps on another baseline
+
+Every trial of the grid is normalised by its pre-stimulus window: its own mean is
+subtracted, and it is divided by the SD pooled over trials (the ROI reference is
+normalised the same way). The stimulus-averaged TF maps (`*_condition_mean_tf_maps_onset`)
+are the median over trials of the same reading at every frequency. By default the window
+is the whole pre-onset span, −300 to 0 ms. `run_corrca_snr_grid.py --baseline=-0.3:-0.05`
+uses −300 to −50 ms instead, which keeps the samples just before the onset out of the
+baseline. Write it with `=`, because an argument that starts with a minus would
+otherwise be read as an option.
+
+Its figures go to `baseline_-300_-50ms/` inside the fit's directory, which is laid out
+like the fit's directory itself:
+
+- `snr_grid/<selection>/<window>/`: the grid figures, with the default's file names.
+- `condition_mean_tf_maps_onset.png` and `participants/onset_*`: the stored sources, every
+  component.
+- With `--masked_tf_maps`, also `roi_masked_*` and `non_roi_masked_*` (every component),
+  `swapped_filter_*` and, with `--swap_band`, `band_swapped_filter_<band>_*` (CC 1-2,
+  with the 30 Hz band edge marked). A band-swap run draws only its own reading.
+
+The results go to `assr_snr_grid_baseline_-300_-50ms__*` (and
+`corrca_band_swap_snr_baseline_-300_-50ms__*` with `--swap_band`), so the default
+grid is not touched. No `tf_baseline` file is written, because the maps are drawn instead.
+
+Only the per-participant medians of the normalised trials are stored, not the trials, so
+this re-reads the cache. The whole-recording TF maps (`condition_mean_tf_maps.png`) do
+not depend on the baseline and are not redrawn. The read-only job
+`run_snr_grid_baseline.pbs` runs this for every run: on the broadband and 30-50 Hz
+stores, and on both band-swap readings. Use `qsub -v BASELINE=lo:hi` for another window,
+`VARIANTS=<one run>` to split the runs across jobs, and `TF_MAPS=0` to read the cache at
+the 40 Hz bins only.
+
+### Raw voltages through the topographies
+
+`scripts/run_corrca_raw_weighted.py` (job `run_raw_weighted.pbs`) is also read-only.
+It multiplies the **raw concatenated voltages** electrode by electrode with four
+weightings:
+
+- `|CC 1|` and `|CC 2|`: each fit's **shared forward pattern** (the
+  `corrca_shared_topomaps`) in absolute value. The patterns were fitted on wavelet
+  power, so their sign says where power co-varies, not where the voltage is positive;
+  only the magnitude, "where the component lives", is used. An ROI or non-ROI fit
+  weighs every electrode it did not see at zero.
+- the **binary ASSR ROI**: 1 on the ASSR electrodes, 0 elsewhere.
+- **uniform** over every electrode, all ones. This is the reference: its readings are
+  stage 00's.
+
+Per recording, the voltage is **z-scored** per channel along the whole recording, cut
+at every `fam+` onset, and every electrode is **multiplied by its weight** (the
+topography filter). The weighted trials are then read two ways:
+
+- **PC1**: the PCA over channels of the weighted trial mean, by stage 00's own
+  `channel_pca_components` (`run_assr_raw_pca.py`), gives the PC1 direction, and
+  every weighted trial is projected onto it. The sign is aligned by `align_pc1_signs`
+  over every recording of both conditions together, so a condition difference is never
+  a sign flip.
+- **all data**: the mean over all electrodes, no component separated. With uniform
+  weights this is stage 00's channel mean of the z-scored voltage.
+
+Either signal's trials are then normalised by `baseline_normalise` (each trial minus
+its own pre-onset mean, divided by the pre-onset SD pooled over the recording's
+trials), as the other onset figures are, and averaged. The onset normalisation acts on
+the read-out signal only, after the weighting, so every electrode enters on its z-score
+and the weights are the only per-electrode scaling. Normalising each channel against
+its own baseline first would rescale every electrode again and override the z-score.
+In pre-onset SD units neither curve depends on the weights' overall scale.
+
+The data are average-referenced, so at every sample the electrodes sum to zero, and an
+evoked response is a dipole (negative fronto-centrally, positive over the mastoid and
+occipital sites). The all-data mean of a weighting covering both poles, uniform and
+`|CC|` alike, cancels much of its amplitude; a single-sign region such as the binary
+ROI keeps it. PC1's loading carries a sign per electrode and follows the dipole
+instead. Reading both against their own pre-onset noise puts them on one scale.
+
+Figures go to a `raw_weighted/` subdirectory of each fit's directory, for each readout
+`<r>` (`pc1`, `mean`):
+
+- `[<band>_]raw_weighted_<r>.png`: rows are the conditions, their group means and the
+  paired Psilocybin − Placebo difference; columns are the weightings.
+- `..._overlay.png`: the uniform group mean against each other weighting, per
+  condition.
+- `..._differences.png`: the paired condition difference of each weighting against
+  the uniform one's, then, per condition, each weighting minus uniform.
+- `participants/`: one grid per weighting.
+
+All figures of one call share two y-ranges, over both readouts: one for the curves and
+one for the differences. The job reads all three runs in one call, so this holds
+across every fit, band and run. `--ylim` / `--ylim_diff` pin them by hand. Every panel
+marks the stimulus onset (dashed) and offset (dotted). The uniform reference is a
+dashed dark-grey line in the overlays and has a grey panel face where it has its own
+panel.
 
 ## 6. Not here yet
 

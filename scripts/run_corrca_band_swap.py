@@ -3,8 +3,8 @@ Band-swapped CorrCA filters (stage 06b): each broadband fit read through its
 band-restricted twin's filters, and the band fit through the broadband one's.
 
 Read-only: every store must already exist, written by a broadband and a banded run
-(``--band_range 30 50``, token ``--band 30-50hz``) of the same fit script and
-``--n_pca``. Nothing is fitted. For each fit of the run (full, ``_log``, ``_roi``,
+(e.g. ``--band_range 30 50``, token ``--band 30-50hz``, or ``--band_range 1 30``,
+token ``--band 1-30hz``) of the same fit script and ``--n_pca``. Nothing is fitted. For each fit of the run (full, ``_log``, ``_roi``,
 ``_non_roi``, ``_log_roi``, ``_log_non_roi``), the broadband store and its band twin
 (same variant and electrode cut) are paired. The pairing and outputs mirror the raw <-> log
 ``swapped_filter`` reading of ``run_corrca_snr_grid.py``:
@@ -18,14 +18,17 @@ Read-only: every store must already exist, written by a broadband and a banded r
     fit's input (the band's bins only) and drawn into the band fit's directory. Both
     use the fit's own ``condition_mean_tf_maps`` calls (+ ``_onset``,
     + ``participants/``), so within one directory the data stay fixed and only the
-    topography changes.
+    topography changes. The broadband maps mark the band's inner edge (30 Hz for
+    both ``30-50hz`` and ``1-30hz``) beside the 40 Hz ASSR line: everything across it
+    is what the band filters pick up outside the band they were fitted on.
 
 The input is what each fit was handed: the cache on its frequencies, ``log10`` first
 for a ``*_log*`` fit, z-scored along time per (channel, frequency) and per
 condition. Because the z-score is per frequency, the band fit's input is exactly the
 broadband input at the band's bins. So the broadband filters on the band input
 reproduce the broadband fit's own sources there; only the colour scale is the band's.
-The informative direction is the band filters read at every frequency.
+The informative direction is the band filters read at every frequency: for
+``1-30hz``, whether a topography chosen below 30 Hz also carries the 40 Hz response.
 
 The cache is read on the full montage once per condition, and every fit's filters are
 embedded with zeros off its own electrodes. Because the z-score is per channel, that
@@ -34,9 +37,9 @@ reads exactly what an ROI or non-ROI fit saw. One pass then serves all six pairs
 Outputs::
 
     plots/06b-corrca-condition-comparison/<Join>_<Music>/broadband/<variant>/pca_<N>/
-        band_swapped_filter_condition_mean_tf_maps{,_onset}.png
-        band_swapped_filter_topomap_correlation.csv
-        participants/band_swapped_filter_*.png
+        band_swapped_filter_<band>_condition_mean_tf_maps{,_onset}.png
+        band_swapped_filter_<band>_topomap_correlation.csv
+        participants/band_swapped_filter_<band>_*.png
     plots/06b-corrca-condition-comparison/<Join>_<Music>/bands/<variant>/pca_<N>/
         <band>_band_swapped_filter_condition_mean_tf_maps{,_onset}.png
         <band>_band_swapped_filter_topomap_correlation.csv
@@ -50,7 +53,7 @@ Examples::
         --variant corrca_channel_joined_separate --band 30-50hz --n_pca 5
 
     python scripts/run_corrca_band_swap.py --variant corrca_channel_joined_tracks \\
-        --n_pca 5 --n_subjects 2 --n_times 3000
+        --band 1-30hz --n_pca 5 --n_subjects 2 --n_times 3000
 """
 
 from __future__ import annotations
@@ -85,6 +88,7 @@ from scripts.run_assr_snr_grid import (  # noqa: E402
 # The swapped_filter figures, so both swaps are drawn by the same calls.
 from scripts.run_corrca_snr_grid import (  # noqa: E402
     _STORE_CONDITIONS,
+    _TF_FREQ_MARKS,
     _draw_swapped_tf_maps,
     _embed,
 )
@@ -234,7 +238,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     stored.add_argument(
         "--band",
         default="30-50hz",
-        help="Band token of the band-restricted stores (the broadband ones have none).",
+        help="Band token of the band-restricted stores (the broadband ones have "
+        "none), e.g. 30-50hz or 1-30hz.",
     )
     stored.add_argument("--n_pca", type=int, default=5)
     stored.add_argument("--store_dir", type=Path, default=None)
@@ -398,8 +403,12 @@ def run_join(
             root=args.save_dir,
         )
 
+    # One broadband directory holds the reading of every band twin, so its files carry
+    # the band; the band directory's carry it as their usual plot prefix.
     def _prefix(spectrum: str) -> str:
-        return f"{READING}_" if spectrum == _BROADBAND else f"{args.band}_{READING}_"
+        if spectrum == _BROADBAND:
+            return f"{READING}_{args.band}_"
+        return f"{args.band}_{READING}_"
 
     for pair in pairs:
         for spectrum in (_BROADBAND, _BAND):
@@ -498,6 +507,23 @@ def run_join(
 
     # ---- 4. figures, in each fit's own directory ----------------------------
     shown = list(range(n_components))
+    band_freqs = pairs[0].band.freqs
+    broadband_freqs = pairs[0].broadband.freqs
+    # Only an edge inside the broadband grid separates in-band from out-of-band rows.
+    band_edges = [
+        float(edge)
+        for edge in (band_freqs.min(), band_freqs.max())
+        if broadband_freqs.min() < edge < broadband_freqs.max()
+    ]
+    freq_marks = {
+        _BROADBAND: [*_TF_FREQ_MARKS, *band_edges],
+        _BAND: list(_TF_FREQ_MARKS),
+    }
+    edge_note = (
+        f"; band edge {', '.join(f'{e:g}' for e in band_edges)} Hz marked"
+        if band_edges
+        else ""
+    )
     for pair in pairs:
         table = tables[pair.variant]
         topomap_r = ", ".join(
@@ -522,7 +548,9 @@ def run_join(
                 + ("_log" if pair.log_power else "")
                 + f" [{this_name}]",
                 note=f"filters of the {twin_name} fit on this {this_name} fit's "
-                f"input; topomap r {topomap_r}",
+                f"input; topomap r {topomap_r}"
+                + (edge_note if spectrum == _BROADBAND else ""),
+                freq_marks=freq_marks[spectrum],
             )
 
 

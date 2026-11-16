@@ -38,6 +38,35 @@ Signal variants, stage 06's two and their complement:
     Component *k* is the twin's *k*, with the twin's own sign. The matched-component
     correlations of the two fits' patterns and filters are logged. Skipped, with a
     warning, when the twin store is missing.
+  - ``band_swapped_filter_<band>`` — only with ``--swap_band <band>`` on a broadband
+    store, and then the only reading: the filters of the store's band-restricted
+    twin (same variant and electrodes, fitted on ``<band>``) on THIS store's broadband
+    input, at the 40 Hz selections. For ``1-30hz``, whether a topography chosen below
+    30 Hz carries the 40 Hz response. Its TF maps are drawn by
+    ``run_corrca_band_swap.py``; here only the statistics, into separate result files
+    (``corrca_band_swap_snr__*``), so the store's own grid is never overwritten.
+
+**Another baseline.** Every trial is normalised by its pre-stimulus window: its own
+mean subtracted, divided by the SD pooled over trials (``at.baseline_normalise``; the
+ROI reference likewise). By default that window is the whole pre-onset span, ``t < 0``.
+``--baseline=LO:HI`` (seconds, e.g. ``--baseline=-0.3:-0.05``) normalises by that window
+instead. The trials are not stored, only their medians, so this re-reads the cache.
+Everything it draws goes to ``baseline_<lo>_<hi>ms/`` inside the fit's directory, laid
+out like the fit's directory itself:
+
+* ``snr_grid/<selection>/<window>/`` — the grid figures, same names as the default's;
+* the **stimulus-averaged TF maps** under that baseline, with the fit's plotting calls
+  and file names: ``condition_mean_tf_maps_onset.png`` of the stored sources (every
+  component) and ``participants/onset_*``. With ``--masked_tf_maps`` (the cache read at
+  every store frequency, several times slower) also ``roi_masked_*``,
+  ``non_roi_masked_*`` (every component), ``swapped_filter_*`` and, with
+  ``--swap_band``, ``band_swapped_filter_<band>_*`` (the leading
+  ``--swapped_components``). A band-swap run draws only its own reading; the stored
+  sources' maps are the store's own run's.
+
+Its results go to ``assr_snr_grid_baseline_<lo>_<hi>ms__*``
+(``corrca_band_swap_snr_baseline_..__*`` with ``--swap_band``), so the default grid is
+never overwritten; no ``tf_baseline`` file is written, the maps are drawn instead.
 
 All carry the same reference rows (the masks on the raw cache, the full mask swapped
 for the equal-weight ROI row), so only the learned rows move. Tests (participants as
@@ -89,6 +118,8 @@ Outputs::
     results/<experiment>/assr_snr_grid__<variant>__<spectrum>__pca<N>__values.npz
     results/<experiment>/assr_snr_grid__<variant>__<spectrum>__pca<N>__courses.npz
     results/<experiment>/assr_snr_grid__<variant>__<spectrum>__pca<N>__tf_baseline.npz
+    results/<experiment>/corrca_band_swap_snr__<variant>__<band>__pca<N>.csv
+        # --swap_band <band>: + __courses.npz, __values.npz; no tf_baseline
         # tf_baseline__<Condition>; with --masked_tf_maps also
         # tf_baseline__<signal variant>__<Condition> for the masked variants
         # an individual condition's files carry it: <variant>__<Condition>__<spectrum>
@@ -101,6 +132,9 @@ Outputs::
                 pvalue_summary__<variant>.png
                 snr_by_condition__<variant>.png
                 trial_course_by_source__<variant>.png
+                trial_course_by_participant__<variant>.png   # CC 1, CC 2, (PCA, z)
+            snr_by_condition__band_swapped_filter_<band>.png   # --swap_band, and its
+                                      # pvalue_summary__ / trial_course_by_source__
         swapped_filter_condition_mean_tf_maps.png   # in the fit's directory
         swapped_filter_condition_mean_tf_maps_onset.png
         swapped_filter_topomap_correlation.csv
@@ -114,6 +148,12 @@ Examples::
 
     python scripts/run_corrca_snr_grid.py --variant corrca_channel_joined_tracks \\
         --n_pca 10 --n_times 3000 --skip_plots
+
+    python scripts/run_corrca_snr_grid.py --variant corrca_channel_joined_separate \\
+        --n_pca 5 --swap_band 1-30hz
+
+    python scripts/run_corrca_snr_grid.py --variant corrca_channel_joined_separate \\
+        --n_pca 5 --baseline=-0.3:-0.05
 """
 
 from __future__ import annotations
@@ -134,6 +174,8 @@ import pandas as pd  # noqa: E402
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.analysis_common import (  # noqa: E402
+    CORRCA_ALIGNMENT_NOTE,
+    CORRCA_ALIGNMENT_NOTE_NONE,
     CORRCA_INDIVIDUAL_VARIANTS,
     CORRCA_LOG_OF,
     CORRCA_LOG_VARIANTS,
@@ -186,6 +228,7 @@ from src.io.wavelet_store import find_wavelet_set, wavelet_label_dir  # noqa: E4
 from src.visualization.assr_snr_plots import (  # noqa: E402
     plot_cell,
     plot_courses,
+    plot_participant_courses,
     plot_snr,
 )
 from src.visualization.corrca_plots import COMPONENT_PREFIX  # noqa: E402
@@ -215,8 +258,13 @@ _MASKED = {
     CORRCA_SWAPPED_READING: ("swapped", "swapped_z", "swapped_tf_z"),
 }
 _LOG_LABEL = at.LOG_PCA_Z_MASK_LABEL
+#: Components drawn per participant beside the ROI reference.
+_PARTICIPANT_COURSE_COMPONENTS = 2
 #: Every reference row project_condition can give, in the order its blocks stack.
 _REFERENCE_ORDER = (*_MASK_LABELS, _LOG_LABEL)
+#: The band-swapped reading's label (``run_corrca_band_swap.py``'s); its signal
+#: variant carries the band: ``band_swapped_filter_<band>``.
+BAND_SWAPPED_READING = "band_swapped_filter"
 _STORE_CONDITIONS = {
     IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE: ConditionVariants.JOINED_SEPARATE,
     IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS: ConditionVariants.JOINED_TRACKS,
@@ -255,6 +303,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     stored.add_argument("--music_type", default=MusicTypeVariants.ASSR.value)
     stored.add_argument("--band", default=None)
+    stored.add_argument(
+        "--swap_band",
+        default=None,
+        help="Read each broadband store through its twin fitted on this band (e.g. "
+        "1-30hz or 30-50hz) instead: the band_swapped_filter_<band> rows only, into "
+        "corrca_band_swap_snr__* result files. Needs --band unset.",
+    )
     stored.add_argument("--n_pca", type=int, default=10)
     stored.add_argument("--store_dir", type=Path, default=None)
 
@@ -313,6 +368,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="One test window per 'lo:hi' seconds, e.g. 0:0.5 0.2:0.5.",
     )
     analysis.add_argument(
+        "--baseline",
+        type=_baseline_interval,
+        default=None,
+        help="Normalise every trial by this pre-stimulus window, 'lo:hi' seconds, "
+        "instead of the whole pre-onset span; write as --baseline=-0.3:-0.05 (a "
+        "leading minus would read as an option). Into snr_grid_baseline_<lo>_<hi>ms/ "
+        "and assr_snr_grid_baseline_<lo>_<hi>ms__* files.",
+    )
+    analysis.add_argument(
         "--signal_variants",
         nargs="+",
         default=list(_SIGNAL_VARIANTS),
@@ -355,6 +419,52 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     output.add_argument("--log_level", default="INFO")
     return parser
+
+
+def _baseline_interval(text: str) -> tuple[float, float]:
+    """Parse ``"lo:hi"`` seconds into a pre-stimulus window, ``lo < hi <= 0``."""
+    lo, hi = _stimulus_interval(text)
+    if hi > 0:
+        raise argparse.ArgumentTypeError(
+            f"the baseline must end at or before the onset (hi <= 0); got {text!r}."
+        )
+    return lo, hi
+
+
+def baseline_label(interval: tuple[float, float] | None) -> str:
+    """Directory / file token of a baseline window; ``""`` for the default one."""
+    if interval is None:
+        return ""
+    lo, hi = (round(edge * 1000) for edge in interval)
+    return f"baseline_{lo}_{hi}ms"
+
+
+def baseline_window(
+    times: np.ndarray, interval: tuple[float, float] | None
+) -> np.ndarray:
+    """Epoch samples of a baseline window; ``None`` is the whole pre-onset span.
+
+    :raises ValueError: If the window starts before the epoch or holds < 2 samples.
+    """
+    if interval is None:
+        return times < 0.0
+    lo, hi = interval
+    # The epoch's first sample is -round(0.3 * sfreq) / sfreq, which can sit just after
+    # -0.3 s: a start within one sample of it is the epoch start. The edges themselves
+    # get only float slack, so the window never grows by a sample.
+    sample = float(np.min(np.diff(times))) if times.size > 1 else 0.0
+    if lo < times[0] - sample:
+        raise ValueError(
+            f"baseline {lo:g}-{hi:g} s starts before the epoch ({times[0]:g} s)."
+        )
+    tol = 1e-6
+    mask = (times >= lo - tol) & (times <= hi + tol) & (times < 0.0)
+    if int(mask.sum()) < 2:
+        raise ValueError(
+            f"baseline {lo:g}-{hi:g} s holds {int(mask.sum())} epoch sample(s); "
+            "at least 2 are needed."
+        )
+    return mask
 
 
 def corrca_operators(
@@ -409,6 +519,8 @@ def _swapped_filters(
     music_type: MusicTypeVariants,
     results,
     store_channels: list[str],
+    *,
+    swap_band: str | None = None,
 ) -> tuple[np.ndarray, pd.DataFrame] | None:
     """The filters of the store's twin on the other power scale, or ``None``.
 
@@ -417,29 +529,37 @@ def _swapped_filters(
     the twin's component *k*, with the twin's own sign anchor. Runs after every fit
     of the job is stored, so the twin store is complete.
 
+    :param swap_band: Take the twin fitted on this band instead: the same variant (same
+        power scale and electrodes), band-restricted.
+
     :return: ``(filters, correlations)`` — the twin's ``(K, C)`` filters and one row per
         component with ``pattern_r`` (Pearson r over channels of the two shared forward
         patterns: the topomaps) and ``filter_r`` (of the two filters).
     """
-    twin = CORRCA_SWAPPED_OF[variant]
+    twin = variant if swap_band is not None else CORRCA_SWAPPED_OF[variant]
+    reading = (
+        CORRCA_SWAPPED_READING
+        if swap_band is None
+        else f"{BAND_SWAPPED_READING}_{swap_band}"
+    )
     path = iva_results_path(
         ExperimentNames(args.experiment),
         store_condition,
         twin,
         music_type,
-        args.band,
+        args.band if swap_band is None else swap_band,
         args.n_pca,
         processed_data_dir=args.store_dir,
     )
     if not path.is_file():
-        _logger.warning(f"no {twin.value} store at {path}: no swapped_filter rows.")
+        _logger.warning(f"no {twin.value} store at {path}: no {reading} rows.")
         return None
     channels, filters, patterns = read_corrca_filters(path)
     own_filters = np.asarray(results.extras["corrca_filters"], dtype=float).T
     if channels != store_channels or filters.shape != own_filters.shape:
         _logger.warning(
             f"{path.name} does not match this store's channels and component count: "
-            "no swapped_filter rows."
+            f"no {reading} rows."
         )
         return None
     pattern_r = matched_component_correlation(
@@ -447,7 +567,7 @@ def _swapped_filters(
     )
     filter_r = matched_component_correlation(own_filters, filters)
     _logger.info(
-        f"swapped_filter rows: {twin.value}'s filters on this store's input; "
+        f"{reading} rows: {path.name}'s filters on this store's input; "
         "matched-component r "
         + "; ".join(
             f"{COMPONENT_PREFIX} {k + 1}: pattern {pattern_r[k]:+.3f}, "
@@ -475,6 +595,11 @@ def run(args: argparse.Namespace) -> None:
     one set of stores per condition, each read alone.
     """
     variant = IvaVariants(args.variant)
+    if args.swap_band is not None and args.band is not None:
+        raise ValueError(
+            "--swap_band reads a broadband store through its band twin's filters; "
+            f"leave --band unset (got --band {args.band})."
+        )
     plan = corrca_run_plan(
         variant,
         argparse.Namespace(
@@ -492,7 +617,15 @@ def run(args: argparse.Namespace) -> None:
         stores = [(_STORE_CONDITIONS[variant], args.conditions)]
     for store_condition, conditions in stores:
         for fit, _channels, _log_power in plan:
-            run_store(args, fit, store_condition, conditions, optional=fit != variant)
+            # A band-swap reading of a fit without a band twin is skipped like a
+            # missing store, so it is optional for every fit.
+            run_store(
+                args,
+                fit,
+                store_condition,
+                conditions,
+                optional=fit != variant or args.swap_band is not None,
+            )
 
 
 def run_store(
@@ -593,7 +726,30 @@ def run_store(
     )
     signals = list(args.signal_variants)
     swapped_r: pd.DataFrame | None = None
-    if CORRCA_SWAPPED_READING in signals:
+    # Signal variant -> (operator, 40 Hz projection, TF projection), with the band-swap
+    # reading on the swapped operator.
+    masked_of = dict(_MASKED)
+    band_signal = None
+    if args.swap_band is not None:
+        band_signal = f"{BAND_SWAPPED_READING}_{args.swap_band}"
+        masked_of[band_signal] = _MASKED[CORRCA_SWAPPED_READING]
+        swapped = _swapped_filters(
+            args,
+            variant,
+            store_condition,
+            music_type,
+            results,
+            store_channels,
+            swap_band=args.swap_band,
+        )
+        if swapped is None:
+            return
+        swapped = swapped[0]
+        if no_roi:
+            swapped = _embed(swapped, store_channels, read_channels)
+        ops["swapped"] = swapped
+        signals = [band_signal]
+    elif CORRCA_SWAPPED_READING in signals:
         swapped = _swapped_filters(
             args, variant, store_condition, music_type, results, store_channels
         )
@@ -610,7 +766,7 @@ def run_store(
             "a non-ROI store: only the full (and swapped_filter) rows, against the "
             "full reference."
         )
-        signals = [s for s in signals if s in ("full", CORRCA_SWAPPED_READING)]
+        signals = [s for s in signals if s == "full" or masked_of[s][0] == "swapped"]
     else:
         for k in range(n_components):
             _logger.info(
@@ -622,7 +778,7 @@ def run_store(
             "every store channel is an ASSR electrode: no non_roi_masked rows."
         )
         signals.remove("non_roi_masked")
-    masked_signals = [s for s in signals if s in _MASKED]
+    masked_signals = [s for s in signals if s in masked_of]
 
     def resolve(participant: str, condition: str) -> int:
         if per_recording:
@@ -641,6 +797,17 @@ def run_store(
         cached[condition] = set(wavelet_sets[condition].participants)
 
     # ---- 3. frequency selections, resolved on the store's AND the cache's grid
+    # The 'full' rows read the stored sources on the store's own bins; on a band store
+    # without the centre (40 Hz in a 1-30 Hz fit) the nearest bin is the band edge,
+    # which would be reported as the centre.
+    store_freqs = np.asarray(results.freqs, dtype=float)
+    if not store_freqs.min() <= args.center_freq <= store_freqs.max():
+        raise ValueError(
+            f"--center_freq {args.center_freq:g} Hz lies outside the store's "
+            f"{store_freqs.min():g}-{store_freqs.max():g} Hz: its 'full' rows would "
+            "be read at the band edge. Read this band's filters at that frequency "
+            "with scripts/run_corrca_band_swap.py instead."
+        )
     cache_freqs = _cache_frequency_grid(wavelet_sets, conditions)
     store_selections, cache_selections = {}, {}
     for halfwidth in args.halfwidths:
@@ -655,7 +822,13 @@ def run_store(
     union_position = {int(b): i for i, b in enumerate(union)}
     # The cache bin of every store frequency, for the masked variants' full TF maps.
     tf_bins = None
-    if args.masked_tf_maps and masked_signals:
+    # The band-swap TF maps are run_corrca_band_swap.py's, except under another
+    # baseline, which that script does not read.
+    if (
+        args.masked_tf_maps
+        and masked_signals
+        and (band_signal is None or args.baseline is not None)
+    ):
         grid = np.asarray(cache_freqs, dtype=float)
         tf_bins = np.array([int(np.argmin(np.abs(grid - f))) for f in results.freqs])
         if not np.allclose(grid[tf_bins], results.freqs, rtol=1e-6):
@@ -704,7 +877,7 @@ def run_store(
             ),
             swapped_filters=(
                 np.broadcast_to(ops["swapped"], (n_rows, n_components, n_channels))
-                if CORRCA_SWAPPED_READING in signals
+                if "swapped" in ops
                 else None
             ),
             tf_freq_indices=tf_bins,
@@ -721,7 +894,14 @@ def run_store(
     }
     pre, post = at.common_epoch_window(geometry)
     times = at.epoch_time_base(pre, post, sfreq)
-    baseline_mask = times < 0.0
+    baseline_mask = baseline_window(times, args.baseline)
+    baseline_token = baseline_label(args.baseline)
+    if baseline_token:
+        _logger.info(
+            f"baseline {args.baseline[0]:g} to {args.baseline[1]:g} s: "
+            f"{int(baseline_mask.sum())} sample(s), "
+            f"{times[baseline_mask][0]:.3f} to {times[baseline_mask][-1]:.3f} s"
+        )
 
     # The stored sources, per condition, on that condition's own time axis.
     if per_recording:
@@ -744,7 +924,8 @@ def run_store(
         stored[c] = [src[..., :keep] for src in stored[c]]
 
     # Each stored source's TF map in units of its own pre-stimulus SD, per recording:
-    # the courses' reading at every frequency. condition -> (K, P, F, W).
+    # the courses' reading at every frequency. condition -> (K, P, F, W). A band-swap
+    # run reads only its own filters, so not there.
     tf_baseline = {
         c: np.stack(
             [
@@ -754,12 +935,13 @@ def run_store(
             axis=1,
         ).astype(np.float32)
         for c in conditions
+        if band_signal is None
     }
     # The masked variants' maps, read the same way: signal -> condition -> (K, P, F, W).
     masked_tf = {}
     if tf_bins is not None:
         for signal in masked_signals:
-            projection = _MASKED[signal][2]
+            projection = masked_of[signal][2]
             masked_tf[signal] = {
                 c: np.stack(
                     [
@@ -777,6 +959,11 @@ def run_store(
         f"shared CorrCA filter: one sign per component, anchored at fit time "
         f"('{anchor}'); no per-recording flip"
     )
+    baseline_note = (
+        f", baseline {args.baseline[0]:g} to {args.baseline[1]:g} s"
+        if baseline_token
+        else ""
+    )
     signs = np.ones((n_participants, len(labels)))
 
     spectrum = (
@@ -784,18 +971,19 @@ def run_store(
         if args.band is None
         else SpectrumTypeVariants.BANDS.value
     )
-    # Inside the fit's own directory, in a subdirectory of its own.
-    plots_dir = (
-        corrca_plots_dir(
-            variant,
-            store_condition,
-            music_type,
-            band=args.band,
-            n_pca=args.n_pca,
-            root=args.save_dir,
-        )
-        / _PLOTS_SUBDIR
+    # Inside the fit's own directory, in a subdirectory of its own; under another
+    # baseline, inside baseline_<lo>_<hi>ms/, which mirrors the fit's directory.
+    fit_dir = corrca_plots_dir(
+        variant,
+        store_condition,
+        music_type,
+        band=args.band,
+        n_pca=args.n_pca,
+        root=args.save_dir,
     )
+    plots_dir = (
+        fit_dir / baseline_token if baseline_token else fit_dir
+    ) / _PLOTS_SUBDIR
     plot_prefix = "" if args.band is None else f"{args.band}_"
     # The statistical figures here; the TF maps and topographies are the fit's, in its
     # own directory (where step 8 adds the swapped_filter ones).
@@ -808,7 +996,9 @@ def run_store(
     snr_courses: dict[tuple[str, str], dict[str, np.ndarray]] = {}
     for sel_name, bins in store_selections.items():
         take = [union_position[int(b)] for b in cache_selections[sel_name]]
-        cut: dict[str, dict[str, np.ndarray]] = {name: {} for name in _SIGNAL_VARIANTS}
+        cut: dict[str, dict[str, np.ndarray]] = {
+            name: {} for name in ("full", *masked_signals)
+        }
         roi_snr: dict[str, np.ndarray] = {}
         roi_scale: dict[str, dict[str, float]] = {}
         for condition in conditions:
@@ -833,7 +1023,7 @@ def run_store(
                     [src[:, bins, :].mean(axis=1) for src in stored[condition]]
                 ),
                 **{
-                    s: getattr(proj, _MASKED[s][1])[:, :, take, :].mean(axis=2)
+                    s: getattr(proj, masked_of[s][1])[:, :, take, :].mean(axis=2)
                     for s in masked_signals
                 },
             }  # learned rows, each (P, K, T)
@@ -916,6 +1106,8 @@ def run_store(
                         n_participants,
                         polarity_note,
                         mask_labels,
+                        participants,
+                        title_note=baseline_note,
                     )
 
     # ---- 7. one CSV for the whole grid ------------------------------------
@@ -930,42 +1122,58 @@ def run_store(
         if variant in CORRCA_INDIVIDUAL_VARIANTS
         else variant.value
     )
-    csv_path = results_root / (
-        f"assr_snr_grid__{store_token}__{spectrum}__pca{args.n_pca}.csv"
+    # The band-swap reading gets files of its own, under a name the notebooks'
+    # assr_snr_grid__* globs never pick up.
+    # Another baseline likewise: assr_snr_grid_baseline_<lo>_<hi>ms__*.
+    stem = "assr_snr_grid" if band_signal is None else "corrca_band_swap_snr"
+    if baseline_token:
+        stem = f"{stem}_{baseline_token}"
+    csv_name = (
+        f"{stem}__{store_token}__{spectrum}"
+        if band_signal is None
+        else f"{stem}__{store_token}__{args.swap_band}"
     )
+    csv_path = results_root / f"{csv_name}__pca{args.n_pca}.csv"
     frame = pd.DataFrame(rows_out)
     frame.to_csv(csv_path, index=False)
     courses_path = csv_path.with_name(f"{csv_path.stem}__courses.npz")
     save_snr_courses(courses_path, snr_courses, participants, labels, times)
     values_path = csv_path.with_name(f"{csv_path.stem}__values.npz")
     save_snr_values(values_path, snr_values, participants, labels)
-    tf_path = csv_path.with_name(f"{csv_path.stem}__tf_baseline.npz")
-    save_npz_atomic(
-        tf_path,
-        participants=np.asarray(participants),
-        conditions=np.asarray(conditions),
-        sources=np.asarray(comp_labels),
-        epoch_times=times,
-        freqs=np.asarray(results.freqs),
-        **{f"tf_baseline__{c}": tf_baseline[c] for c in conditions},
-        **{
-            f"tf_baseline__{signal}__{c}": maps[c]
-            for signal, maps in masked_tf.items()
-            for c in conditions
-        },
-    )
-    _logger.info(
-        f"saved {csv_path}, {courses_path.name}, {values_path.name} and "
-        f"{tf_path.name} "
-        f"({len(frame)} test rows, "
-        f"n = {n_participants}, floor p = "
-        f"{at.p_floor(n_participants):.5f} two-sided)"
-    )
+    if band_signal is not None or baseline_token:
+        # The stored sources' TF maps are the default grid's; not written twice. Under
+        # another baseline they are drawn instead (step 9).
+        _logger.info(
+            f"saved {csv_path}, {courses_path.name} and {values_path.name} "
+            f"({len(frame)} test rows, n = {n_participants})"
+        )
+    else:
+        tf_path = csv_path.with_name(f"{csv_path.stem}__tf_baseline.npz")
+        save_npz_atomic(
+            tf_path,
+            participants=np.asarray(participants),
+            conditions=np.asarray(conditions),
+            sources=np.asarray(comp_labels),
+            epoch_times=times,
+            freqs=np.asarray(results.freqs),
+            **{f"tf_baseline__{c}": tf_baseline[c] for c in conditions},
+            **{
+                f"tf_baseline__{signal}__{c}": maps[c]
+                for signal, maps in masked_tf.items()
+                for c in conditions
+            },
+        )
+        _logger.info(
+            f"saved {csv_path}, {courses_path.name}, {values_path.name} and "
+            f"{tf_path.name} "
+            f"({len(frame)} test rows, "
+            f"n = {n_participants}, floor p = "
+            f"{at.p_floor(n_participants):.5f} two-sided)"
+        )
 
     # ---- 8. the swapped filters' TF maps, in the fit's own directory --------
     # Last, so the statistics above are saved whatever happens here.
-    if swapped_r is not None and not args.skip_plots:
-        fit_dir = plots_dir.parent
+    if swapped_r is not None and not args.skip_plots and not baseline_token:
         fit_dir.mkdir(parents=True, exist_ok=True)
         reading = CORRCA_SWAPPED_READING
         swapped_r.to_csv(
@@ -1000,6 +1208,142 @@ def run_store(
                 ),
             )
 
+    # ---- 9. another baseline: the stimulus-averaged TF maps under it --------
+    if baseline_token and not args.skip_plots:
+        lo, hi = args.baseline
+        out_dir = fit_dir / baseline_token
+        shown_swapped = list(range(min(args.swapped_components, n_components)))
+        # File prefix -> (condition -> (K, P, F, W) maps, components drawn, what reads).
+        readings = {}
+        if tf_baseline:
+            readings[plot_prefix] = (tf_baseline, list(range(n_components)), "")
+        for signal, maps in masked_tf.items():
+            shown = (
+                list(range(n_components))
+                if signal in ("roi_masked", "non_roi_masked")
+                else shown_swapped
+            )
+            readings[f"{plot_prefix}{signal}_"] = (maps, shown, f"{signal}; ")
+        if not masked_tf and masked_signals:
+            _logger.info(
+                f"no {', '.join(masked_signals)} TF maps under this baseline: they "
+                "need the full-frequency projection (--masked_tf_maps)."
+            )
+        freq_marks = list(_TF_FREQ_MARKS)
+        if band_signal is not None:
+            freq_marks += _band_edges(args, variant, store_condition, results.freqs)
+        epoch_marks = [0.0, min(AssrEpoch.STIMULUS_DURATION_S, float(times[-1]))]
+        # The fit's sign note, after the reading, as on the fit's masked maps.
+        sign_note = (
+            CORRCA_ALIGNMENT_NOTE if anchor != "none" else CORRCA_ALIGNMENT_NOTE_NONE
+        )
+        for prefix, (maps, shown, what) in readings.items():
+            if not shown:
+                continue
+            onset_stacked, rows_participants, rows_conditions = (
+                stack_conditions_on_subject_axis(
+                    {c: maps[c].transpose(1, 0, 2, 3) for c in conditions},
+                    conditions,
+                    participants,
+                )
+            )
+            _draw_onset_tf_maps(
+                onset_stacked,
+                rows_participants,
+                rows_conditions,
+                conditions,
+                np.asarray(results.freqs),
+                times,
+                epoch_marks,
+                shown,
+                out_dir,
+                prefix,
+                shared={
+                    "label": f"{store_condition.value}_{music_type.value}"
+                    + ("_log" if log_power else ""),
+                    "alignment_note": f"{what}baseline {lo * 1e3:g} to "
+                    f"{hi * 1e3:g} ms; {sign_note}",
+                    "component_prefix": COMPONENT_PREFIX,
+                    "freq_marks": freq_marks,
+                },
+            )
+
+
+def _band_edges(
+    args: argparse.Namespace,
+    variant: IvaVariants,
+    store_condition: ConditionVariants,
+    broadband_freqs: np.ndarray,
+) -> list[float]:
+    """The band twin's edges inside the broadband grid, marked like the band swap's."""
+    path = iva_results_path(
+        ExperimentNames(args.experiment),
+        store_condition,
+        variant,
+        MusicTypeVariants(args.music_type),
+        args.swap_band,
+        args.n_pca,
+        processed_data_dir=args.store_dir,
+    )
+    with np.load(path, allow_pickle=False) as stored:
+        band = np.asarray(stored["freqs"], dtype=float)
+    grid = np.asarray(broadband_freqs, dtype=float)
+    return [
+        float(edge)
+        for edge in (band.min(), band.max())
+        if grid.min() < edge < grid.max()
+    ]
+
+
+def _draw_onset_tf_maps(
+    onset_stacked: np.ndarray,
+    rows_participants: list[str],
+    rows_conditions: list[str],
+    conditions: list[str],
+    freqs: np.ndarray,
+    epoch_times: np.ndarray,
+    epoch_marks: list[float],
+    components: list[int],
+    out_dir: Path,
+    prefix: str,
+    *,
+    shared: dict,
+) -> None:
+    """The fit scripts' stimulus-averaged TF figures, group and ``participants/``.
+
+    :param onset_stacked: ``(rows, K, F, W)`` trial-normalised maps, conditions stacked
+        on the row axis.
+    """
+    plot_condition_mean_tf_maps(
+        onset_stacked,
+        rows_participants,
+        rows_conditions,
+        conditions,
+        freqs,
+        epoch_times,
+        components,
+        epoch_marks=epoch_marks,
+        equalize=False,
+        save_path=out_dir / f"{prefix}condition_mean_tf_maps_onset.png",
+        **shared,
+    )
+    plt.close("all")
+    plot_participant_condition_tf_maps(
+        onset_stacked,
+        rows_participants,
+        rows_conditions,
+        conditions,
+        freqs,
+        epoch_times,
+        components,
+        root_dir=out_dir / "participants",
+        prefix=f"{prefix}onset_",
+        epoch_marks=epoch_marks,
+        equalize=False,
+        **shared,
+    )
+    plt.close("all")
+
 
 def _draw_swapped_tf_maps(
     by_condition: dict[str, np.ndarray],
@@ -1014,6 +1358,7 @@ def _draw_swapped_tf_maps(
     *,
     label: str,
     note: str,
+    freq_marks: list[float] | None = None,
 ) -> None:
     """The fit scripts' TF figures for the ``swapped_filter`` reading.
 
@@ -1024,12 +1369,13 @@ def _draw_swapped_tf_maps(
     :param by_condition: Condition -> ``(P, K, F, T)`` projection, z-scored like the
         fit's input.
     :param onsets: Condition -> onset samples on that condition's own time axis.
+    :param freq_marks: Frequencies (Hz) to mark; default the ASSR frequency.
     """
     shared = {
         "label": label,
         "alignment_note": note,
         "component_prefix": COMPONENT_PREFIX,
-        "freq_marks": _TF_FREQ_MARKS,
+        "freq_marks": _TF_FREQ_MARKS if freq_marks is None else freq_marks,
     }
     participants_dir = out_dir / "participants"
     stacked, rows_participants, rows_conditions = stack_conditions_on_subject_axis(
@@ -1077,35 +1423,19 @@ def _draw_swapped_tf_maps(
     if averaged is None:
         return
     onset_stacked, onset_participants, onset_conditions, epoch_times, marks = averaged
-    plot_condition_mean_tf_maps(
+    _draw_onset_tf_maps(
         onset_stacked,
         onset_participants,
         onset_conditions,
         conditions,
         freqs,
         epoch_times,
+        marks,
         components,
-        epoch_marks=marks,
-        equalize=False,
-        save_path=out_dir / f"{prefix}condition_mean_tf_maps_onset.png",
-        **shared,
+        out_dir,
+        prefix,
+        shared=shared,
     )
-    plt.close("all")
-    plot_participant_condition_tf_maps(
-        onset_stacked,
-        onset_participants,
-        onset_conditions,
-        conditions,
-        freqs,
-        epoch_times,
-        components,
-        root_dir=participants_dir,
-        prefix=f"{prefix}onset_",
-        epoch_marks=marks,
-        equalize=False,
-        **shared,
-    )
-    plt.close("all")
 
 
 def _write_cell_plots(
@@ -1124,13 +1454,19 @@ def _write_cell_plots(
     n_participants,
     polarity_note,
     mask_labels,
+    participants,
+    *,
+    title_note: str = "",
 ) -> None:
     """The stage-06 three figures for one grid cell, with components named ``CC``.
 
-    A single condition has no contrast, so it gets no p-value summary and no
-    contrast box on its courses. *mask_labels* are the store's reference rows.
+    Plus the per-participant trial courses of the first two components beside the
+    ``(PCA, z)`` reference (``(full)`` in a non-ROI store, which has no other). A single
+    condition has no contrast, so it gets no p-value summary and no contrast box on its
+    courses. *mask_labels* are the store's reference rows; *title_note* is appended to
+    every title (the baseline, when not the default).
     """
-    tag = f"{cell['variant']}__{cell['selection']}__{cell['window']}"
+    tag = f"{cell['variant']}__{cell['selection']}__{cell['window']}{title_note}"
     variant = cell["variant"]
     cell_dir = plots_dir / cell["selection"] / cell["window"]
     cell_dir.mkdir(parents=True, exist_ok=True)
@@ -1189,6 +1525,23 @@ def _write_cell_plots(
         alpha,
         f"Trial course per spatial filter — {tag}, n={n_participants}\n{polarity_note}",
         cell_dir / f"{plot_prefix}trial_course_by_source__{variant}.png",
+        mask_labels=mask_labels,
+    )
+    # The PCA mask on the z-scored cache: what the fit was handed. A non-ROI store
+    # keeps only the full-mask reference, so it stands in there.
+    participant_reference = (
+        at.PCA_Z_MASK_LABEL if at.PCA_Z_MASK_LABEL in mask_labels else _FULL_LABEL
+    )
+    plot_participant_courses(
+        course,
+        times,
+        window_interval,
+        labels,
+        participants,
+        conditions,
+        [*comp_labels[:_PARTICIPANT_COURSE_COMPONENTS], participant_reference],
+        f"Trial course per participant — {tag}\n{polarity_note}",
+        cell_dir / f"{plot_prefix}trial_course_by_participant__{variant}.png",
         mask_labels=mask_labels,
     )
 

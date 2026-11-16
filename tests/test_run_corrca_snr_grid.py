@@ -11,7 +11,13 @@ import numpy as np
 import pytest
 
 from scripts.run_assr_snr_grid import _accumulate_tests
-from scripts.run_corrca_snr_grid import _build_arg_parser, corrca_operators
+from scripts.run_corrca_snr_grid import (
+    _build_arg_parser,
+    baseline_label,
+    baseline_window,
+    corrca_operators,
+    run,
+)
 from src.analysis import assr_trials as at
 
 N_CHANNELS, N_COMPONENTS = 12, 4
@@ -108,6 +114,44 @@ def test_cli_reads_the_individual_condition_stores():
         ["--variant", "corrca_channel_individual_conditions"]
     )
     assert args.variant == "corrca_channel_individual_conditions"
+
+
+def test_the_band_swap_reads_only_a_broadband_store():
+    # Its filters come from the band twin of a broadband store; a band store has none.
+    args = _build_arg_parser().parse_args(
+        ["--swap_band", "1-30hz", "--band", "30-50hz"]
+    )
+    with pytest.raises(ValueError, match="--band unset"):
+        run(args)
+
+
+def test_another_baseline_is_parsed_and_named_apart():
+    parser = _build_arg_parser()
+    assert parser.parse_args([]).baseline is None
+    args = parser.parse_args(["--baseline=-0.3:-0.05"])
+    assert args.baseline == (-0.3, -0.05)
+    # The default writes the usual names; another baseline gets its own token.
+    assert baseline_label(None) == ""
+    assert baseline_label(args.baseline) == "baseline_-300_-50ms"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--baseline=-0.1:0.2"])  # runs past the onset
+
+
+def test_the_baseline_window_selects_only_its_samples():
+    times = np.arange(-75, 225) / 250.0  # -0.3 s .. 0.896 s at 250 Hz
+    np.testing.assert_array_equal(baseline_window(times, None), times < 0)
+    mask = baseline_window(times, (-0.3, -0.05))
+    assert times[mask][0] == pytest.approx(-0.3)
+    assert times[mask][-1] == pytest.approx(-0.052)
+    assert mask.sum() == 63
+    # An edge on a sample keeps it; an epoch starting just after -0.3 s still fits.
+    assert baseline_window(times, (-0.3, -0.048))[times == -0.048].all()
+    late_start = np.arange(-38, 115) / 128.0  # first sample -0.297 s
+    assert baseline_window(late_start, (-0.3, -0.05))[0]
+    with pytest.raises(ValueError, match="before the epoch"):
+        baseline_window(times, (-0.5, -0.05))
+    with pytest.raises(ValueError, match="at least 2"):
+        baseline_window(times, (-0.001, 0.0))
 
 
 def test_a_single_condition_is_tested_only_for_snr():

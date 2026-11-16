@@ -1,0 +1,114 @@
+#!/bin/bash
+#PBS -N PSILO_CORRCA_06B_RAW_WEIGHTED
+#PBS -l walltime=2:00:00
+#PBS -l select=1:ncpus=1:mem=8gb:scratch_local=1gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-06b CorrCA — raw voltages weighted by the CC topographies, read as PC1
+# and as the mean over all electrodes. READ-ONLY: nothing is fitted.
+#
+# scripts/run_corrca_raw_weighted.py, per recording: z-score the RAW
+# concatenated voltage per channel -> cut at every fam+ onset -> multiply every
+# electrode by its weight (|CC 1| and |CC 2| shared topography of every stored
+# fit, the binary ASSR ROI, or uniform = the stage-00 reference). Then two
+# readouts, each trial minus its pre-onset mean / pre-onset SD pooled over
+# trials -> trial mean:
+#   pc1  : PCA of the weighted trial mean (stage 00's) -> every trial on PC1,
+#          sign aligned across every recording of both conditions
+#   mean : mean over all electrodes (all data, no component separated)
+#
+# Every fit of each run (full, _log, _roi, _non_roi, _log_roi, _log_non_roi),
+# broadband and 30-50 Hz. All three runs go in ONE call, so every figure shares
+# one y-range for the curves (both readouts) and one for the differences. A missing store
+# skips only itself, with a warning. Needs the stores of
+# run_condition_{separate,tracks}.pbs, their _gamma twins and, if wanted,
+# run_individual_conditions*.pbs.
+#
+# qsub -v N_PCA=10 reads another component count (default 5).
+#
+# Output, in each fit's own directory, <r> = pc1 or mean:
+#   plots/06b-corrca-condition-comparison/<Join>_ASSR/{broadband,bands}/<variant>/pca_<N>/
+#       raw_weighted/[30-50hz_]raw_weighted_<r>.png              rows = conditions
+#       raw_weighted/[30-50hz_]raw_weighted_<r>_overlay.png      uniform vs each
+#       raw_weighted/[30-50hz_]raw_weighted_<r>_differences.png
+#       raw_weighted/participants/[30-50hz_]raw_weighted_<r>_{cc1,cc2,roi,uniform}.png
+#
+# MEMORY: one recording at a time: its raw voltage and z-scored copy (195 x
+# 46980 float64, ~75 MB each) plus its trials (~70 MB); every store's curves
+# are a few MB. Each recording is read once and serves every store.
+# CPU: single-threaded numpy.
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+N_PCA="${N_PCA:-5}"
+echo "PCA dimensions: $N_PCA"
+
+# The runner heredoc below is quoted, so this is read from the container
+# environment at run time rather than substituted here.
+export SINGULARITYENV_N_PCA="$N_PCA" APPTAINERENV_N_PCA="$N_PCA"
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+set -e
+source /opt/myproject/.venv/bin/activate
+
+DATA_DIR="/mnt/data/processed"
+
+echo "=== raw weighted (PC1 + mean): every run at $(date) ==="
+python /mnt/scripts/run_corrca_raw_weighted.py \
+    --experiment assr \
+    --variant corrca_channel_joined_separate corrca_channel_joined_tracks \
+              corrca_channel_individual_conditions \
+    --music_type ASSR \
+    --bands broadband 30-50hz \
+    --conditions Placebo Psilocybin \
+    --n_pca "${N_PCA:-5}" \
+    --components 2 \
+    --store_dir "$DATA_DIR" \
+    --wavelet_data_dir "$DATA_DIR" \
+    --save_dir /mnt/plots
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch

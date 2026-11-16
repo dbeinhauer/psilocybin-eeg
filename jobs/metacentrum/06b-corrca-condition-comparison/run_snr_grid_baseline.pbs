@@ -1,0 +1,173 @@
+#!/bin/bash
+#PBS -N PSILO_CORRCA_06B_SNR_BASELINE
+#PBS -l walltime=2:00:00
+#PBS -l select=1:ncpus=2:mem=100gb:scratch_local=100gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-06b CorrCA — the SNR grid and the stimulus-averaged TF maps again,
+# normalised by ANOTHER BASELINE.
+# READ-ONLY: nothing is fitted, and the default figures and files are not touched.
+#
+# scripts/run_corrca_snr_grid.py --baseline=<lo>:<hi> normalises every trial by
+# that pre-stimulus window (default -0.3:-0.05 s) instead of the whole
+# pre-onset span: its own mean subtracted, divided by the SD pooled over
+# trials, and the ROI reference likewise. The trials are not stored (only
+# their medians), so the cache is read again, at every store frequency for
+# the TF maps (--masked_tf_maps).
+#
+# Into <fit dir>/baseline_<lo>_<hi>ms/, laid out like the fit's directory:
+#   snr_grid/<selection>/<window>/*.png      the grid figures
+#   condition_mean_tf_maps_onset.png         stored sources, every component
+#   roi_masked_*, non_roi_masked_*           every component
+#   swapped_filter_*, band_swapped_filter_<band>_*   CC 1-2
+#   participants/*onset_*                    the same per participant
+#
+# For each run (joined separate, joined tracks, individual conditions), with
+# the fit jobs' grid settings (0 and +-5 Hz, windows 0-0.5 s and 0.2-0.5 s,
+# contrast / discrimination / snr tests):
+#   1. every store's own grid, broadband and each of STORE_BANDS
+#      (default 30-50hz; 1-30hz has no 40 Hz bin of its own)
+#   2. the band-swap reading on broadband (--swap_band), each of SWAP_BANDS
+#      (default "30-50hz 1-30hz")
+# Needs the stores; a missing optional one (_log, _roi, ...) is skipped with a
+# warning. A run whose full store is missing (today: individual conditions)
+# fails on its own; the job carries on and exits 1 at the end.
+#
+# qsub -v BASELINE=-0.25:-0.05 another window (seconds, lo:hi, hi <= 0).
+# qsub -v BASELINE=default the whole pre-onset span, i.e. the fit jobs' own
+#   grid and TF maps redrawn READ-ONLY into the usual directories (overwriting
+#   them), without refitting.
+# qsub -v VARIANTS=corrca_channel_joined_separate one run per job, to run the
+#   runs in parallel (each ~half the walltime).
+# qsub -v TF_MAPS=0 only the grid and the stored sources' onset maps: the
+#   cache read at the 40 Hz bins only, several times faster.
+# qsub -v N_PCA=10 reads another component count (default 5).
+# qsub -v STORE_BANDS="" SWAP_BANDS=1-30hz only the broadband grid and one
+#   band-swap reading.
+#
+# Output:
+#   plots/06b-corrca-condition-comparison/<Join>_ASSR/<spectrum>/<variant>/pca_<N>/
+#       baseline_<lo>_<hi>ms/   (see above)
+#   results/assr/assr_snr_grid_baseline_<lo>_<hi>ms__<variant>__<spectrum>__pca<N>*
+#   results/assr/corrca_band_swap_snr_baseline_<lo>_<hi>ms__<variant>__<band>__pca<N>*
+#
+# TIME: a cache pass at every frequency took ~16 s per participant and
+# condition on a 20000-sample cut (local test), so ~15 min per store at full
+# length; ~21 passes per run (6 stores x broadband, 30-50hz, two swaps).
+# MEMORY: one ~1 GB store, and per condition three (P, 5, 50, T) float32
+# projections (~2 GB each). CPU: numpy z-scoring is single-threaded; the
+# projections use BLAS.
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+export OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+N_PCA="${N_PCA:-5}"
+BASELINE="${BASELINE:--0.3:-0.05}"
+STORE_BANDS="${STORE_BANDS-30-50hz}"
+ALL_VARIANTS="corrca_channel_joined_separate corrca_channel_joined_tracks"
+ALL_VARIANTS+=" corrca_channel_individual_conditions"
+VARIANTS="${VARIANTS:-$ALL_VARIANTS}"
+TF_MAPS="${TF_MAPS:-1}"
+SWAP_BANDS="${SWAP_BANDS-30-50hz 1-30hz}"
+echo "PCA dimensions: $N_PCA, baseline: $BASELINE s, store bands: broadband" \
+     "$STORE_BANDS, band swaps: $SWAP_BANDS, runs: $VARIANTS, TF maps: $TF_MAPS"
+
+# The runner heredoc below is quoted, so these are read from the container
+# environment at run time rather than substituted here.
+for NAME in N_PCA BASELINE STORE_BANDS SWAP_BANDS VARIANTS TF_MAPS; do
+  export "SINGULARITYENV_$NAME=${!NAME}" "APPTAINERENV_$NAME=${!NAME}"
+done
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+set -e
+source /opt/myproject/.venv/bin/activate
+
+DATA_DIR="/mnt/data/processed"
+FAILED=0
+TF_FLAG=()
+[ "$TF_MAPS" = "1" ] && TF_FLAG=(--masked_tf_maps)
+BASELINE_FLAG=()
+[ "$BASELINE" != "default" ] && BASELINE_FLAG=(--baseline="$BASELINE")
+
+grid() {
+    python /mnt/scripts/run_corrca_snr_grid.py \
+        --experiment assr \
+        --music_type ASSR \
+        --conditions Placebo Psilocybin \
+        --n_pca "$N_PCA" \
+        "${BASELINE_FLAG[@]}" \
+        --halfwidths 0 5 \
+        --stimulus_intervals 0:0.5 0.2:0.5 \
+        --contrast_alternative greater \
+        --snr_alternative less \
+        --store_dir "$DATA_DIR" \
+        --wavelet_data_dir "$DATA_DIR" \
+        --results_dir /mnt/results/assr \
+        --save_dir /mnt/plots \
+        "${TF_FLAG[@]}" \
+        "$@" || {
+        echo >&2 "FAILED: $*"
+        FAILED=1
+    }
+}
+
+for VARIANT in $VARIANTS; do
+    echo "=== $VARIANT, broadband, baseline $BASELINE at $(date) ==="
+    grid --variant "$VARIANT" \
+        --signal_variants full roi_masked non_roi_masked swapped_filter
+    for BAND in $STORE_BANDS; do
+        echo "=== $VARIANT, $BAND, baseline $BASELINE at $(date) ==="
+        grid --variant "$VARIANT" --band "$BAND" \
+            --signal_variants full roi_masked non_roi_masked swapped_filter
+    done
+    for BAND in $SWAP_BANDS; do
+        echo "=== $VARIANT, band swap $BAND, baseline $BASELINE at $(date) ==="
+        grid --variant "$VARIANT" --swap_band "$BAND"
+    done
+done
+exit "$FAILED"
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed (see FAILED lines above)"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch

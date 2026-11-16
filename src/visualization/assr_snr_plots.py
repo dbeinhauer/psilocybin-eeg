@@ -3,7 +3,8 @@ Figures for the stage-06 ASSR SNR / condition-contrast grid.
 
 Four figures, each drawn once per grid cell (frequency selection x stimulus window):
 the per-source trial courses, the p-value summary, the SNR-versus-reference panel, and
-the forest panel the first two are built from.
+the forest panel the first two are built from. Stage 06b adds the per-participant
+trial courses (:func:`plot_participant_courses`).
 
 Extracted from ``scripts/run_assr_snr_grid.py`` so the notebook and the CLI draw the
 same figures rather than two implementations of them. Behaviour is unchanged from the
@@ -22,6 +23,7 @@ from matplotlib.colors import LinearSegmentedColormap
 from src.analysis import assr_trials as at
 from src.definitions.constants import AssrEpoch
 from src.definitions.fields import ConditionVariants
+from src.visualization.iva_quality_plots import participant_sort_key
 
 _logger = logging.getLogger(__name__)
 
@@ -293,6 +295,123 @@ def plot_courses(
     axflat[0].legend(loc="lower right", frameon=True, fontsize=9)
     fig.suptitle(title, y=1.0, fontsize=12.5)
     fig.tight_layout()
+    if path is not None:
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+    if close:
+        plt.close(fig)
+    return fig
+
+
+#: Per-participant line identity: ten hues crossed with four dash patterns, so up to
+#: 40 participants stay distinct without inventing hues past a validated set.
+_PARTICIPANT_HUES = plt.get_cmap("tab10").colors
+_PARTICIPANT_DASHES = ("-", "--", ":", "-.")
+
+
+def _participant_style(index: int) -> dict:
+    n_hues = len(_PARTICIPANT_HUES)
+    return {
+        "color": _PARTICIPANT_HUES[index % n_hues],
+        "ls": _PARTICIPANT_DASHES[(index // n_hues) % len(_PARTICIPANT_DASHES)],
+    }
+
+
+def plot_participant_courses(
+    course,
+    times,
+    window_interval,
+    labels,
+    participants,
+    conditions,
+    sources,
+    title,
+    path,
+    mask_labels=MASK_LABELS,
+    close=True,
+):
+    """Every participant's trial course, one row per condition, one column per source.
+
+    Each thin line is one participant's median-over-trials course (the input to
+    :func:`plot_courses`); the bold black line is their mean, the centre line of that
+    figure. A participant keeps one colour and dash pattern in every panel, so their
+    two conditions can be followed down a column. Panels in a column share a y scale.
+
+    :param course: condition -> ``(participants, len(labels), times)``.
+    :param labels: Row names of *course*'s second axis.
+    :param participants: Names of *course*'s first axis, in order.
+    :param sources: The *labels* drawn, one column each.
+    :return: The figure (closed unless ``close=False``).
+    """
+    columns = [labels.index(s) for s in sources]
+    order = sorted(
+        range(len(participants)), key=lambda p: participant_sort_key(participants[p])
+    )
+    fig, axes = plt.subplots(
+        len(conditions),
+        len(sources),
+        figsize=(4.8 * len(sources) + 1.6, 3.4 * len(conditions)),
+        sharex=True,
+        sharey="col",
+        squeeze=False,
+    )
+    for r, cond in enumerate(conditions):
+        for c, (source, col) in enumerate(zip(sources, columns)):
+            ax = axes[r, c]
+            ax.axvspan(
+                0.0,
+                AssrEpoch.STIMULUS_DURATION_S,
+                color="0.55",
+                alpha=0.10,
+                lw=0,
+                zorder=0,
+            )
+            ax.axvspan(*window_interval, color="#B8860B", alpha=0.13, lw=0, zorder=0)
+            ax.axhline(0.0, color="0.45", lw=0.8, zorder=1)
+            ax.axvline(0.0, color="0.35", lw=0.9, ls="--", zorder=1)
+            vals = course[cond][:, col]  # (P, W)
+            for rank, p in enumerate(order):
+                ax.plot(
+                    times,
+                    vals[p],
+                    lw=0.9,
+                    alpha=0.75,
+                    zorder=2,
+                    label=participants[p],
+                    **_participant_style(rank),
+                )
+            n = int(np.sum(np.any(~np.isnan(vals), axis=-1)))
+            ax.plot(
+                times,
+                np.nanmean(vals, axis=0),
+                color="black",
+                lw=2.6,
+                zorder=4,
+                label=f"mean (n={n})",
+            )
+            is_ref = source in mask_labels
+            ax.set_title(
+                f"{cond} — {source}{'  (reference)' if is_ref else ''}",
+                loc="left",
+                fontsize=10.5,
+                fontweight="bold" if is_ref else "normal",
+            )
+            if r == len(conditions) - 1:
+                ax.set_xlabel("Time from onset (s)")
+            if c == 0:
+                ax.set_ylabel("response (a.u.)")
+    handles, names = axes[0, 0].get_legend_handles_labels()
+    fig.suptitle(title, y=1.0, fontsize=12.5)
+    fig.tight_layout(rect=(0, 0, 0.87, 1))
+    fig.legend(
+        handles,
+        names,
+        loc="center left",
+        bbox_to_anchor=(0.87, 0.5),
+        fontsize=8,
+        frameon=False,
+        ncol=1 if len(names) <= 26 else 2,
+        title="participant",
+    )
     if path is not None:
         fig.savefig(path, dpi=150, bbox_inches="tight")
     if close:

@@ -244,7 +244,7 @@ def _decorate_tf(
         onset of a whole-recording map. Dropped entirely above
         :data:`MAX_TIME_MARKS`, where they merge into a wash.
     :param freq_marks: Frequencies (Hz) to mark with horizontal lines, e.g. the ASSR
-        stimulation frequency.
+        stimulation frequency. Marks outside the drawn frequency range are skipped.
     :param epoch_marks: Times (s) to mark prominently, e.g. ``[0.0, 0.5]`` for the
         stimulus onset and offset of an onset-averaged epoch. Not capped: these are
         paradigm geometry, so there are only ever a couple.
@@ -262,8 +262,11 @@ def _decorate_tf(
             lw=0.8,
             zorder=4,
         )
+    # A mark off the drawn band (40 Hz on a 1-30 Hz map) would stretch the axis to it.
+    low, high = sorted(ax.get_ylim())
     for mark in freq_marks or ():
-        ax.axhline(float(mark), color="green", ls=":", lw=0.9, zorder=3)
+        if low <= float(mark) <= high:
+            ax.axhline(float(mark), color="green", ls=":", lw=0.9, zorder=3)
     ax.tick_params(labelsize=6)
 
 
