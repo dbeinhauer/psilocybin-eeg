@@ -118,6 +118,9 @@ Outputs::
     results/<experiment>/assr_snr_grid__<variant>__<spectrum>__pca<N>__values.npz
     results/<experiment>/assr_snr_grid__<variant>__<spectrum>__pca<N>__courses.npz
     results/<experiment>/assr_snr_grid__<variant>__<spectrum>__pca<N>__tf_baseline.npz
+    results/<experiment>/assr_snr_grid__<variant>__<spectrum>__pca<N>__robustness.csv
+        # + __robustness_summary.csv: the contrast with participants left out, on the
+        # same filters and on the fit's leave-subset-out refits (<store>__subset_refits.npz)
     results/<experiment>/corrca_band_swap_snr__<variant>__<band>__pca<N>.csv
         # --swap_band <band>: + __courses.npz, __values.npz; no tf_baseline
         # tf_baseline__<Condition>; with --masked_tf_maps also
@@ -133,6 +136,7 @@ Outputs::
                 snr_by_condition__<variant>.png
                 trial_course_by_source__<variant>.png
                 trial_course_by_participant__<variant>.png   # CC 1, CC 2, (PCA, z)
+                robustness__full.png   # the contrast's dependence on the participants
             snr_by_condition__band_swapped_filter_<band>.png   # --swap_band, and its
                                       # pvalue_summary__ / trial_course_by_source__
         swapped_filter_condition_mean_tf_maps.png   # in the fit's directory
@@ -181,7 +185,9 @@ from scripts.analysis_common import (  # noqa: E402
     CORRCA_LOG_VARIANTS,
     CORRCA_SWAPPED_OF,
     CORRCA_SWAPPED_READING,
+    STABILITY_COMPONENTS,
     corrca_plots_dir,
+    corrca_refit_path,
     corrca_run_plan,
     read_corrca_filters,
 )
@@ -200,7 +206,10 @@ from scripts.run_iva_condition_tracks import _onset_average_per_condition  # noq
 from src.analysis import assr_trials as at  # noqa: E402
 from src.analysis import iva_quality  # noqa: E402
 from src.analysis.corrca import matched_component_correlation  # noqa: E402
-from src.analysis.assr_variants import project_condition  # noqa: E402
+from src.analysis.assr_variants import (  # noqa: E402
+    project_condition,
+    replicate_snr_values,
+)
 from src.analysis.iva_condition_comparison import (  # noqa: E402
     stack_conditions_on_subject_axis,
 )
@@ -227,6 +236,7 @@ from src.io.saving import (  # noqa: E402
 from src.io.wavelet_store import find_wavelet_set, wavelet_label_dir  # noqa: E402
 from src.visualization.assr_snr_plots import (  # noqa: E402
     plot_cell,
+    plot_contrast_robustness,
     plot_courses,
     plot_participant_courses,
     plot_snr,
@@ -268,6 +278,8 @@ BAND_SWAPPED_READING = "band_swapped_filter"
 _STORE_CONDITIONS = {
     IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE: ConditionVariants.JOINED_SEPARATE,
     IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS: ConditionVariants.JOINED_TRACKS,
+    # Fitted on Placebo alone, but every recording of the join is stored.
+    IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT: ConditionVariants.JOINED_SEPARATE,
 }
 
 
@@ -282,8 +294,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--variant",
         default=IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE.value,
         choices=[v.value for v in CORRCA_LOG_OF],
-        help="Which stage-06b run to read: subject axis (separate), time axis, or "
-        "each condition alone. Its full store is read first, then its '_log', "
+        help="Which stage-06b run to read: subject axis (separate), time axis, "
+        "each condition alone, or the subject axis with the filters fitted on "
+        "Placebo alone (placebo_fit). Its full store is read first, then its '_log', "
         "'_roi', '_non_roi', '_log_roi' and '_log_non_roi' ones — the fit order.",
     )
     stored.add_argument(
@@ -404,6 +417,21 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Direction of (component SNR - reference SNR) in the SNR family.",
     )
     analysis.add_argument("--alpha", type=float, default=0.05)
+    analysis.add_argument(
+        "--drop_sizes",
+        type=int,
+        nargs="+",
+        default=[1, 2, 3],
+        help="Robustness of the contrast: rerun it with every subset of this many "
+        "participants left out, on the same filters. The refit replicates are the "
+        "fit's own (--refit_subset_sizes of the fit scripts).",
+    )
+    analysis.add_argument(
+        "--skip_robustness",
+        action="store_true",
+        help="Skip the robustness of the contrast to the participants (sign test, "
+        "leave-subset-out on fixed and on refitted filters, held-out values).",
+    )
 
     output = parser.add_argument_group("output")
     output.add_argument("--save_dir", type=Path, default=None)
@@ -1051,13 +1079,7 @@ def run_store(
             )
 
         for lo, hi in args.stimulus_intervals:
-            if (lo, hi) == (0.0, AssrEpoch.STIMULUS_DURATION_S):
-                window = AssrEpoch.stimulus_mask(times)
-            else:
-                window = (times >= lo) & (times <= hi)
-            if not window.any():
-                raise ValueError(f"window {lo}-{hi}s selects no epoch sample.")
-            window_label = f"{lo:g}-{hi:g}s"
+            window_label, window = _stimulus_window(times, lo, hi)
 
             for signal in signals:
                 value, course = {}, {}
@@ -1171,6 +1193,38 @@ def run_store(
             f"{at.p_floor(n_participants):.5f} two-sided)"
         )
 
+    # ---- 7b. how far the contrast rests on a few participants --------------
+    if (
+        len(conditions) == 2
+        and band_signal is None
+        and "full" in signals
+        and not args.skip_robustness
+    ):
+        _contrast_robustness(
+            args,
+            refit_path=corrca_refit_path(results.path),
+            store_filters=np.asarray(results.extras["corrca_filters"], dtype=float),
+            store_channels=store_channels,
+            read_channels=read_channels,
+            wavelet_sets=wavelet_sets,
+            conditions=conditions,
+            participants=participants,
+            labels=labels,
+            comp_labels=comp_labels,
+            snr_values=snr_values,
+            selections=cache_selections,
+            geometry=geometry,
+            times=times,
+            pre=pre,
+            post=post,
+            baseline_mask=baseline_mask,
+            log_power=log_power,
+            csv_path=csv_path,
+            plots_dir=None if args.skip_plots else plots_dir,
+            plot_prefix=plot_prefix,
+            tag=f"{variant.value}{baseline_note}",
+        )
+
     # ---- 8. the swapped filters' TF maps, in the fit's own directory --------
     # Last, so the statistics above are saved whatever happens here.
     if swapped_r is not None and not args.skip_plots and not baseline_token:
@@ -1267,6 +1321,278 @@ def run_store(
                     "freq_marks": freq_marks,
                 },
             )
+
+
+def _stimulus_window(times: np.ndarray, lo: float, hi: float) -> tuple[str, np.ndarray]:
+    """``(label, epoch-sample mask)`` of one ``--stimulus_intervals`` entry."""
+    if (lo, hi) == (0.0, AssrEpoch.STIMULUS_DURATION_S):
+        window = AssrEpoch.stimulus_mask(times)
+    else:
+        window = (times >= lo) & (times <= hi)
+    if not window.any():
+        raise ValueError(f"window {lo}-{hi}s selects no epoch sample.")
+    return f"{lo:g}-{hi:g}s", window
+
+
+def _load_subset_refits(
+    path: Path, store_filters: np.ndarray
+) -> tuple[list[tuple[str, ...]], np.ndarray, np.ndarray, np.ndarray] | None:
+    """The fit's leave-subset-out refits, or ``None`` with a warning.
+
+    :param store_filters: ``(C, K)`` the store's filters, which the refits' own copy
+        must match, so a refit file left over from another fit is never read.
+    :return: ``(left-out participant labels per refit, (R, C, K) filters, (R, K)
+        pattern_r, (R, K) filter_r)``: the refit's topography and filter against the
+        full fit's.
+    """
+    if not path.is_file():
+        _logger.warning(
+            f"no refit filters at {path}: the robustness rows use the stored filters "
+            "only (run the fit with --store_components and the influence check)."
+        )
+        return None
+    with np.load(path, allow_pickle=False) as stored:
+        names = [str(n) for n in stored["participants"]]
+        subsets = stored["subsets"]
+        filters = np.asarray(stored["filters"], dtype=float)
+        full = np.asarray(stored["full_filters"], dtype=float)
+        pattern_r = np.asarray(stored["pattern_r"], dtype=float)
+        filter_r = np.asarray(stored["filter_r"], dtype=float)
+    scale = float(np.abs(store_filters).max()) or 1.0
+    if full.shape != store_filters.shape or not np.allclose(
+        full, store_filters, rtol=1e-4, atol=1e-5 * scale
+    ):
+        _logger.warning(
+            f"{path.name} belongs to another fit than the store (its filters differ): "
+            "not read."
+        )
+        return None
+    dropped = [tuple(names[g] for g in row if g >= 0) for row in subsets]
+    return dropped, filters, pattern_r, filter_r
+
+
+def _contrast_robustness(
+    args: argparse.Namespace,
+    *,
+    refit_path: Path,
+    store_filters: np.ndarray,
+    store_channels: list[str],
+    read_channels: list[str],
+    wavelet_sets: dict,
+    conditions: list[str],
+    participants: list[str],
+    labels: list[str],
+    comp_labels: list[str],
+    snr_values: dict[tuple[str, str, str], dict[str, np.ndarray]],
+    selections: dict[str, np.ndarray],
+    geometry: dict,
+    times: np.ndarray,
+    pre: int,
+    post: int,
+    baseline_mask: np.ndarray,
+    log_power: bool,
+    csv_path: Path,
+    plots_dir: Path | None,
+    plot_prefix: str,
+    tag: str,
+) -> None:
+    """Whether the ``full`` contrast of every grid cell rests on a few participants.
+
+    Per cell and source, all on the ``full`` reading:
+
+    - ``full`` — the contrast test itself, with the exact sign test beside it;
+    - ``fixed_drop`` — rerun with every subset of ``--drop_sizes`` participants left
+      out, the filters unchanged: does the verdict hang on whose differences are in;
+    - ``refit_drop`` (components only) — CorrCA refitted without each subset the fit
+      wrote (``--refit_subset_sizes``), every remaining participant read through the
+      refit's filters: does it hang on the participants that shaped the filters;
+    - ``held_out`` (components only) — each participant read through the refit that
+      left them alone out, so no value comes from a filter its own data helped choose.
+
+    The refits' values come from the cache, the stored ``full`` values from the store;
+    the full fit is read both ways and their agreement logged.
+
+    Writes ``<csv stem>__robustness.csv`` (every replicate) and
+    ``__robustness_summary.csv`` (per subset size), and a ``robustness__full.png`` per
+    grid cell.
+    """
+    alt = args.contrast_alternative
+    first, second = conditions
+    n_components = len(comp_labels)
+    refits = _load_subset_refits(refit_path, store_filters)
+    replicate_values = None
+    dropped_sets: list[tuple[str, ...]] = []
+    if refits is not None:
+        dropped_sets, refit_filters, refit_pattern_r, refit_filter_r = refits
+        # Replicate 0 is the full fit, read through the cache like the refits.
+        stack = np.concatenate([store_filters[None], refit_filters], axis=0)
+        flat = stack.transpose(0, 2, 1).reshape(-1, stack.shape[1])  # (M, C)
+        if read_channels != store_channels:
+            flat = _embed(flat, store_channels, read_channels)
+        windows = dict(
+            _stimulus_window(times, lo, hi) for lo, hi in args.stimulus_intervals
+        )
+        _logger.info(
+            f"robustness: {len(dropped_sets)} refit(s) from {refit_path.name}, "
+            f"{flat.shape[0]} filter(s) read per participant"
+        )
+        replicate_values = {
+            c: replicate_snr_values(
+                wavelet_sets[c],
+                c,
+                participants,
+                read_channels,
+                args.n_times,
+                flat,
+                selections,
+                geometry[c][0],
+                pre,
+                post,
+                baseline_mask,
+                windows,
+                log_power=log_power,
+            )
+            for c in conditions
+        }
+    single = {d[0]: r for r, d in enumerate(dropped_sets) if len(d) == 1}
+
+    rows: list[dict] = []
+    summaries: list[pd.DataFrame] = []
+    for (signal, selection, window), value in snr_values.items():
+        if signal != "full":
+            continue
+        cell = {"selection": selection, "window": window}
+        reps = None
+        if replicate_values is not None:
+            reps = {
+                c: replicate_values[c][(selection, window)].reshape(
+                    len(participants), -1, n_components
+                )
+                for c in conditions
+            }
+            gap = max(
+                float(np.nanmax(np.abs(reps[c][:, 0] - value[c][:, :n_components])))
+                for c in conditions
+            )
+            _logger.info(
+                f"robustness {selection} {window}: the full fit read from the cache "
+                f"vs from the store, largest |difference| {gap:.2g}"
+            )
+        cell_rows: list[pd.DataFrame] = []
+        for s, source in enumerate(labels):
+            d = at.condition_contrast(value, conditions, s)
+            full = {
+                "k": 0,
+                "dropped": "",
+                "n": int(np.isfinite(d).sum()),
+                **at.paired_test(d, alt),
+                "sign_p": at.sign_test(d, alt),
+            }
+            families = {
+                "full": pd.DataFrame([full]),
+                "fixed_drop": at.replicate_tests(
+                    at.drop_participants(d, participants, args.drop_sizes), alt
+                ),
+            }
+            if reps is not None and source in comp_labels:
+                k = comp_labels.index(source)
+                refit_reps = []
+                for r, left_out in enumerate(dropped_sets):
+                    keep = np.array([p not in left_out for p in participants])
+                    refit_reps.append(
+                        (
+                            left_out,
+                            reps[first][keep, r + 1, k] - reps[second][keep, r + 1, k],
+                        )
+                    )
+                families["refit_drop"] = at.replicate_tests(refit_reps, alt).assign(
+                    pattern_r=refit_pattern_r[:, k], filter_r=refit_filter_r[:, k]
+                )
+                if all(p in single for p in participants):
+                    held = np.array(
+                        [
+                            reps[first][i, single[p] + 1, k]
+                            - reps[second][i, single[p] + 1, k]
+                            for i, p in enumerate(participants)
+                        ]
+                    )
+                    families["held_out"] = pd.DataFrame(
+                        [
+                            {
+                                "k": 1,
+                                "dropped": "",
+                                "n": int(np.isfinite(held).sum()),
+                                **at.paired_test(held, alt),
+                                "sign_p": at.sign_test(held, alt),
+                            }
+                        ]
+                    )
+            for test, frame in families.items():
+                frame = frame.assign(**cell, source=source, test=test)
+                cell_rows.append(frame)
+                if test in ("fixed_drop", "refit_drop"):
+                    summary = at.replicate_summary(frame, full["p"], args.alpha)
+                    summary.insert(0, "test", test)
+                    summary.insert(0, "source", source)
+                    summary.insert(0, "window", window)
+                    summary.insert(0, "selection", selection)
+                    summary["full_p"] = full["p"]
+                    summary["fragility"] = at.fragility(frame, full["p"], args.alpha)
+                    summaries.append(summary)
+            if source in comp_labels:
+                _log_robustness(source, cell, full, families, args.alpha)
+        cell_table = pd.concat(cell_rows, ignore_index=True)
+        rows.append(cell_table)
+        if plots_dir is not None:
+            cell_dir = plots_dir / selection / window
+            cell_dir.mkdir(parents=True, exist_ok=True)
+            plot_contrast_robustness(
+                cell_table,
+                comp_labels[:STABILITY_COMPONENTS],
+                participants,
+                args.alpha,
+                f"Robustness of {first} − {second} ({alt}) to the participants — "
+                f"full__{selection}__{window}, {tag}, n={len(participants)}",
+                cell_dir / f"{plot_prefix}robustness__full.png",
+            )
+    if not rows:
+        return
+    table = pd.concat(rows, ignore_index=True)
+    lead = ["selection", "window", "source", "test", "k", "dropped", "n"]
+    table = table[lead + [c for c in table.columns if c not in lead]]
+    table["significant"] = table["p"] < args.alpha
+    out = csv_path.with_name(f"{csv_path.stem}__robustness.csv")
+    table.to_csv(out, index=False)
+    summary_path = csv_path.with_name(f"{csv_path.stem}__robustness_summary.csv")
+    pd.concat(summaries, ignore_index=True).to_csv(summary_path, index=False)
+    _logger.info(f"saved {out.name} ({len(table)} rows) and {summary_path.name}")
+
+
+def _log_robustness(
+    source: str, cell: dict, full: dict, families: dict, alpha: float
+) -> None:
+    """One log line per component and grid cell."""
+    parts = [f"p {full['p']:.3g} ({full['same sign']}), sign test {full['sign_p']:.3g}"]
+    for test in ("fixed_drop", "refit_drop"):
+        if test not in families:
+            continue
+        frame = families[test]
+        per_k = ", ".join(
+            f"-{int(k)}: {int((g['p'] < alpha).sum())}/{len(g)} p<{alpha:g}"
+            for k, g in frame.groupby("k")
+        )
+        fragile = at.fragility(frame, full["p"], alpha)
+        parts.append(
+            f"{test} [{per_k}; verdict changes from k={fragile}]"
+            if fragile
+            else f"{test} [{per_k}; verdict never changes]"
+        )
+    if "held_out" in families:
+        held = families["held_out"].iloc[0]
+        parts.append(f"held-out p {held['p']:.3g} ({held['same sign']})")
+    _logger.info(
+        f"robustness {cell['selection']} {cell['window']} {source}: " + "; ".join(parts)
+    )
 
 
 def _band_edges(

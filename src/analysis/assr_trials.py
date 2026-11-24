@@ -1107,6 +1107,155 @@ def p_floor(n_participants: int, *, one_sided: bool = False) -> float:
     return (1.0 if one_sided else 2.0) / 2**n_participants
 
 
+#: Joins the labels of the participants a replicate leaves out.
+DROPPED_SEPARATOR = "+"
+
+
+def sign_test(differences: np.ndarray, alternative: str = "two-sided") -> float:
+    """Exact sign test of per-participant differences: how many point positive, not
+    how far.
+
+    :func:`paired_test` weighs each participant by the rank of ``|d|``, so a few large
+    differences can carry it while the direction is split across the group. The sign
+    test counts directions only, so a significant Wilcoxon beside a sign test far from
+    significance marks an effect resting on the size of a few participants'
+    differences. Zeros and non-finite values are dropped.
+
+    :return: The p-value, NaN when no difference is left.
+    """
+    from scipy.stats import binomtest
+
+    d = np.asarray(differences, dtype=float)
+    d = d[np.isfinite(d) & (d != 0)]
+    if d.size == 0:
+        return float("nan")
+    return float(
+        binomtest(int((d > 0).sum()), d.size, 0.5, alternative=alternative).pvalue
+    )
+
+
+def drop_participants(
+    differences: np.ndarray, participants: Sequence[str], sizes: Sequence[int]
+) -> list[tuple[tuple[str, ...], np.ndarray]]:
+    """The differences with every subset of each size in *sizes* left out.
+
+    :param differences: ``(P,)`` one per participant, in *participants* order.
+    :return: ``(left-out labels, remaining differences)`` per subset, smallest sizes
+        first.
+    """
+    import itertools
+
+    d = np.asarray(differences, dtype=float)
+    if d.shape != (len(participants),):
+        raise ValueError(
+            f"{d.shape} differences for {len(participants)} participant(s)."
+        )
+    out = []
+    for size in sorted({int(s) for s in sizes}):
+        for subset in itertools.combinations(range(len(participants)), size):
+            keep = np.ones(d.size, dtype=bool)
+            keep[list(subset)] = False
+            out.append((tuple(participants[i] for i in subset), d[keep]))
+    return out
+
+
+def replicate_tests(
+    replicates: Sequence[tuple[tuple[str, ...], np.ndarray]],
+    alternative: str = "two-sided",
+) -> pd.DataFrame:
+    """:func:`paired_test` and :func:`sign_test` of every replicate.
+
+    :param replicates: ``(left-out labels, differences)`` per replicate, e.g. from
+        :func:`drop_participants` or from refits that never saw the left-out ones.
+    :return: One row per replicate: ``k`` (how many were left out), ``dropped`` (their
+        labels joined by :data:`DROPPED_SEPARATOR`), ``n`` (finite differences left),
+        :func:`paired_test`'s columns (NaN with fewer than two left) and ``sign_p``.
+    """
+    rows = []
+    for dropped, d in replicates:
+        d = np.asarray(d, dtype=float)
+        n = int(np.isfinite(d).sum())
+        row = {"k": len(dropped), "dropped": DROPPED_SEPARATOR.join(dropped), "n": n}
+        if n >= 2:
+            row.update(paired_test(d, alternative))
+        else:
+            row.update(
+                {"median": np.nan, "effect": np.nan, "same sign": "", "p": np.nan}
+            )
+            row["alt"] = alternative
+        row["sign_p"] = sign_test(d, alternative)
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def fragility(table: pd.DataFrame, full_p: float, alpha: float) -> int | None:
+    """Fewest left-out participants that change the verdict ``p < alpha``.
+
+    :param table: :func:`replicate_tests` rows; rows without a p-value are ignored.
+    :param full_p: The p-value with every participant in.
+    :return: The smallest ``k`` with a replicate on the other side of *alpha*, or
+        ``None`` when no replicate in *table* changes it.
+    """
+    tested = table[table["p"].notna()]
+    flips = tested[(tested["p"] < alpha) != (full_p < alpha)]
+    return int(flips["k"].min()) if len(flips) else None
+
+
+def replicate_summary(table: pd.DataFrame, full_p: float, alpha: float) -> pd.DataFrame:
+    """One row per subset size of :func:`replicate_tests` rows.
+
+    :return: ``k``, ``n_replicates``, ``n_tested`` (with a p-value), ``n_significant``
+        (``p < alpha``), ``n_flips`` (on the other side of *alpha* from *full_p*),
+        ``max_p`` and ``worst`` (the left-out labels at ``max_p``), ``min_median`` and
+        ``max_median`` (the range of the median difference).
+    """
+    rows = []
+    for k, group in table.groupby("k", sort=True):
+        tested = group[group["p"].notna()]
+        significant = tested["p"] < alpha
+        rows.append(
+            {
+                "k": int(k),
+                "n_replicates": len(group),
+                "n_tested": len(tested),
+                "n_significant": int(significant.sum()),
+                "n_flips": int((significant != (full_p < alpha)).sum()),
+                "max_p": float(tested["p"].max()) if len(tested) else np.nan,
+                "worst": (
+                    tested.loc[tested["p"].idxmax(), "dropped"] if len(tested) else ""
+                ),
+                "min_median": float(tested["median"].min()) if len(tested) else np.nan,
+                "max_median": float(tested["median"].max()) if len(tested) else np.nan,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def flip_shares(
+    table: pd.DataFrame,
+    participants: Sequence[str],
+    full_p: float,
+    alpha: float,
+    k: int,
+) -> dict[str, float]:
+    """Per participant, the share of the verdict-changing size-*k* replicates that
+    leave them out.
+
+    With ``P`` participants every one is left out by a ``k / P`` share of all size-*k*
+    subsets, which is the share to expect when no one in particular carries the
+    verdict; a participant far above it is among the few that do.
+
+    :return: Participant → share; all NaN when no size-*k* replicate changes the
+        verdict.
+    """
+    rows = table[(table["k"] == k) & table["p"].notna()]
+    flips = rows[(rows["p"] < alpha) != (full_p < alpha)]
+    if not len(flips):
+        return dict.fromkeys(participants, float("nan"))
+    left_out = [set(d.split(DROPPED_SEPARATOR)) for d in flips["dropped"]]
+    return {p: sum(p in s for s in left_out) / len(left_out) for p in participants}
+
+
 def condition_contrast(
     values: Mapping[str, np.ndarray],
     conditions: Sequence[str],

@@ -1025,3 +1025,70 @@ class TestBaselineTfMap:
         )
         assert result.shape == (2, 2, 3, pre + post)
         np.testing.assert_allclose(result, expected)
+
+
+# ---------------------------------------------------------------------------
+# Robustness of a paired contrast to the participants
+# ---------------------------------------------------------------------------
+
+
+def test_sign_test_counts_directions_only():
+    # 9 of 12 positive: P(X >= 9 | 12, 1/2) = (220 + 66 + 12 + 1) / 4096.
+    d = np.array([5.0, 4, 3, 2, 1, 0.5, 0.4, 0.3, 0.2, -0.01, -0.02, -0.03])
+    assert at.sign_test(d, "greater") == pytest.approx(299 / 4096)
+    # The Wilcoxon on the same differences is far smaller: the negatives are tiny.
+    assert at.paired_test(d, "greater")["p"] < 0.01
+    assert np.isnan(at.sign_test(np.zeros(4)))
+
+
+def test_drop_participants_leaves_out_every_subset():
+    names = [f"P{i}" for i in range(6)]
+    d = np.arange(6.0)
+    replicates = at.drop_participants(d, names, [1, 2])
+    assert len(replicates) == 6 + 15
+    dropped, rest = replicates[7]  # first pair after the singles: (P0, P2)
+    assert dropped == ("P0", "P2")
+    np.testing.assert_array_equal(rest, [1.0, 3.0, 4.0, 5.0])
+    with pytest.raises(ValueError):
+        at.drop_participants(d[:5], names, [1])
+
+
+def test_replicate_tests_and_fragility_find_the_carrier():
+    # Everyone points the same way but P0 carries the size: the Wilcoxon stays
+    # significant without anyone, but which participants are in decides the margin.
+    names = [f"P{i}" for i in range(8)]
+    d = np.array([10.0, 0.3, 0.2, 0.25, 0.15, -0.1, 0.35, -0.05])
+    full_p = at.paired_test(d, "greater")["p"]
+    table = at.replicate_tests(at.drop_participants(d, names, [1, 2, 3]), "greater")
+    assert set(table.columns) >= {"k", "dropped", "n", "p", "sign_p", "median"}
+    assert (table.loc[table["k"] == 3, "n"] == 5).all()
+    k = at.fragility(table, full_p, 0.05)
+    significant = full_p < 0.05
+    flips = table[(table["p"] < 0.05) != significant]
+    assert k == (int(flips["k"].min()) if len(flips) else None)
+
+    summary = at.replicate_summary(table, full_p, 0.05)
+    assert summary["k"].tolist() == [1, 2, 3]
+    assert summary["n_replicates"].tolist() == [8, 28, 56]
+    worst = summary.set_index("k").loc[1, "worst"]
+    assert (
+        table.loc[table["k"] == 1].set_index("dropped").loc[worst, "p"]
+        == (summary.set_index("k").loc[1, "max_p"])
+    )
+
+
+def test_fragility_and_flip_shares_on_a_hand_made_table():
+    table = pd.DataFrame(
+        {
+            "k": [1, 1, 1, 2, 2, 2],
+            "dropped": ["A", "B", "C", "A+B", "A+C", "B+C"],
+            "p": [0.01, 0.02, 0.03, 0.2, 0.3, 0.04],
+        }
+    )
+    assert at.fragility(table, 0.01, 0.05) == 2
+    assert at.fragility(table.iloc[:3], 0.01, 0.05) is None
+    shares = at.flip_shares(table, ["A", "B", "C"], 0.01, 0.05, 2)
+    assert shares == {"A": 1.0, "B": 0.5, "C": 0.5}
+    assert all(
+        np.isnan(v) for v in at.flip_shares(table, ["A"], 0.01, 0.05, 1).values()
+    )

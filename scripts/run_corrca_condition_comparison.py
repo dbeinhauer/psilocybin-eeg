@@ -36,6 +36,17 @@ What changes with CorrCA (:mod:`src.analysis.corrca`, method in
 The fit pools both conditions, so the filters are symmetric in them. Its
 between-recording term includes each participant's own Placebo-Psilocybin pair.
 
+**Placebo-fitted filters** (``--fit_condition Placebo``, variant
+``corrca_channel_placebo_fit``). The same join, loaded and drawn the same way, but
+CorrCA is fitted on the Placebo recordings alone and every recording of both
+conditions is then projected through those filters. The Psilocybin recordings never
+shape the filters, so their ISC is an out-of-sample read-out of the Placebo
+components, while the Placebo ISC stays in-sample (optimistic). The fit's own ISC and
+shared patterns are Placebo's, and the leave-one-participant-out influence and the
+leave-subset-out refits are refits on Placebo alone, read on the Placebo recordings.
+Its figures go under ``JoinedPlaceboFitted_<MusicType>/``; its store sits beside the
+pooled fit's under ``JoinedSeparate/``, as its own variant.
+
 Figures (panels labelled ``CC <k>``):
 
   - ``condition_mean_tf_maps`` /
@@ -48,6 +59,16 @@ Figures (panels labelled ``CC <k>``):
   - ``corrca_condition_isc`` — per-component synchrony per condition, paired
   - ``corrca_condition_isc.csv`` / ``corrca_participant_isc.csv`` /
     ``corrca_condition_isc_test.csv`` — the numbers behind it
+  - ``corrca_onset_condition_isc`` (+ its three CSVs) — the same synchrony scored on
+    the onset-locked, trial-normalised maps instead of the whole recording
+  - ``influence/corrca_influence`` / ``influence/corrca_heldout_isc`` (+
+    ``influence/corrca_influence.csv``) — the leave-one-participant-out check: one refit per participant, the ISC and topography
+    each component loses without them, and every recording's in-sample, held-out and
+    own-pair ISC (figures for CC 1-2); ``influence/corrca_onset_*`` the same on the
+    onset-locked, trial-averaged maps. With ``--store_components`` and two conditions
+    the refits leaving out every subset of ``--refit_subset_sizes`` participants are
+    stored beside the store, for the SNR grid's robustness rows.
+    ``--skip_influence`` drops all of it.
   - ``roi_masked_condition_mean_tf_maps`` (+ ``_onset``, + ``participants/roi_masked_*``)
     — the same TF maps with the fitted filter restricted to the ASSR electrodes (every
     other weight zeroed) on the z-scored signal: what the component carries from the
@@ -78,6 +99,8 @@ Output::
         bands/corrca_channel_joined_separate/pca_<n_pca>/      # --band / --band_range
         broadband/corrca_channel_joined_separate_roi/pca_<n_pca>/  # the ROI fit
         broadband/corrca_channel_joined_separate_non_roi/pca_<n_pca>/  # the rest
+    plots/06b-corrca-condition-comparison/JoinedPlaceboFitted_<MusicType>/
+        broadband/corrca_channel_placebo_fit*/pca_<n_pca>/   # --fit_condition Placebo
 
 Examples::
 
@@ -87,6 +110,9 @@ Examples::
     python scripts/run_corrca_condition_comparison.py \\
         --experiment assr --n_pca 10 --n_channels 32 --n_times 3000 \\
         --n_pairs 5 --lenient_mask --reuse_wavelets
+
+    python scripts/run_corrca_condition_comparison.py \\
+        --experiment assr --n_pca 5 --fit_condition Placebo --reuse_wavelets
 
 ``--store_components`` keeps the oriented TF maps and per-recording topographies, plus
 the filters, shared patterns and ISCs, under
@@ -113,17 +139,23 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.analysis_common import (  # noqa: E402
     CORRCA_MASKED_READINGS,
+    CORRCA_PLACEBO_FIT_LABEL,
+    CORRCA_SEPARATE_FIT_RUNS,
     CorrcaFit,
     add_corrca_condition_args,
     anchor_corrca_signs,
     corrca_plots_dir,
+    corrca_refit_path,
     corrca_store_extras,
     log_corrca_conditions,
     resolve_wavelet_dir,
+    project_corrca_sources,
     roi_masked_corrca_sources,
     run_corrca_fits,
     stored_corrca_fit,
+    write_condition_isc,
     write_corrca_condition_report,
+    write_corrca_influence,
 )
 from scripts.notebook_helpers import load_joined_condition_wavelets  # noqa: E402
 
@@ -148,7 +180,7 @@ from src.definitions.fields import (  # noqa: E402
     MusicTypeVariants,
 )
 from src.definitions.frequency import band_token  # noqa: E402
-from src.io.iva_store import save_iva_components  # noqa: E402
+from src.io.iva_store import iva_results_path, save_iva_components  # noqa: E402
 from src.visualization.corrca_plots import COMPONENT_PREFIX  # noqa: E402
 from src.visualization.iva_condition_plots import (  # noqa: E402
     plot_condition_mean_tf_maps,
@@ -159,7 +191,9 @@ from src.visualization.iva_quality_plots import topo_info_subset  # noqa: E402
 
 _logger = logging.getLogger(__name__)
 
-#: Store variant, and the analysis-type subdirectory named after it.
+#: Store variant of the pooled fit, and the analysis-type subdirectory named after
+#: it; ``--fit_condition`` picks another run of the same join
+#: (:data:`~scripts.analysis_common.CORRCA_SEPARATE_FIT_RUNS`).
 _VARIANT = IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE
 _ANALYSIS_DIR = _VARIANT.value
 
@@ -177,7 +211,25 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     add_corrca_condition_args(parser)
+    parser.add_argument(
+        "--fit_condition",
+        choices=[c.value for c in CORRCA_SEPARATE_FIT_RUNS if c is not None],
+        default=None,
+        help=(
+            "Fit the CorrCA filters on this condition's recordings alone, then project "
+            "every recording of both conditions through them (the "
+            "'corrca_channel_placebo_fit' run). Default: fit on every recording."
+        ),
+    )
     return parser
+
+
+def _row_view(data: np.ndarray, rows: list[int]) -> np.ndarray:
+    """*data*'s *rows*: a view when they are contiguous, as the join stacks the
+    conditions in blocks, else a copy."""
+    if rows == list(range(rows[0], rows[-1] + 1)):
+        return data[rows[0] : rows[-1] + 1]
+    return data[rows]
 
 
 def run_corrca_condition_comparison(
@@ -190,7 +242,13 @@ def run_corrca_condition_comparison(
     """
     experiment_name = ExperimentNames(args.experiment)
     conditions = [ConditionVariants(c) for c in args.conditions]
+    fit_condition = (
+        None if args.fit_condition is None else ConditionVariants(args.fit_condition)
+    )
+    run_variant = CORRCA_SEPARATE_FIT_RUNS[fit_condition]
     run_label = f"{ConditionVariants.JOINED_SEPARATE.value}_{music_type.value}"
+    if fit_condition is not None:
+        run_label = f"{CORRCA_PLACEBO_FIT_LABEL}_{music_type.value}"
     band = tuple(args.band_range) if args.band_range is not None else args.band
     band_name = band_token(band)
     freqs_full = np.linspace(
@@ -222,6 +280,12 @@ def run_corrca_condition_comparison(
     condition_rows = [c.value for c in pooled.conditions]
     subject_participants = list(pooled.participants)
     subject_conditions = [c.value for c in pooled.subject_conditions]
+    # The recordings the filters are fitted on; None = every one.
+    fit_rows = (
+        None
+        if fit_condition is None
+        else [i for i, c in enumerate(subject_conditions) if c == fit_condition.value]
+    )
 
     # Full montage, on raw then log power, then the ASSR ROI and the rest of the head,
     # raw then log — one load, every fit stored and drawn as its own variant. The fit
@@ -252,7 +316,11 @@ def run_corrca_condition_comparison(
         )
         if reused is None:
             corrca = decompose_channel_corrca(
-                data_4d, label=label, n_pca=args.n_pca, gamma=args.gamma
+                data_4d,
+                label=label,
+                n_pca=args.n_pca,
+                gamma=args.gamma,
+                fit_rows=fit_rows,
             )
             corrca, alignment_note, extras = anchor_corrca_signs(
                 corrca,
@@ -263,6 +331,8 @@ def run_corrca_condition_comparison(
                 logger=_logger,
                 expect_anchor=fit.channels != "non_roi",
             )
+            if fit_condition is not None:
+                extras["corrca_fit_condition"] = np.asarray(fit_condition.value)
         else:
             corrca, alignment_note = reused
         sources, patterns = corrca.sources, corrca.patterns
@@ -448,6 +518,22 @@ def run_corrca_condition_comparison(
                     epoch_marks=epoch_marks,
                     **tf_shared,
                 )
+                # Synchrony of the onset-locked maps: the evoked TF response's shape,
+                # baseline included, rather than the whole-recording time course.
+                write_condition_isc(
+                    {c: onset_tf[rows] for c, rows in rows_of.items()},
+                    {
+                        c: [subject_participants[i] for i in rows]
+                        for c, rows in rows_of.items()
+                    },
+                    comp_indices,
+                    stem="corrca_onset",
+                    component_prefix=COMPONENT_PREFIX,
+                    label=f"{label}, onset-locked TF maps",
+                    out_dir=out_dir,
+                    prefix=tf_prefix,
+                    logger=_logger,
+                )
             return drawn
 
         written += _draw_tf_maps(sources, prefix, shared)
@@ -491,6 +577,67 @@ def run_corrca_condition_comparison(
             out_dir=out_dir,
             prefix=prefix,
         )
+        if not args.skip_influence:
+            # The refits leave participants out of the data the filters were fitted
+            # on, so a condition-fitted run refits, and reads, that condition alone.
+            if fit_rows is None:
+                influence_data = data_4d
+                influence_participants = subject_participants
+                influence_conditions = subject_conditions
+            else:
+                influence_data = _row_view(data_4d, fit_rows)
+                influence_participants = [subject_participants[i] for i in fit_rows]
+                influence_conditions = [subject_conditions[i] for i in fit_rows]
+
+            def _onset_maps(filters: np.ndarray):
+                # The onset average of the TF maps above, through any filters.
+                if args.skip_onset_average:
+                    return None
+                averaged = _onset_average(
+                    project_corrca_sources(influence_data, filters, dtype=np.float32),
+                    onsets,
+                    label=label,
+                    n_times=n_t,
+                    sfreq=sfreq,
+                    min_onsets=args.min_onsets,
+                )
+                if averaged is None:
+                    return None
+                return averaged[0], influence_participants, influence_conditions
+
+            # condition_rows, not the fit's one condition: the refits are written
+            # for the SNR grid's contrast, which reads both conditions through them.
+            write_corrca_influence(
+                influence_data,
+                corrca.model,
+                influence_participants,
+                influence_conditions,
+                condition_rows,
+                onset_maps=_onset_maps,
+                n_pca=args.n_pca,
+                label=label,
+                out_dir=out_dir,
+                prefix=prefix,
+                logger=_logger,
+                refit_path=(
+                    corrca_refit_path(
+                        iva_results_path(
+                            experiment_name,
+                            ConditionVariants.JOINED_SEPARATE,
+                            variant,
+                            music_type,
+                            band_name,
+                            args.n_pca,
+                            processed_data_dir=(
+                                None if args.store_dir is None else Path(args.store_dir)
+                            ),
+                        )
+                    )
+                    if args.store_components
+                    else None
+                ),
+                refit_subset_sizes=args.refit_subset_sizes,
+            )
         _logger.info(
             f"[{label}] done: {len(written)} per-participant figure(s), condition grids "
             f"and the synchrony report in {out_dir}"
@@ -500,7 +647,7 @@ def run_corrca_condition_comparison(
         data_4d,
         topo_info,
         coordinate_system,
-        _VARIANT,
+        run_variant,
         args,
         prepare=lambda data, log: log10_power(data) if log else data,
         run_fit=_run_fit,
@@ -526,10 +673,16 @@ def run(args: argparse.Namespace) -> None:
             "--conditions must name at least two distinct conditions; a joined run "
             f"pools them, got {args.conditions}."
         )
+    if args.fit_condition is not None and args.fit_condition not in args.conditions:
+        raise ValueError(
+            f"--fit_condition {args.fit_condition} is not among --conditions "
+            f"{args.conditions}; the filters are fitted on recordings of the join."
+        )
     _logger.info(
         f"CorrCA condition comparison: experiment={experiment_name.value}, "
         f"conditions={args.conditions}, music_types={[m.value for m in music_types]}, "
-        f"n_pca={args.n_pca}, gamma={args.gamma}"
+        f"n_pca={args.n_pca}, gamma={args.gamma}, filters fitted on "
+        f"{args.fit_condition or 'every recording'}"
     )
     for music_type in music_types:
         _logger.info(f"=== {music_type.value} ===")

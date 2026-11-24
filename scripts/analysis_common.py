@@ -48,7 +48,16 @@ from src.analysis.corrca import (
     ANCHOR_STRENGTH_FLOOR,
     CorrcaDecomposition,
     CorrcaResult,
+    INFLUENCE_Z_THRESHOLD,
+    MIN_RELATIVE_INFLUENCE,
+    JackknifeStatistics,
     anchor_component_signs,
+    annotate_influence,
+    channel_corrca_influence,
+    channel_jackknife_statistics,
+    leave_subsets_out,
+    map_influence,
+    subset_refit_filters,
     condition_isc,
     paired_condition_test,
 )
@@ -82,7 +91,12 @@ from src.visualization.isc_plots import (
     plot_multiscale_sliding_window_isc,
     plot_band_multiscale_sliding_window_isc,
 )
-from src.visualization.corrca_plots import plot_condition_isc, plot_shared_topomaps
+from src.visualization.corrca_plots import (
+    plot_condition_isc,
+    plot_participant_heldout_isc,
+    plot_participant_influence,
+    plot_shared_topomaps,
+)
 from src.visualization.mean_variance_plots import (
     plot_timeseries,
     plot_variance_distribution,
@@ -100,6 +114,7 @@ from src.visualization.wavelet_plots import (
     plot_wavelet_topomap_isc,
 )
 
+from src.io.saving import save_npz_atomic
 from src.io.wavelet_store import (
     REPRESENTATIONS,
     WaveletSet,
@@ -304,6 +319,16 @@ CORRCA_FITS = {
         IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS_LOG_NON_ROI,
     ),
     IvaVariants.CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS_LOG: _INDIVIDUAL_LOG_FITS,
+    IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT: (
+        IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT,
+        IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT_ROI,
+        IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT_NON_ROI,
+    ),
+    IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT_LOG: (
+        IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT_LOG,
+        IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT_LOG_ROI,
+        IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT_LOG_NON_ROI,
+    ),
 }
 #: The log-power counterpart of each raw-power run, keyed by the full fit.
 CORRCA_LOG_OF = {
@@ -314,6 +339,14 @@ CORRCA_LOG_OF = {
     IvaVariants.CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS: (
         IvaVariants.CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS_LOG
     ),
+    IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT: IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT_LOG,
+}
+#: The subject-axis join's runs by the condition their filters are fitted on: ``None``
+#: fits on every recording, a condition on its recordings alone, every recording of
+#: both conditions read through the filters either way.
+CORRCA_SEPARATE_FIT_RUNS = {
+    None: IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE,
+    ConditionVariants.PLACEBO: IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT,
 }
 #: Every variant fitted on ``log10`` power, whose readers must take the log too.
 CORRCA_LOG_VARIANTS = frozenset(
@@ -374,6 +407,15 @@ def corrca_run_plan(
 
 #: Plot label of those fits, the counterpart of a join's ``JoinedTracks``.
 CORRCA_INDIVIDUAL_LABEL = "IndividualConditions"
+#: Plot label of the subject-axis join fitted on Placebo alone. Its store stays under
+#: ``JoinedSeparate``, the join whose rows it holds; only its figures move.
+CORRCA_PLACEBO_FIT_LABEL = "JoinedPlaceboFitted"
+CORRCA_PLACEBO_FIT_VARIANTS = frozenset(
+    (
+        *CORRCA_FITS[IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT],
+        *CORRCA_FITS[IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT_LOG],
+    )
+)
 
 
 def corrca_plots_dir(
@@ -390,7 +432,8 @@ def corrca_plots_dir(
     A join draws under its own label, ``<Join>_<music>/<spectrum>/<variant>/pca_<n>/``;
     an individual-condition fit under :data:`CORRCA_INDIVIDUAL_LABEL`, with its
     condition one level below the variant,
-    ``.../corrca_channel_individual_conditions/<Condition>/pca_<n>/``.
+    ``.../corrca_channel_individual_conditions/<Condition>/pca_<n>/``; the Placebo-fitted
+    join under :data:`CORRCA_PLACEBO_FIT_LABEL`, though its store is the join's.
 
     :param condition: The store's condition: the join, or the one real condition.
     :param band: Band token, ``None`` for broadband.
@@ -405,6 +448,8 @@ def corrca_plots_dir(
             CORRCA_INDIVIDUAL_LABEL,
             f"{variant.value}/{condition.value}",
         )
+    elif variant in CORRCA_PLACEBO_FIT_VARIANTS:
+        label, analysis_type = CORRCA_PLACEBO_FIT_LABEL, variant.value
     else:
         label, analysis_type = condition.value, variant.value
     return ProjectPaths.analysis_plots_dir(
@@ -699,6 +744,28 @@ def add_corrca_condition_args(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--skip_influence",
+        action="store_true",
+        help=(
+            "Skip the leave-one-participant-out influence check (one CorrCA refit per "
+            "participant from one extra pass over the data): 'corrca_influence' and "
+            "'corrca_heldout_isc'."
+        ),
+    )
+    parser.add_argument(
+        "--refit_subset_sizes",
+        type=int,
+        nargs="*",
+        default=[1, 2, 3],
+        help=(
+            "With --store_components and two conditions, refit CorrCA without every "
+            "subset of this many participants (each size given) and store the refits' "
+            "filters beside the store, for the SNR grid's contrast robustness. Given "
+            "with no size, nothing is refitted. Part of the influence check, so "
+            "--skip_influence skips it too."
+        ),
+    )
+    parser.add_argument(
         "--skip_roi_masked",
         action="store_true",
         help=(
@@ -983,19 +1050,22 @@ def roi_masked_corrca_sources(
     return project_corrca_sources(data_4d, masked)
 
 
-def project_corrca_sources(data_4d: np.ndarray, filters: np.ndarray) -> np.ndarray:
+def project_corrca_sources(
+    data_4d: np.ndarray, filters: np.ndarray, *, dtype: np.dtype = np.float64
+) -> np.ndarray:
     """``(K, C)`` *filters* applied to *data_4d* z-scored along time as the fit did.
 
     One subject at a time, so no second full z-scored copy is held.
 
     :param data_4d: ``(S, C, F, T)`` a fit's prepared input.
+    :param dtype: Of the result; ``float32`` halves it for many filters.
     :return: ``(S, K, F, T)``.
     """
     from src.analysis.assr_trials import project_channels
     from src.analysis.wavelet_ica import zscore_by_time
 
     n_subjects, _n_channels, n_freqs, n_times = data_4d.shape
-    sources = np.empty((n_subjects, filters.shape[0], n_freqs, n_times))
+    sources = np.empty((n_subjects, filters.shape[0], n_freqs, n_times), dtype)
     for s in range(n_subjects):
         sources[s] = project_channels(filters, zscore_by_time(data_4d[s : s + 1])[0])
     return sources
@@ -1181,27 +1251,335 @@ def write_corrca_condition_report(
     plt.close("all")
 
 
-def write_iva_condition_isc(
+#: Subdirectory of a stage-06b fit's plot directory holding the influence products.
+INFLUENCE_SUBDIR = "influence"
+
+
+def corrca_refit_path(store_path: Path) -> Path:
+    """The leave-subset-out refit filters written beside a stage-06b store."""
+    return store_path.with_name(f"{store_path.stem}__subset_refits.npz")
+
+
+def write_subset_refits(
+    stats: JackknifeStatistics,
+    model: CorrcaResult,
+    participants: Sequence[str],
+    sizes: Sequence[int],
+    *,
+    n_pca: int | None,
+    path: Path,
+    label: str,
+    logger: logging.Logger,
+) -> None:
+    """Refit CorrCA without every subset of participants of each size in *sizes*, and
+    write the refits' filters, matched and signed to *model*'s components.
+
+    The SNR grid reads them (``run_corrca_snr_grid.py``) to redo the condition
+    contrast on filters that never saw the left-out participants. A size leaving fewer
+    than two participants is dropped with a warning.
+
+    The file holds ``participants`` (one label per group, in group order),
+    ``subsets`` ``(R, max size)`` group indices padded with ``-1``, ``filters``
+    ``(R, C, K)``, ``pattern_r`` and ``filter_r`` ``(R, K)``, and ``full_filters``
+    ``(C, K)``, the fit they belong to.
+
+    :param stats: :func:`~src.analysis.corrca.channel_jackknife_statistics` of the
+        fit's input, with ``group_cross`` when a size exceeds one.
+    :param participants: Participant per data row; rows sharing one are left out
+        together, as in *stats*' groups.
+    """
+    n_groups = len(stats.groups)
+    usable = sorted({int(s) for s in sizes if 1 <= int(s) <= n_groups - 2})
+    skipped = sorted({int(s) for s in sizes} - set(usable))
+    if skipped:
+        logger.warning(
+            f"[{label}] {n_groups} participant(s): no refit leaving out {skipped}."
+        )
+    if not usable:
+        return
+    subsets = leave_subsets_out(n_groups, usable)
+    logger.info(
+        f"[{label}] leave-subset-out refits: "
+        + ", ".join(
+            f"{sum(len(s) == k for s in subsets)} leaving {k} out" for k in usable
+        )
+    )
+    refits = subset_refit_filters(stats, model, subsets, n_pca=n_pca, gamma=model.gamma)
+    padded = np.full((len(subsets), max(usable)), -1, dtype=np.int64)
+    for i, subset in enumerate(subsets):
+        padded[i, : len(subset)] = subset
+    path.parent.mkdir(parents=True, exist_ok=True)
+    save_npz_atomic(
+        path,
+        participants=np.asarray([str(participants[g[0]]) for g in stats.groups]),
+        subsets=padded,
+        filters=refits.filters,
+        pattern_r=refits.pattern_r,
+        filter_r=refits.filter_r,
+        full_filters=np.asarray(model.filters, dtype=float),
+    )
+    sizes_of = np.array([len(s) for s in subsets])
+    for k in usable:
+        r = refits.pattern_r[sizes_of == k]
+        logger.info(
+            f"[{label}] leave-{k}-out refits, topography |r| with the full fit per "
+            "component (median, min): "
+            + "; ".join(
+                f"CC {c + 1} {np.nanmedian(r[:, c]):.2f}, {np.nanmin(r[:, c]):.2f}"
+                for c in range(r.shape[1])
+            )
+        )
+    logger.info(f"[{label}] wrote {path}")
+
+
+#: Components every stability figure (influence, held-out ISC, SNR robustness) draws:
+#: the leading CorrCA components, which carry the synchrony; their tables keep all.
+STABILITY_COMPONENTS = 2
+
+
+def write_corrca_influence(
+    data_4d: np.ndarray,
+    model: CorrcaResult,
+    participants: Sequence[str],
+    conditions: Sequence[str] | None,
+    condition_order: Sequence[str],
+    *,
+    n_pca: int | None,
+    label: str,
+    out_dir: Path,
+    prefix: str,
+    logger: logging.Logger,
+    refit_path: Path | None = None,
+    refit_subset_sizes: Sequence[int] = (),
+    onset_maps: Callable[
+        [np.ndarray], tuple[np.ndarray, Sequence[str], Sequence[str] | None] | None
+    ]
+    | None = None,
+) -> None:
+    """Leave-one-participant-out influence of a stage-06b fit: tables, figures and log
+    lines, all in ``<out_dir>/influence/``.
+
+    One CorrCA refit per participant, read on two signals, each giving
+    ``<stem>_influence.csv`` (every component), ``<stem>_influence.png`` (ISC and
+    topography each component loses without the participant) and
+    ``<stem>_heldout_isc.png`` (each recording's in-sample, held-out and own-pair
+    ISC), the figures for the leading :data:`STABILITY_COMPONENTS`:
+
+    - ``corrca`` — the whole recording, the samples the fit maximised;
+    - ``corrca_onset`` — with *onset_maps*, each recording's onset-locked,
+      trial-averaged TF map, as ``corrca_onset_condition_isc`` scores it: the full
+      fit's and every refit's filters are applied, the maps made, and their ISCs
+      compared.
+
+    Skipped with a warning when fewer than three participants leave nothing to refit
+    on.
+
+    :param data_4d: ``(S, C, F, T)`` the input the fit was made on (before its own
+        z-scoring), so the refits see what the fit saw.
+    :param participants: Participant per row; rows sharing one are left out together.
+    :param conditions: Condition per row (subject-axis join), or ``None`` when a row is
+        one participant.
+    :param condition_order: The conditions; the refits are written only for two.
+    :param refit_path: Where to write :func:`write_subset_refits`' filters (beside the
+        store, :func:`corrca_refit_path`), read by the SNR grid; ``None`` writes none.
+    :param refit_subset_sizes: How many participants each refit leaves out.
+    :param onset_maps: ``(M, C)`` filters → ``(maps (R, M, F, W), participant per
+        map, condition per map or None)``, the fit script's own onset average of
+        *data_4d* through them; ``None`` (or returning ``None``) skips the onset
+        reading.
+    """
+    if len(set(participants)) < 3:
+        logger.warning(
+            f"[{label}] {len(set(participants))} participant(s): leave-one-out "
+            "influence needs at least three; skipped."
+        )
+        return
+    logger.info(
+        f"[{label}] leave-one-participant-out influence: "
+        f"{len(set(participants))} refit(s)"
+    )
+    write_refits = (
+        refit_path is not None
+        and bool(refit_subset_sizes)
+        and len(list(condition_order)) == 2
+    )
+    stats = channel_jackknife_statistics(
+        data_4d,
+        participants,
+        group_cross=write_refits and max(refit_subset_sizes) > 1,
+    )
+    if write_refits:
+        write_subset_refits(
+            stats,
+            model,
+            participants,
+            refit_subset_sizes,
+            n_pca=n_pca,
+            path=refit_path,
+            label=label,
+            logger=logger,
+        )
+    influence = channel_corrca_influence(
+        data_4d,
+        model,
+        participants,
+        conditions,
+        n_pca=n_pca,
+        gamma=model.gamma,
+        stats=stats,
+    )
+    influence_dir = out_dir / INFLUENCE_SUBDIR
+    influence_dir.mkdir(parents=True, exist_ok=True)
+    shown = list(range(min(STABILITY_COMPONENTS, model.n_components)))
+    _write_influence_readouts(
+        influence,
+        shown,
+        label=label,
+        stem="corrca",
+        out_dir=influence_dir,
+        prefix=prefix,
+        logger=logger,
+    )
+    if onset_maps is None:
+        return
+
+    # One projection for the full fit's and every refit's leading components; the
+    # refits are matched and signed to the full fit's, so component k is k in each.
+    names = [participants[g[0]] for g in stats.groups]
+    refits = subset_refit_filters(
+        stats,
+        model,
+        leave_subsets_out(len(names), [1]),
+        n_pca=n_pca,
+        gamma=model.gamma,
+    )
+    n_shown = len(shown)
+    stacked = np.concatenate(
+        [
+            model.filters[:, shown],
+            *(refits.filters[i][:, shown] for i in range(len(names))),
+        ],
+        axis=1,
+    ).T
+    logger.info(
+        f"[{label}] onset-locked influence: {stacked.shape[0]} filter(s) through the "
+        "onset average"
+    )
+    made = onset_maps(stacked)
+    if made is None:
+        logger.info(f"[{label}] no onset-locked maps: no onset influence.")
+        return
+    maps, map_participants, map_conditions = made
+    map_participants = list(map_participants)
+    onset = annotate_influence(
+        map_influence(
+            maps[:, :n_shown],
+            {
+                name: maps[:, n_shown * (i + 1) : n_shown * (i + 2)]
+                for i, name in enumerate(names)
+            },
+            map_participants,
+            {name: refits.pattern_r[i, shown] for i, name in enumerate(names)},
+        ),
+        map_participants,
+        None if map_conditions is None else list(map_conditions),
+    )
+    _write_influence_readouts(
+        onset,
+        shown,
+        label=f"{label}, onset-locked TF maps",
+        stem="corrca_onset",
+        out_dir=influence_dir,
+        prefix=prefix,
+        logger=logger,
+    )
+
+
+def _write_influence_readouts(
+    influence: pd.DataFrame,
+    shown: Sequence[int],
+    *,
+    label: str,
+    stem: str,
+    out_dir: Path,
+    prefix: str,
+    logger: logging.Logger,
+) -> None:
+    """The influence table, one log line per drawn component and the two figures."""
+    import matplotlib.pyplot as plt
+
+    influence.to_csv(out_dir / f"{prefix}{stem}_influence.csv", index=False)
+    per_participant = influence.drop_duplicates(["participant", "component"])
+    for component, rows in per_participant.groupby("component"):
+        if component - 1 not in shown:
+            continue
+        top = rows.loc[rows["influence"].idxmax()]
+        weakest = (
+            rows.loc[rows["pattern_r"].idxmin()]
+            if rows["pattern_r"].notna().any()
+            else None
+        )
+        recordings = influence[influence["component"] == component]
+        outliers = ", ".join(rows.loc[rows["outlier"], "participant"]) or "none"
+        logger.info(
+            f"[{label}] CC {component} influence: largest ISC loss "
+            f"{top.influence:+.4f} ({top.participant}, "
+            f"{top.relative_influence:.0%} of the ISC, robust z "
+            f"{top.influence_z:.1f}), lowest topography r "
+            + (
+                "-"
+                if weakest is None
+                else f"{weakest.pattern_r:.2f} ({weakest.participant})"
+            )
+            + f"; median ISC in-sample {recordings.insample_isc.median():.4f} vs "
+            f"held-out {recordings.heldout_isc.median():.4f}; outliers (z > "
+            f"{INFLUENCE_Z_THRESHOLD}, >= {MIN_RELATIVE_INFLUENCE:.0%} of the ISC): "
+            f"{outliers}"
+        )
+    plot_participant_influence(
+        influence,
+        shown,
+        label=label,
+        save_path=out_dir / f"{prefix}{stem}_influence.png",
+    )
+    plt.close("all")
+    plot_participant_heldout_isc(
+        influence,
+        shown,
+        label=label,
+        save_path=out_dir / f"{prefix}{stem}_heldout_isc.png",
+    )
+    plt.close("all")
+
+
+def write_condition_isc(
     sources_by_condition: Mapping[str, np.ndarray],
     participants_by_condition: Mapping[str, Sequence[str]],
     comp_indices: Sequence[int],
     *,
+    stem: str,
+    component_prefix: str,
     label: str,
     out_dir: Path,
     prefix: str,
     logger: logging.Logger,
 ) -> None:
-    """Per-condition synchrony of the sign-anchored IVA sources, as stage 06b draws it.
+    """Per-condition synchrony of component maps: group ISC, per-participant
+    leave-one-out ISC and the paired Wilcoxon test
+    (:func:`~src.analysis.corrca.condition_isc`), written as
+    ``<prefix><stem>_condition_isc.png`` and three CSVs in *out_dir*.
 
-    The same group ISC, per-participant leave-one-out ISC and paired Wilcoxon test
-    (:func:`~src.analysis.corrca.condition_isc`), written as ``iva_condition_isc.png``
-    and three CSVs in *out_dir*. Unlike CorrCA, each recording has its own demixing
-    matrix and its own sign, so the scores depend on the per-recording mask anchor: a
-    recording flipped against the rest lands at a negative leave-one-out ISC.
+    Every trailing axis of a source counts as samples, so the score is whatever map is
+    passed: the whole-recording TF map, or the onset-locked trial average. For IVA,
+    each recording has its own demixing matrix and its own sign, so the scores depend
+    on the per-recording mask anchor: a recording flipped against the rest lands at a
+    negative leave-one-out ISC.
 
     :param sources_by_condition: Condition → ``(P_c, K, F, T)`` oriented sources.
     :param participants_by_condition: Condition → participant label per row.
     :param comp_indices: 0-based components to draw.
+    :param stem: File stem, e.g. ``"iva"`` or ``"corrca_onset"``.
+    :param component_prefix: Panel label prefix, ``"IC"`` or ``"CC"``.
     """
     import matplotlib.pyplot as plt
 
@@ -1215,12 +1593,13 @@ def write_iva_condition_isc(
         else None
     )
     log_corrca_conditions(
-        group_isc, tests, label=label, logger=logger, component_prefix="IC"
+        group_isc, tests, label=label, logger=logger, component_prefix=component_prefix
     )
-    group_isc.to_csv(out_dir / f"{prefix}iva_condition_isc.csv", index=False)
-    participant_isc.to_csv(out_dir / f"{prefix}iva_participant_isc.csv", index=False)
+    base = f"{prefix}{stem}"
+    group_isc.to_csv(out_dir / f"{base}_condition_isc.csv", index=False)
+    participant_isc.to_csv(out_dir / f"{base}_participant_isc.csv", index=False)
     if tests is not None:
-        tests.to_csv(out_dir / f"{prefix}iva_condition_isc_test.csv", index=False)
+        tests.to_csv(out_dir / f"{base}_condition_isc_test.csv", index=False)
     plot_condition_isc(
         group_isc,
         participant_isc,
@@ -1228,8 +1607,8 @@ def write_iva_condition_isc(
         conditions,
         comp_indices,
         label=label,
-        component_prefix="IC",
-        save_path=out_dir / f"{prefix}iva_condition_isc.png",
+        component_prefix=component_prefix,
+        save_path=out_dir / f"{base}_condition_isc.png",
     )
     plt.close("all")
 

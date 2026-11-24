@@ -576,3 +576,240 @@ def plot_snr(
     fig.tight_layout()
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
+
+
+#: Replicates whose verdict differs from the full cohort's.
+_FLIP_COLOR = "#c0392b"
+#: The robustness figure's replicate families: test -> (label, bar colour).
+_ROBUSTNESS_TESTS = {"fixed_drop": ("fixed", "0.6"), "refit_drop": ("refit", "0.15")}
+#: Lowest-|r| flagged refits named per subset size, so a large size stays legible.
+_NAMED_TOPOGRAPHIES = 5
+
+
+def plot_contrast_robustness(
+    table,
+    sources: list[str],
+    participants: list[str],
+    alpha: float,
+    title: str,
+    path: Path,
+) -> None:
+    """How far the condition contrast of one grid cell rests on a few participants.
+
+    One column per source, rows top to bottom:
+
+    - **p-values** of every replicate, by how many participants it leaves out and how
+      (``fixed``: the same filters, their differences dropped; ``refit``: CorrCA
+      refitted without them), red where the verdict at *alpha* differs from the full
+      cohort's (dashed line), ringed where the refit's topography is flagged (last
+      row); the held-out reading (each participant through the refit that never saw
+      them) last;
+    - **one row per subset size**: each participant's share of that size's
+      verdict-changing replicates that leave them out, ``fixed`` and ``refit`` side
+      by side, against the ``k / P`` share every participant has by chance (dashed);
+    - **refit topography**: the |r| of every refit's topography with the full fit's,
+      per subset size; flagged low ones
+      (:func:`~src.analysis.corrca.low_topography_flags`) in red, the lowest named.
+
+    :param table: The cell's ``run_corrca_snr_grid.py`` robustness rows: ``source``,
+        ``test`` (``full``, ``fixed_drop``, ``refit_drop``, ``held_out``), ``k``,
+        ``dropped``, ``p``, ``sign_p``, ``same sign``, and ``pattern_r`` on the
+        ``refit_drop`` rows.
+    """
+    from src.analysis.corrca import low_topography_flags
+
+    sources = [s for s in sources if (table["source"] == s).any()]
+    if not sources:
+        return
+    order = sorted(participants, key=participant_sort_key)
+    drops = table[table["test"].isin(list(_ROBUSTNESS_TESTS))]
+    sizes = sorted(int(k) for k in drops["k"].unique())
+    has_topography = "pattern_r" in table.columns and (
+        table.loc[table["test"] == "refit_drop", "pattern_r"].notna().any()
+    )
+    heights = [3.0] + [1.8] * len(sizes) + ([2.6] if has_topography else [])
+    fig, axes = plt.subplots(
+        len(heights),
+        len(sources),
+        figsize=(max(4.8, 0.32 * len(order) + 1.5) * len(sources), sum(heights) + 1.0),
+        squeeze=False,
+        gridspec_kw={"height_ratios": heights},
+    )
+    for j, source in enumerate(sources):
+        rows = table[table["source"] == source]
+        full = rows[rows["test"] == "full"].iloc[0]
+        full_significant = full["p"] < alpha
+        refit = rows[rows["test"] == "refit_drop"]
+        flagged_topography: dict[int, np.ndarray] = {}
+        if has_topography:
+            for k, group in refit.groupby("k"):
+                flagged_topography[int(k)] = low_topography_flags(
+                    group["pattern_r"].to_numpy(dtype=float)
+                )
+
+        # ---- p-values ------------------------------------------------------
+        top = axes[0, j]
+        position, ticks, fragility_notes = 0, [], []
+        for test, (name, _colour) in _ROBUSTNESS_TESTS.items():
+            family = rows[rows["test"] == test]
+            if not len(family):
+                continue
+            fragile = at.fragility(family, full["p"], alpha)
+            fragility_notes.append(
+                f"{name} {fragile if fragile else '>' + str(int(family['k'].max()))}"
+            )
+            for k, group in family.groupby("k", sort=True):
+                p = group["p"].to_numpy(dtype=float)
+                flipped = (p < alpha) != full_significant
+                x = position + np.random.default_rng(position).uniform(
+                    -0.25, 0.25, p.size
+                )
+                top.scatter(
+                    x,
+                    p,
+                    s=9,
+                    color=np.where(flipped, _FLIP_COLOR, "0.45"),
+                    alpha=0.6,
+                    lw=0,
+                )
+                ringed = (
+                    flagged_topography.get(int(k)) if test == "refit_drop" else None
+                )
+                if ringed is not None and ringed.any():
+                    top.scatter(
+                        x[ringed],
+                        p[ringed],
+                        s=40,
+                        facecolors="none",
+                        edgecolors="black",
+                        lw=0.8,
+                    )
+                ticks.append((position, f"{name}\n−{int(k)}"))
+                position += 1
+        held = rows[rows["test"] == "held_out"]
+        if len(held):
+            p = float(held["p"].iloc[0])
+            top.scatter(
+                [position],
+                [p],
+                marker="D",
+                s=28,
+                color=_FLIP_COLOR if (p < alpha) != full_significant else "0.15",
+            )
+            ticks.append((position, "held-\nout"))
+            position += 1
+        top.axhline(full["p"], color="0.2", ls="--", lw=1.0)
+        top.axhline(alpha, color=_FLIP_COLOR, ls=":", lw=1.0)
+        top.set_yscale("log")
+        top.set_xticks([t for t, _ in ticks])
+        top.set_xticklabels([label for _, label in ticks], fontsize=7)
+        top.set_xlim(-0.6, max(position - 0.4, 0.6))
+        top.set_title(
+            f"{source}\np {full['p']:.3g} ({full['same sign']}), sign test "
+            f"{full['sign_p']:.3g}\nfragility: {', '.join(fragility_notes) or '-'}",
+            fontsize=8,
+        )
+        if j == 0:
+            top.set_ylabel("p (replicate)", fontsize=8)
+
+        # ---- flip shares, one row per subset size ---------------------------
+        x = np.arange(len(order))
+        for i, k in enumerate(sizes):
+            ax = axes[1 + i, j]
+            families = [
+                t
+                for t in _ROBUSTNESS_TESTS
+                if ((rows["test"] == t) & (rows["k"] == k)).any()
+            ]
+            width = 0.8 / max(len(families), 1)
+            drawn = []
+            for f, test in enumerate(families):
+                family = rows[rows["test"] == test]
+                shares = at.flip_shares(family, order, full["p"], alpha, k)
+                values = np.array([shares[p] for p in order])
+                name, colour = _ROBUSTNESS_TESTS[test]
+                n_flips = int(
+                    (
+                        (family.loc[family["k"] == k, "p"] < alpha) != full_significant
+                    ).sum()
+                )
+                n_total = int((family["k"] == k).sum())
+                if not np.isnan(values).all():
+                    ax.bar(
+                        x + (f - (len(families) - 1) / 2) * width,
+                        values,
+                        width=width,
+                        color=colour,
+                        label=f"{name}: {n_flips}/{n_total} change",
+                    )
+                drawn.append(f"{name} {n_flips}/{n_total}")
+            ax.axhline(k / len(order), color="0.4", ls="--", lw=0.8)
+            ax.set_ylim(0, 1.05)
+            ax.set_xticks(x)
+            ax.set_xticklabels(
+                order if i == len(sizes) - 1 else [], rotation=90, fontsize=6
+            )
+            ax.tick_params(axis="y", labelsize=7)
+            if ax.get_legend_handles_labels()[0]:
+                ax.legend(fontsize=6, loc="upper right")
+            else:
+                ax.text(
+                    0.5,
+                    0.55,
+                    "no replicate changes the verdict (" + ", ".join(drawn) + ")",
+                    ha="center",
+                    va="center",
+                    fontsize=7,
+                    transform=ax.transAxes,
+                )
+            ax.set_title(f"leave {k} out", fontsize=8, loc="left")
+            if j == 0:
+                ax.set_ylabel("share of\nverdict changes", fontsize=7)
+
+        # ---- refit topography ----------------------------------------------
+        if not has_topography:
+            continue
+        ax = axes[-1, j]
+        refit_sizes = sorted(int(k) for k in refit["k"].unique())
+        lowest = 1.0
+        n_flagged = 0
+        for i, k in enumerate(refit_sizes):
+            group = refit[refit["k"] == k]
+            r = group["pattern_r"].to_numpy(dtype=float)
+            flags = flagged_topography[k]
+            n_flagged += int(flags.sum())
+            xs = i + np.random.default_rng(100 + i).uniform(-0.25, 0.25, r.size)
+            ax.scatter(
+                xs, r, s=9, color=np.where(flags, _FLIP_COLOR, "0.45"), alpha=0.7, lw=0
+            )
+            if np.isfinite(r).any():
+                ax.hlines(np.nanmedian(r), i - 0.35, i + 0.35, color="black", lw=1.5)
+                lowest = min(lowest, float(np.nanmin(r)))
+            named = np.flatnonzero(flags)
+            named = named[np.argsort(r[named])][:_NAMED_TOPOGRAPHIES]
+            for idx in named:
+                ax.annotate(
+                    str(group["dropped"].iloc[idx]),
+                    (xs[idx], r[idx]),
+                    xytext=(4, 0),
+                    textcoords="offset points",
+                    va="center",
+                    fontsize=5.5,
+                    color=_FLIP_COLOR,
+                )
+        ax.set_xticks(range(len(refit_sizes)))
+        ax.set_xticklabels([f"refit −{k}" for k in refit_sizes], fontsize=7)
+        ax.set_xlim(-0.6, len(refit_sizes) - 0.4)
+        ax.set_ylim(max(-0.05, lowest - 0.05), 1.01)
+        ax.tick_params(axis="y", labelsize=7)
+        ax.set_title(
+            f"refit topography vs full fit: {n_flagged} flagged (red)",
+            fontsize=8,
+            loc="left",
+        )
+        if j == 0:
+            ax.set_ylabel("|r| topography", fontsize=8)
+    fig.suptitle(title, fontsize=10)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)

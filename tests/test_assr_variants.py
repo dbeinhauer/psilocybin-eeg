@@ -7,8 +7,10 @@ import numpy as np
 import pytest
 
 from src.analysis.wavelet_ica import log10_power
+from src.analysis import assr_trials as at
 from src.analysis.assr_variants import (
     project_condition,
+    replicate_snr_values,
     store_channel_index,
     zscore_time,
 )
@@ -146,3 +148,61 @@ def test_a_log_power_store_reads_its_masked_rows_on_the_log_cache(cache, filters
             rtol=1e-4,
             atol=1e-5,
         )
+
+
+@pytest.mark.parametrize("log_power", [False, True])
+def test_replicate_values_are_the_grid_s_values_of_those_filters(
+    cache, filters, log_power
+):
+    # The grid's reading of a filter on the cache: project at each selection bin,
+    # average the selection, cut, baseline-normalise, window mean, median over trials.
+    wavelet_set, _ = cache
+    many = np.concatenate([filters, -2.0 * filters, filters[::-1]])
+    onsets, pre, post = np.array([8, 20, 30]), 4, 8
+    baseline = np.arange(pre + post) < pre
+    windows = {"all": ~baseline, "late": np.arange(pre + post) >= pre + 4}
+    selections = {"40hz": GRID_BINS[:1], "35-45hz": GRID_BINS}
+    got = replicate_snr_values(
+        wavelet_set,
+        "Placebo",
+        PARTICIPANTS,
+        CHANNELS,
+        None,
+        many,
+        selections,
+        onsets,
+        pre,
+        post,
+        baseline,
+        windows,
+        log_power=log_power,
+        block=4,
+    )
+    binary = ROI / ROI.sum()
+    projected = project_condition(
+        wavelet_set,
+        "Placebo",
+        PARTICIPANTS,
+        lambda participant, condition: 0,
+        binary,
+        binary[None, :],
+        GRID_BINS,
+        CHANNELS,
+        None,
+        np.flatnonzero(ROI),
+        many[None],  # read like the masked rows: the fit's input, every channel
+        log_power=log_power,
+    ).masked_z  # (P, M, selection bins, T)
+    for name, bins in selections.items():
+        take = np.searchsorted(GRID_BINS, bins)
+        trials, _ = at.cut_trials(projected[:, :, take].mean(axis=2), onsets, pre, post)
+        normed, _, _ = at.baseline_normalise(trials, baseline)
+        for window, mask in windows.items():
+            expected = np.median(normed[..., mask].mean(axis=-1), axis=-1)
+            np.testing.assert_allclose(
+                got[(name, window)], expected, rtol=1e-4, atol=1e-5
+            )
+    # A filter and its scaled negative read the same response, negated.
+    np.testing.assert_allclose(
+        got[("40hz", "all")][:, 2:4], -got[("40hz", "all")][:, :2], rtol=1e-4, atol=1e-6
+    )

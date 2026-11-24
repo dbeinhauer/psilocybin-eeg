@@ -11,6 +11,10 @@ drawn here, is what has no IVA counterpart:
 * the **synchrony per condition** — the ISC of each component within each condition,
   from the same filters, with every participant's leave-one-out ISC paired across
   conditions. The stage-06 IVA runs draw it too, on their sign-anchored sources;
+* the **participant influence** — a leave-one-participant-out refit per participant,
+  read as how much ISC and topography each component loses without them, as each
+  recording's in-sample, held-out and own-pair ISC, and as the condition comparison
+  redone in every leave-one-out replicate;
 * the **raw voltages through a topography** — the onset-normalised raw signal with
   each electrode multiplied by a component's absolute shared pattern (or the binary
   ASSR ROI), read as its PC1 and as its mean over all electrodes, each
@@ -217,6 +221,198 @@ def plot_condition_isc(
         f"Component synchrony per condition — {label}\n"
         "dots = participants (paired by line), bar = group ISC; "
         "Wilcoxon signed-rank, uncorrected",
+        fontsize=11,
+    )
+    save_fig(fig, save_path)
+    return fig
+
+
+def _component_grid(n_panels: int, *, width: float, height: float):
+    n_rows, n_cols = _grid_shape(n_panels)
+    fig, axes = plt.subplots(
+        n_rows,
+        n_cols,
+        figsize=(width * n_cols, height * n_rows),
+        squeeze=False,
+        layout="constrained",
+    )
+    for ax in axes.flat[n_panels:]:
+        ax.set_visible(False)
+    return fig, axes
+
+
+#: Colour of a participant flagged as an influence outlier.
+OUTLIER_COLOR = "#c0392b"
+
+
+def plot_participant_influence(
+    influence: pd.DataFrame,
+    comp_indices: Sequence[int],
+    *,
+    label: str,
+    component_prefix: str = COMPONENT_PREFIX,
+    save_path: Optional[Path] = None,
+):
+    """What each component loses when one participant is left out of the fit.
+
+    One panel per component, one dot per participant: x is the ISC the component
+    loses without them (full-fit ISC minus the matched refit's), y the |r| between the
+    full and the refit topography. A component carried by the group is a tight cloud
+    near x = 0, y = 1; one carried by a few has those few far right and low. Flagged
+    outliers (robust z above the threshold and a large enough share of the ISC) are
+    red and named, as is the participant with the largest loss.
+
+    :param influence: Output of
+        :func:`~src.analysis.corrca.channel_corrca_influence`.
+    :param comp_indices: 0-based component indices, one panel each.
+    :param label: Dataset label shown in the title.
+    :param save_path: Optional output path.
+    :return: The figure, or ``None`` when *comp_indices* is empty.
+    """
+    comp_indices = list(comp_indices)
+    if not comp_indices:
+        return None
+    per_participant = influence.drop_duplicates(["participant", "component"])
+    fig, axes = _component_grid(len(comp_indices), width=2.8, height=2.8)
+    for ax, k in zip(axes.flat, comp_indices):
+        rows = per_participant[per_participant["component"] == k + 1]
+        flagged = rows["outlier"].to_numpy(dtype=bool)
+        ax.axvline(0.0, ls="--", lw=0.6, color="0.5", zorder=0)
+        ax.scatter(
+            rows["influence"],
+            rows["pattern_r"],
+            s=24,
+            c=np.where(flagged, OUTLIER_COLOR, "0.35"),
+            edgecolor="white",
+            linewidth=0.8,
+            zorder=3,
+        )
+        named = rows[flagged]
+        if len(rows) and np.isfinite(rows["influence"]).any():
+            named = pd.concat([named, rows.loc[[rows["influence"].idxmax()]]])
+        for row in named.drop_duplicates("participant").itertuples():
+            ax.annotate(
+                str(row.participant),
+                (row.influence, row.pattern_r),
+                xytext=(3, 3),
+                textcoords="offset points",
+                fontsize=7,
+                color=OUTLIER_COLOR if row.outlier else "0.2",
+            )
+        ax.set_ylim(min(0.0, float(np.nanmin(rows["pattern_r"], initial=0.0))), 1.05)
+        isc_full = rows["isc_full"].iloc[0] if len(rows) else np.nan
+        ax.set_title(
+            f"{component_prefix} {k + 1}  (fit ISC {isc_full:.3f})\n"
+            f"{int(flagged.sum())} outlier(s) of {len(rows)}",
+            fontsize=8,
+        )
+        ax.xaxis.set_major_locator(plt.MaxNLocator(4))
+        ax.tick_params(labelsize=7)
+    for ax in axes[-1, :]:
+        ax.set_xlabel("ISC lost without participant", fontsize=8)
+    for ax in axes[:, 0]:
+        ax.set_ylabel("|r| full vs refit topography", fontsize=8)
+    fig.suptitle(
+        f"Leave-one-participant-out influence — {label}\n"
+        "dot = participant; right and low = the component leans on them; "
+        "red = flagged outlier (robust z and share of the ISC)",
+        fontsize=11,
+    )
+    save_fig(fig, save_path)
+    return fig
+
+
+#: Columns of :func:`plot_participant_heldout_isc`, left to right.
+_ISC_READINGS = {
+    "insample_isc": "in-sample",
+    "heldout_isc": "held-out",
+    "within_participant_isc": "own pair",
+}
+
+
+def plot_participant_heldout_isc(
+    influence: pd.DataFrame,
+    comp_indices: Sequence[int],
+    *,
+    label: str,
+    component_prefix: str = COMPONENT_PREFIX,
+    save_path: Optional[Path] = None,
+):
+    """Each recording's synchrony with the others, through the full and the refit
+    filter, and with its own participant's other recording.
+
+    One panel per component, one line per recording across three readings: in-sample
+    (the full fit's filter, which the recording helped choose), held-out (the filter
+    refit without its participant) and own pair (the full filter, against the same
+    participant's other recording; dropped when every participant has one row). Every
+    other-recording score uses the same reference, the sum of every other
+    participant, so in-sample minus held-out is the recording's own pull on the
+    filter. A component the group shares keeps its level from in-sample to held-out;
+    one fitted to a few drops to zero there, or lives in the own-pair column alone.
+
+    :param influence: Output of
+        :func:`~src.analysis.corrca.channel_corrca_influence`.
+    :param comp_indices: 0-based component indices, one panel each.
+    :param label: Dataset label shown in the title.
+    :param save_path: Optional output path.
+    :return: The figure, or ``None`` when *comp_indices* is empty.
+    """
+    comp_indices = list(comp_indices)
+    if not comp_indices:
+        return None
+    readings = [
+        c
+        for c in _ISC_READINGS
+        if c != "within_participant_isc" or influence[c].notna().any()
+    ]
+    xs = np.arange(len(readings))
+    fig, axes = _component_grid(
+        len(comp_indices), width=0.9 * len(readings) + 0.6, height=3.2
+    )
+    shared_ylim = [np.inf, -np.inf]
+    for ax, k in zip(axes.flat, comp_indices):
+        rows = influence[influence["component"] == k + 1]
+        for row in rows.itertuples():
+            values = [getattr(row, c) for c in readings]
+            line_color = OUTLIER_COLOR if row.outlier else "0.75"
+            ax.plot(xs, values, color=line_color, lw=0.8, zorder=1)
+            dot = CONDITION_COLORS.get(row.condition, "0.35")
+            ax.scatter(xs, values, s=18, color=dot, edgecolor="white", lw=0.6, zorder=3)
+            if row.outlier:
+                # Named at the held-out reading, where an outlier's drop shows.
+                ax.annotate(
+                    str(row.participant),
+                    (xs[1], values[1]),
+                    xytext=(4, 0),
+                    textcoords="offset points",
+                    va="center",
+                    fontsize=6,
+                    color=OUTLIER_COLOR,
+                    zorder=4,
+                )
+        for x, column in zip(xs, readings):
+            median = float(np.nanmedian(rows[column])) if len(rows) else np.nan
+            ax.hlines(median, x - 0.3, x + 0.3, color="black", lw=2.0, zorder=2)
+        values = rows[readings].to_numpy(dtype=float)
+        if np.isfinite(values).any():
+            shared_ylim[0] = min(shared_ylim[0], float(np.nanmin(values)))
+            shared_ylim[1] = max(shared_ylim[1], float(np.nanmax(values)))
+        ax.axhline(0.0, ls="--", lw=0.6, color="0.5", zorder=0)
+        ax.set_xticks(xs)
+        ax.set_xticklabels([_ISC_READINGS[c] for c in readings], fontsize=7)
+        ax.set_xlim(-0.5, len(readings) - 0.5)
+        ax.set_title(f"{component_prefix} {k + 1}", fontsize=8)
+        ax.tick_params(labelsize=7)
+    if np.isfinite(shared_ylim).all():
+        pad = 0.05 * (shared_ylim[1] - shared_ylim[0] or 1.0)
+        for ax in axes.flat:
+            ax.set_ylim(shared_ylim[0] - pad, shared_ylim[1] + pad)
+    for ax in axes[:, 0]:
+        ax.set_ylabel("ISC (r) with the reference", fontsize=8)
+    fig.suptitle(
+        f"Per-recording synchrony, full vs leave-participant-out filter — {label}\n"
+        "line = recording (red, named = influence outlier), bar = median; "
+        "reference = sum of every other participant",
         fontsize=11,
     )
     save_fig(fig, save_path)

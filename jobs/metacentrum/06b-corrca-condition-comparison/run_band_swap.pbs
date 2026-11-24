@@ -27,7 +27,8 @@
 #
 # Needs the stores of BOTH runs: run_condition_{separate,tracks}.pbs and
 # their band twins, _gamma (30-50hz) and _1_30hz (and the individual-condition
-# ones, if wanted). A missing store skips only its pair, with a warning; a run
+# and run_placebo_fit{,_gamma,_1_30hz}.pbs ones, if wanted). A missing store
+# skips only its pair, with a warning; a run
 # with no store at all only logs "nothing to do".
 #
 # One pass over the wavelet cache per condition, run and band serves all six
@@ -115,7 +116,7 @@ source /opt/myproject/.venv/bin/activate
 
 DATA_DIR="/mnt/data/processed"
 VARIANTS="corrca_channel_joined_separate corrca_channel_joined_tracks
-          corrca_channel_individual_conditions"
+          corrca_channel_individual_conditions corrca_channel_placebo_fit"
 
 if [[ " ${STEPS:-tf snr} " == *" tf "* ]]; then
 for BAND in ${BANDS:-30-50hz 1-30hz}; do

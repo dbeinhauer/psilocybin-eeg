@@ -259,3 +259,87 @@ def project_condition(
         swapped_tf_z=swapped_tf_z,
         pca_log_z=pca_log_z,
     )
+
+
+def replicate_snr_values(
+    wavelet_set: WaveletSet,
+    condition: str,
+    participants: list[str],
+    store_channels: list[str],
+    n_times: int | None,
+    filters: np.ndarray,
+    selections: dict[str, np.ndarray],
+    onsets: np.ndarray,
+    pre: int,
+    post: int,
+    baseline_mask: np.ndarray,
+    windows: dict[str, np.ndarray],
+    *,
+    log_power: bool = False,
+    block: int = 256,
+) -> dict[tuple[str, str], np.ndarray]:
+    """Every participant's ASSR value through each of many filters, read straight
+    from the cache.
+
+    The grid's per-participant value — the median over trials of the stimulus-window
+    mean of the baseline-normalised response at a frequency selection — for filters
+    the store does not hold, e.g. one set per CorrCA refit. Only the values are kept,
+    never the projected signals, so hundreds of filters cost one cache read per
+    participant. The cache is z-scored (after ``log10`` with *log_power*) as the fit's
+    input was, and a filter is linear, so a selection's bins are averaged before the
+    projection.
+
+    :param filters: ``(M, store channels)``.
+    :param selections: Selection name → cache bins to average.
+    :param onsets: Onset samples whose epochs fit the recording (the grid's geometry).
+    :param pre: Samples kept before each onset.
+    :param post: Samples kept after each onset.
+    :param baseline_mask: ``(pre + post,)`` pre-stimulus samples.
+    :param windows: Window label → ``(pre + post,)`` samples averaged per trial.
+    :param block: Filters projected at once, which bounds the memory.
+    :return: ``(selection, window)`` → ``(participants, M)``.
+    """
+    filters = np.asarray(filters, dtype=float)
+    channel_index = store_channel_index(wavelet_set, store_channels)
+    if filters.ndim != 2 or filters.shape[1] != len(store_channels):
+        raise ValueError(
+            f"filters must be (M, {len(store_channels)}); got {filters.shape}."
+        )
+    available = wavelet_set.open(participants[0]).shape[-1]
+    keep_times = available if n_times is None else min(n_times, available)
+    read = np.unique(
+        np.concatenate([np.asarray(b, dtype=int) for b in selections.values()])
+    )
+    positions = {
+        name: np.searchsorted(read, np.asarray(bins, dtype=int))
+        for name, bins in selections.items()
+    }
+    n_filters = filters.shape[0]
+    out = {
+        (s, w): np.full((len(participants), n_filters), np.nan)
+        for s in selections
+        for w in windows
+    }
+    started = time.time()
+    subjects = iter_wavelet_subjects(
+        wavelet_set, participants, freq_indices=read, n_times=keep_times
+    )
+    for row, (name, wide) in enumerate(subjects):
+        if channel_index is not None:
+            wide = wide[channel_index]
+        fit = zscore_time(log10_power(wide)) if log_power else zscore_time(wide)
+        for selection, at_bins in positions.items():
+            band = fit[:, at_bins].mean(axis=1)  # (C, T)
+            for start in range(0, n_filters, block):
+                stop = min(start + block, n_filters)
+                trials, _ = at.cut_trials(filters[start:stop] @ band, onsets, pre, post)
+                normed, _, _ = at.baseline_normalise(trials, baseline_mask)
+                for window, mask in windows.items():
+                    out[(selection, window)][row, start:stop] = np.median(
+                        normed[..., mask].mean(axis=-1), axis=-1
+                    )
+        _logger.info(
+            f"[{condition}]   {name}: {n_filters} filter(s) "
+            f"({row + 1}/{len(participants)}, {time.time() - started:.0f}s)"
+        )
+    return out

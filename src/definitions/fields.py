@@ -268,6 +268,11 @@ class IvaVariants(Enum):
       join reduced to a single track. Stored under that condition, one per condition.
     * ``*_LOG`` (+ ``_LOG_ROI``, ``_LOG_NON_ROI``) — every CorrCA fit above with the
       power ``log10``-transformed BEFORE the z-scoring.
+    * :attr:`CORRCA_CHANNEL_PLACEBO_FIT` (+ ``_ROI``, ``_NON_ROI``, ``_LOG``,
+      ``_LOG_ROI``, ``_LOG_NON_ROI``) — the subject-axis join with the CorrCA filters
+      fitted on the Placebo recordings alone, then applied to every recording of both
+      conditions. Stored under :attr:`ConditionVariants.JOINED_SEPARATE`, like the
+      join whose rows it carries.
     """
 
     CHANNEL = "iva_channel"
@@ -307,6 +312,12 @@ class IvaVariants(Enum):
     CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS_LOG_NON_ROI = (
         "corrca_channel_individual_conditions_log_non_roi"
     )
+    CORRCA_CHANNEL_PLACEBO_FIT = "corrca_channel_placebo_fit"
+    CORRCA_CHANNEL_PLACEBO_FIT_ROI = "corrca_channel_placebo_fit_roi"
+    CORRCA_CHANNEL_PLACEBO_FIT_NON_ROI = "corrca_channel_placebo_fit_non_roi"
+    CORRCA_CHANNEL_PLACEBO_FIT_LOG = "corrca_channel_placebo_fit_log"
+    CORRCA_CHANNEL_PLACEBO_FIT_LOG_ROI = "corrca_channel_placebo_fit_log_roi"
+    CORRCA_CHANNEL_PLACEBO_FIT_LOG_NON_ROI = "corrca_channel_placebo_fit_log_non_roi"
 
 
 class JicaVariants(Enum):

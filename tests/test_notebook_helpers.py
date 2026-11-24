@@ -45,10 +45,9 @@ def calls(monkeypatch):
     monkeypatch.setattr(
         nh,
         "wavelet_transform",
-        lambda datasets, *args, **kwargs: record.append(
-            ("transform", kwargs["reuse_wavelets"])
-        )
-        or {},
+        lambda datasets, *args, **kwargs: (
+            record.append(("transform", kwargs["reuse_wavelets"])) or {}
+        ),
     )
     return record
 

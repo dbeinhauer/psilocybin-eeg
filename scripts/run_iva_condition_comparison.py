@@ -115,7 +115,7 @@ from scripts.analysis_common import (  # noqa: E402
     add_iva_store_args,
     add_wavelet_grid_args,
     resolve_wavelet_dir,
-    write_iva_condition_isc,
+    write_condition_isc,
 )
 from scripts.notebook_helpers import (  # noqa: E402
     load_joined_condition_wavelets,
@@ -747,10 +747,12 @@ def run_condition_comparison(
         c: [i for i, rc in enumerate(subject_conditions) if rc == c]
         for c in condition_rows
     }
-    write_iva_condition_isc(
+    write_condition_isc(
         {c: sources[rows] for c, rows in rows_of.items()},
         {c: [subject_participants[i] for i in rows] for c, rows in rows_of.items()},
         comp_indices,
+        stem="iva",
+        component_prefix="IC",
         label=label,
         out_dir=out_dir,
         prefix=prefix,

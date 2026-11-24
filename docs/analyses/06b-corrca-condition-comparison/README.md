@@ -14,6 +14,7 @@ compared panel for panel.
 | Decompose, compare, store: subject axis (`JoinedSeparate`) | `scripts/run_corrca_condition_comparison.py` | `run_condition_separate.pbs` |
 | Decompose, compare, store: time axis (`JoinedTracks`) | `scripts/run_corrca_condition_tracks.py` | `run_condition_tracks.pbs` |
 | Decompose, store: each condition alone (§2) | `scripts/run_corrca_individual_conditions.py` | `run_individual_conditions.pbs` |
+| Decompose on Placebo, read both, compare, store: subject axis (§2) | `scripts/run_corrca_condition_comparison.py --fit_condition Placebo` | `run_placebo_fit.pbs` |
 | SNR / contrast grid on the stored components (§5) | `scripts/run_corrca_snr_grid.py` | the same job, second step |
 
 Each job fits six times from one data load, in this order: the full montage, the full
@@ -145,6 +146,36 @@ compared by their topographies and synchrony, not row by row; there is no paired
 The store is a one-segment tracks store under the condition itself
 (`iva_results/<Condition>/`), so the SNR grid reads it as it reads the join.
 
+**`corrca_channel_placebo_fit`** sits between the two: the subject-axis join, loaded
+and drawn exactly as `corrca_channel_joined_separate`, but with the filters fitted on
+the **Placebo recordings alone** (`--fit_condition Placebo`). `R_w` and `R_b` are summed
+over the P Placebo recordings only, and every recording of both conditions is then
+projected through the resulting filters (`decompose_channel_corrca(..., fit_rows=...)`).
+So there is one set of filters, as in the join, but only Placebo chose it, and
+`CC k` is the same spatial combination in both rows of every figure:
+
+- **What it asks.** How do the Placebo components behave under Psilocybin? The
+  Psilocybin recordings never shape the filters, so their ISC, TF maps and SNR are
+  an out-of-sample read-out of the Placebo components. Each Psilocybin recording still
+  gets its own forward pattern `A_s = R_ss W (Wᵀ R_ss W)⁻¹`, through its own covariance.
+- **The bias is one-sided.** Placebo is read through filters fitted on it, so its ISC
+  is optimistic and Psilocybin's is not. Unlike the pooled fit, the bias is not shared
+  by the two conditions, and a Placebo > Psilocybin difference is expected even with
+  no drug effect. The fit's own ISC (`corrca_fit_isc`), its shared patterns and the
+  sign anchor are Placebo's.
+- **Influence and refits on Placebo.** The leave-one-participant-out check (§3) and
+  the leave-subset-out refits (§5) refit on the Placebo recordings minus the left-out
+  participants, and the influence figures read the Placebo recordings. The refits are
+  still written for the SNR grid, which reads both conditions through them. Its
+  `held_out` rows read each participant's two recordings through a refit that saw
+  neither, so they are the contrast free of the one-sided bias.
+- **Same products.** The six fits (`_log`, `_roi`, `_non_roi`, ...), the masked and
+  swapped-filter maps and the SNR grid are the join's. They are drawn under their
+  own label, `JoinedPlaceboFitted_<MusicType>/<spectrum>/corrca_channel_placebo_fit*/`,
+  and stored beside the pooled fit under `iva_results/JoinedSeparate/` (the store
+  holds the join's rows, so it keeps the join's condition). The store adds the extra
+  `corrca_fit_condition` (`"Placebo"`).
+
 ## 3. Synchrony per condition
 
 The read-out IVA has no counterpart for. For each condition, using the **same**
@@ -160,6 +191,66 @@ filters:
 
 The results go to `corrca_condition_isc.png` and three CSVs beside it, and the store
 keeps the `(conditions, K)` group ISC.
+
+**Onset-locked synchrony.** The same three read-outs scored on the onset-locked maps
+(`condition_mean_tf_maps_onset`, each trial referenced to its pre-onset window and in
+units of that recording's pre-onset SD, median over trials) go to
+`corrca_onset_condition_isc.png` and its three CSVs. The whole-recording score
+correlates time courses: the time z-scoring leaves every frequency row zero-mean, so
+it is the stimulus-locked rise and fall of power pooled over frequencies. The onset
+score instead correlates the **shape of the evoked TF response**, including where in
+frequency it sits and its contrast with the baseline. It answers whether participants
+share the same averaged stimulus response, which is the closer question for the ASSR
+paradigm. A participant whose dot sits far above the rest while the others are near 0
+marks a component carried by a few people. These maps are not refitted, so the
+in-sample bias below applies to them too.
+
+**Participant influence.** Whether a component is shared by the group or carried by a
+few participants. Each participant is left out in turn (both recordings in the
+subject-axis join), CorrCA is refitted on the rest with the same `n_pca` and `gamma`,
+and the refit's components are matched to the full fit's by |r| of the shared
+patterns (Hungarian assignment). One pass over the data gives every refit in closed
+form (`corrca.jackknife_statistics`): with `Σ` the sum over recordings and `y_g` the
+left-out participant's, `(Σ - y_g)(Σ - y_g)ᵀ = R_t - (G + Gᵀ) + H`, built from each
+recording's cross-covariance with `Σ` and with its own participant. Per component:
+
+- **ISC lost** (`influence`): full-fit ISC minus the matched refit's, with the
+  **topography |r|** (`pattern_r`) between them. A component carried by a few has those
+  few losing much of its ISC and moving its topography.
+- **In-sample vs held-out ISC** per recording: its correlation with the sum of every
+  *other* participant, through the full filter (which it helped choose) and through
+  the refit's (which never saw it). The gap is the recording's own pull on the filter.
+- **Own-pair ISC** (`within_participant_isc`): the recording against the same
+  participant's other condition, through the full filter. The between-recording term
+  of the subject-axis join rewards this pair as well, so a component can rest on
+  participants resembling *themselves* across conditions (a stable individual
+  topography) while every score against others stays near zero. The per-condition ISC
+  above cannot show this, because the pair spans the two conditions.
+
+A participant is flagged as an outlier when their loss has a robust z (median/MAD over
+participants) above 3.5 **and** costs at least 10% of the component's ISC. The share
+floor keeps a negligible loss from being flagged where every loss is near zero. On
+components whose ISC is itself near zero, the flag is meaningless. The results go to
+`influence/corrca_influence.png`, `influence/corrca_heldout_isc.png` and
+`influence/corrca_influence.csv`, plus one log line per component. The figures and
+log lines cover CC 1 and CC 2 only (`STABILITY_COMPONENTS`, as every stability
+figure); the CSV keeps every component. In the held-out figure a flagged recording's
+line is red and named at its held-out reading. `--skip_influence` skips all of it.
+The cost is one extra chunked pass over the data and one small eigenproblem per
+participant.
+
+**Onset-locked influence.** The same read-outs on each recording's onset-locked,
+trial-averaged TF map, the signal `corrca_onset_condition_isc` scores, so the
+influence can be compared on the stimulus response the ASSR question is about. The
+covariances cannot score a trial average, so the full fit's and every
+leave-one-out refit's filters for CC 1–2 are applied to the input in one projection,
+averaged around the onsets with the fit script's own call, and the ISCs taken on
+the maps (`corrca.map_influence`). The ISC lost is then the full maps' group ISC
+minus the group ISC of the remaining participants' maps through the refit; the
+topography |r| is the refit's, as above. They go to `influence/corrca_onset_influence.png`,
+`influence/corrca_onset_heldout_isc.png` and `influence/corrca_onset_influence.csv`.
+The projection holds `(recordings, 2 + 2·participants, F, T)` in float32, about 6 GB
+for the broadband join.
 
 **Caveats.**
 
@@ -185,10 +276,18 @@ plots/06b-corrca-condition-comparison/<JoinedSeparate|JoinedTracks>_<MusicType>/
         shared_spatial_topomap_filter.png
         corrca_condition_isc.png
         corrca_condition_isc.csv, corrca_participant_isc.csv, corrca_condition_isc_test.csv
+        corrca_onset_condition_isc.png (+ the same three CSVs, corrca_onset_ prefix)
+        influence/
+            corrca_influence.png, corrca_heldout_isc.png, corrca_influence.csv
+            corrca_onset_influence.png, corrca_onset_heldout_isc.png,
+            corrca_onset_influence.csv
         participants/*_cc<k>_participants_*.png
 plots/06b-corrca-condition-comparison/IndividualConditions_<MusicType>/
     <broadband|bands>/corrca_channel_individual_conditions/<Condition>/pca_<n>/
         the same, with no _test.csv
+plots/06b-corrca-condition-comparison/JoinedPlaceboFitted_<MusicType>/
+    <broadband|bands>/corrca_channel_placebo_fit/pca_<n>/
+        the same as the joins
 data/processed/<experiment>/iva_results/<JoinedSeparate|JoinedTracks|Condition>/
     <variant>__<MusicType>__<spectrum>__pca<n>.npz        (--store_components)
 ```
@@ -281,6 +380,63 @@ line is the all-participant mean, the centre line of `trial_course_by_source`.
 grid once per condition, each on that condition alone. The filters differ between the
 conditions, so there is nothing to contrast: only the `snr` family is tested, the
 p-value summary is not drawn and the TF map has one row.
+
+### Robustness of the contrast to the participants
+
+The `contrast` test asks whether Placebo − Psilocybin differs over 12 pairs. With so
+few, a significant result can rest on a handful of participants in two ways: through
+the **test** (a few large differences carry the Wilcoxon) or through the **filter** (a
+few participants shaped the CorrCA topography that produces everyone's value). The
+grid checks both on the `full` reading of every cell (`--skip_robustness` skips it):
+
+| Test | What changes | Asks |
+|---|---|---|
+| `full` + `sign_p` | nothing; exact sign test beside the Wilcoxon | does the verdict rest on how many point the same way, or on how far a few do? |
+| `fixed_drop` | every subset of `--drop_sizes` (1, 2, 3) participants left out, the filters kept | does the verdict hang on whose differences are in? |
+| `refit_drop` | CorrCA refitted without each subset the fit wrote, every remaining participant read through the refit | does it hang on the participants that shaped the filter? |
+| `held_out` | each participant read through the refit that left them alone out | is the effect there when no value comes from a filter its own data helped choose? |
+
+The refits come from the fit script, not the grid. With `--store_components` and two
+conditions, the influence check also refits CorrCA without every subset of
+`--refit_subset_sizes` participants (default 1, 2 and 3: 12 + 66 + 220 refits for
+12 participants). Each refit's components are matched to the full fit's (Hungarian on
+|r| of the patterns) and signed so their pattern agrees with the full one. The
+filters are written beside the store as `<store>__subset_refits.npz`. Leaving several
+participants out at once needs the cross terms between every pair of participants
+(`jackknife_statistics(..., group_cross=True)`), which about doubles the influence
+pass on the subject-axis join and triples it on the time-axis one. The grid reads the
+refits' values straight from the cache, as the fit's input was z-scored, and logs how
+closely the full fit read that way matches its stored sources. A refit file whose full
+filters differ from the store's is ignored, so a stale file is never read.
+
+- **Fragility**: the fewest participants whose removal changes the verdict at
+  `--alpha`. For a non-significant component it is the fewest whose removal makes it
+  significant.
+- **Flip shares**: per participant, the share of the verdict-changing size-k subsets
+  that leave them out. By chance every participant has `k / P` (0.25 for 3 of 12). A
+  participant far above it is among the few the verdict rests on.
+
+Outputs, beside the grid CSV:
+
+- `<grid csv stem>__robustness.csv`: every replicate, with columns `selection`,
+  `window`, `source`, `test`, `k`, `dropped`, `n`, the `paired_test` columns,
+  `sign_p` and `significant`.
+- `__robustness_summary.csv`: per source, test and k, with `n_significant`,
+  `n_flips`, `max_p` with `worst` (the subset at it), the median range, `full_p` and
+  `fragility`.
+- `snr_grid/<selection>/<window>/robustness__full.png`, for CC 1 and CC 2. From the
+  top: the replicate p-values per family and size (red where the verdict changes,
+  ringed where the refit's topography is flagged, held-out last). Then one row per
+  subset size with the flip shares per participant, fixed and refit side by side
+  against the `k / P` chance line. Last, the |r| of every refit's topography with the
+  full fit's, per size. A refit is flagged (red, the lowest five per size named by
+  their left-out participants) when its |r| is a robust low outlier among its size
+  (modified z below −3.5) **and** at least 0.05 under their median
+  (`corrca.low_topography_flags`). A flagged refit found a different spatial map, so
+  its contrast reads another component.
+- The `refit_drop` rows of the CSV carry `pattern_r` and `filter_r`, the refit's
+  topography and filter against the full fit's.
+- One log line per component and cell.
 
 ## 5b. The binary ROI
 
@@ -487,11 +643,9 @@ panel.
 
 ## 6. Not here yet
 
-- **Cross-validated ISC.** Fit on all but one participant and score the held-out one.
-  This would give an absolute ISC level free of the fit bias.
 - **A time-shift surrogate null for the group ISC.**
 - **Time-resolved ISC on the component signals.** Sliding windows, to locate *when* each
   condition is synchronised.
-- **Projecting one condition through the other's filters.** The individual-condition
-  fits give each condition its own; scoring Psilocybin through the Placebo filters is
-  not done yet.
+- **Projecting Placebo through the Psilocybin filters.** `corrca_channel_placebo_fit`
+  scores Psilocybin through the Placebo filters (§2); the reverse direction is not
+  wired (`CORRCA_SEPARATE_FIT_RUNS` has no Psilocybin run).
