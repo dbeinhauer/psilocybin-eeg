@@ -50,8 +50,11 @@ wrote:
 
 The stores are read with only the compared components, one recording at a time, so
 a 30-component broadband store costs a tenth of its size in memory. Anything missing
-(a store, a CSV, a grid) is a warning and a gap in the figures, never an error; a
-1-30 Hz fit has no SNR grid (no 40 Hz bin).
+(a store, a CSV, a grid) is a warning and a gap in the figures, never an error. A
+1-30 Hz fit has no 40 Hz bin and so no SNR grid of its own: its SNR rows (p-values
+and courses) are its filters read on the broadband input, the band-swap grid
+(``run_corrca_snr_grid.py --swap_band 1-30hz``, job ``run_band_swap.pbs``), when that
+has run.
 
 The script takes no ``--n_subjects`` / ``--n_channels`` / ``--n_times``: it reads
 finished fits, so a small check runs on small fits (see the notebook).
@@ -109,7 +112,10 @@ from scripts.analysis_common import (  # noqa: E402
     MAX_DRAWN_COMPONENTS,
     corrca_plots_dir,
 )
-from scripts.run_corrca_snr_grid import _STORE_CONDITIONS  # noqa: E402
+from scripts.run_corrca_snr_grid import (  # noqa: E402
+    _STORE_CONDITIONS,
+    BAND_SWAPPED_READING,
+)
 from src.analysis.corrca import (  # noqa: E402
     condition_variance_terms,
     matched_component_correlation,
@@ -177,6 +183,9 @@ class Fit(NamedTuple):
     #: ``"<band>_"`` for a band store's files, else empty.
     prefix: str
     snr_csv: Path
+    #: The band-swap grid of a band fit: its filters on the broadband input,
+    #: ``None`` for a broadband fit.
+    swap_csv: Path | None
 
 
 class Entry(NamedTuple):
@@ -206,6 +215,8 @@ class FitReading:
     course_times: np.ndarray | None = None
     #: ``(n,)`` contrast p at the first window.
     course_p: np.ndarray | None = None
+    #: How the SNR rows were read, when not from the fit's own grid.
+    snr_note: str = ""
 
 
 def _band_token(band: str) -> str | None:
@@ -284,6 +295,12 @@ def _fits_of(
             ),
             prefix="" if band is None else f"{band}_",
             snr_csv=results_dir / f"assr_snr_grid__{token}__{spectrum}__pca{n_pca}.csv",
+            swap_csv=(
+                None
+                if band is None
+                else results_dir
+                / f"corrca_band_swap_snr__{token}__{band}__pca{n_pca}.csv"
+            ),
         )
         for store_condition, conditions, label, token in stores
     ]
@@ -512,19 +529,35 @@ def read_influence(reading: FitReading, n: int) -> None:
 def read_snr(
     reading: FitReading, n: int, args: argparse.Namespace, band: str | None
 ) -> None:
-    """The SNR grid's condition-contrast p-values and its trial courses."""
+    """The SNR grid's condition-contrast p-values and its trial courses.
+
+    A band without the 40 Hz bin (1-30 Hz) has no grid of its own; its filters are
+    read on the broadband input instead, by the band-swap grid
+    (``run_corrca_snr_grid.py --swap_band <band>``), when that has run.
+    """
     fit = reading.fit
     bounds = _band_range(band)
+    csv_path, signal = fit.snr_csv, "full"
     if bounds is not None and not bounds[0] <= ASSR_FREQ <= bounds[1]:
-        _logger.info(f"[{fit.label}] {band} holds no {ASSR_FREQ:g} Hz: no SNR grid.")
-        return
-    grid = _read_csv(fit.snr_csv, "SNR grid", fit.label)
+        if fit.swap_csv is None or not fit.swap_csv.is_file():
+            _logger.info(
+                f"[{fit.label}] {band} holds no {ASSR_FREQ:g} Hz and no band-swap "
+                f"grid is at {fit.swap_csv}: no SNR rows (run_band_swap.pbs adds them)."
+            )
+            return
+        csv_path, signal = fit.swap_csv, f"{BAND_SWAPPED_READING}_{band}"
+        reading.snr_note = "its filters on broadband"
+        _logger.info(
+            f"[{fit.label}] {band} holds no {ASSR_FREQ:g} Hz: SNR rows from its "
+            f"filters on the broadband input ({csv_path.name})."
+        )
+    grid = _read_csv(csv_path, "SNR grid", fit.label)
     if grid is None:
         return
     sources = [f"CC {k + 1}" for k in range(n)]
     contrast = grid[
         (grid["family"] == "contrast")
-        & (grid["variant"] == "full")
+        & (grid["variant"] == signal)
         & (grid["selection"] == args.snr_selection)
     ]
     for window in args.snr_windows:
@@ -534,14 +567,14 @@ def read_snr(
             _metric(reading, k + 1, "", f"p_snr_contrast__{window}", value)
         if window == args.snr_windows[0] and len(fit.conditions) == 2:
             reading.course_p = p
-    courses_path = fit.snr_csv.with_name(f"{fit.snr_csv.stem}__courses.npz")
+    courses_path = csv_path.with_name(f"{csv_path.stem}__courses.npz")
     if not courses_path.is_file():
         _logger.warning(f"[{fit.label}] no SNR courses at {courses_path}.")
         return
     _participants, labels, times, courses = load_snr_courses(courses_path)
-    by_condition = courses.get(("full", args.snr_selection))
+    by_condition = courses.get((signal, args.snr_selection))
     if by_condition is None:
-        _logger.warning(f"[{fit.label}] no full/{args.snr_selection} courses.")
+        _logger.warning(f"[{fit.label}] no {signal}/{args.snr_selection} courses.")
         return
     keep = [labels.index(s) for s in sources if s in labels]
     reading.courses = {c: data[:, keep] for c, data in by_condition.items()}
@@ -640,6 +673,7 @@ def run(args: argparse.Namespace) -> None:
     )
     _write_csv(metrics, out_dir / f"{prefix}{STEM}_metrics.csv")
     _log_summary(metrics, labels, n)
+    swapped = [r.fit.label for r in readings if r.snr_note]
     plot_comparison_metrics(
         metrics,
         _metric_panels(args),
@@ -648,7 +682,13 @@ def run(args: argparse.Namespace) -> None:
         connect=args.compare == "pca",
         alpha=args.alpha,
         title=f"{title}: synchrony, held-out stability and condition tests "
-        "(uncorrected p)",
+        "(uncorrected p)"
+        + (
+            f"\nSNR p of {', '.join(swapped)}: its filters on the broadband input "
+            "(no 40 Hz bin of its own)"
+            if swapped
+            else ""
+        ),
         save_path=out_dir / f"{prefix}{STEM}_metrics.png",
     )
     plt.close("all")
@@ -679,16 +719,17 @@ def run(args: argparse.Namespace) -> None:
     # One row per entry: an individual-conditions entry joins its two fits' courses.
     course_rows, course_p, course_labels, times = [], [], [], None
     for entry in entries:
-        merged, p = {}, None
+        merged, p, note = {}, None, ""
         for r in readings:
             if r.fit.entry == entry.label and r.courses:
                 merged.update(r.courses)
                 times = r.course_times
                 p = r.course_p if r.course_p is not None else p
+                note = r.snr_note or note
         if merged:
             course_rows.append(merged)
             course_p.append(p)
-            course_labels.append(entry.label)
+            course_labels.append(f"{entry.label} ({note})" if note else entry.label)
     if course_rows:
         plot_comparison_courses(
             course_rows,
