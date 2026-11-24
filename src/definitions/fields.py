@@ -273,6 +273,8 @@ class IvaVariants(Enum):
       fitted on the Placebo recordings alone, then applied to every recording of both
       conditions. Stored under :attr:`ConditionVariants.JOINED_SEPARATE`, like the
       join whose rows it carries.
+    * :attr:`CORRCA_CHANNEL_PSILOCYBIN_FIT` (+ the same five) — the same with the
+      filters fitted on the Psilocybin recordings alone.
     """
 
     CHANNEL = "iva_channel"
@@ -318,6 +320,14 @@ class IvaVariants(Enum):
     CORRCA_CHANNEL_PLACEBO_FIT_LOG = "corrca_channel_placebo_fit_log"
     CORRCA_CHANNEL_PLACEBO_FIT_LOG_ROI = "corrca_channel_placebo_fit_log_roi"
     CORRCA_CHANNEL_PLACEBO_FIT_LOG_NON_ROI = "corrca_channel_placebo_fit_log_non_roi"
+    CORRCA_CHANNEL_PSILOCYBIN_FIT = "corrca_channel_psilocybin_fit"
+    CORRCA_CHANNEL_PSILOCYBIN_FIT_ROI = "corrca_channel_psilocybin_fit_roi"
+    CORRCA_CHANNEL_PSILOCYBIN_FIT_NON_ROI = "corrca_channel_psilocybin_fit_non_roi"
+    CORRCA_CHANNEL_PSILOCYBIN_FIT_LOG = "corrca_channel_psilocybin_fit_log"
+    CORRCA_CHANNEL_PSILOCYBIN_FIT_LOG_ROI = "corrca_channel_psilocybin_fit_log_roi"
+    CORRCA_CHANNEL_PSILOCYBIN_FIT_LOG_NON_ROI = (
+        "corrca_channel_psilocybin_fit_log_non_roi"
+    )
 
 
 class JicaVariants(Enum):

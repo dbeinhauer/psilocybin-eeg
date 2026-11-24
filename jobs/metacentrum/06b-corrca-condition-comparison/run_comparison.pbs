@@ -29,8 +29,9 @@
 #                    join  RUNS against each other at N_PCA, per JOIN_BANDS band
 #   RUN            [tracks]   the run of the pca comparison
 #   PCAS           [3 5 10 20]  the component counts of the pca comparison
-#   RUNS           [tracks separate placebo_fit]  the runs of band and join, any of
-#                    tracks, separate, placebo_fit, individual; in join the first
+#   RUNS           [tracks separate placebo_fit psilocybin_fit]  the runs of band
+#                    and join, any of tracks, separate, placebo_fit,
+#                    psilocybin_fit, individual; in join the first
 #                    is the topomaps' reference row
 #   N_PCA          [5]        the component count of band and join
 #   JOIN_BANDS     [broadband]  the band(s) join runs in: broadband, 30-50hz, 1-30hz
@@ -53,7 +54,7 @@
 #     covariance with the others) per condition and participant, from the stored
 #     sources, and how both move with a participant left out (influence CSV)
 #
-# Needs the fit jobs (run_condition_*, run_placebo_fit*,
+# Needs the fit jobs (run_condition_*, run_placebo_fit*, run_psilocybin_fit*,
 # run_individual_conditions*) at those N_PCA, with their SNR grids. A missing
 # store, CSV or grid is a warning and a gap in the figures, never an error. A
 # 1-30 Hz fit has no 40 Hz bin: its SNR rows are its filters on the broadband
@@ -122,7 +123,7 @@ RUN="${RUN:-tracks}"
 PCAS="${PCAS:-3 5 10 20}"
 N_PCA="${N_PCA:-5}"
 COMPARE="${COMPARE:-pca band join}"
-RUNS="${RUNS:-tracks separate placebo_fit}"
+RUNS="${RUNS:-tracks separate placebo_fit psilocybin_fit}"
 JOIN_BANDS="${JOIN_BANDS:-broadband}"
 echo "run: $RUN, n_pca sweep: $PCAS, n_pca: $N_PCA, comparisons: $COMPARE," \
      "runs: $RUNS, join bands: $JOIN_BANDS"

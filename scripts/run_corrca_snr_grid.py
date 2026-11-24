@@ -284,6 +284,7 @@ _STORE_CONDITIONS = {
     IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS: ConditionVariants.JOINED_TRACKS,
     # Fitted on Placebo alone, but every recording of the join is stored.
     IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT: ConditionVariants.JOINED_SEPARATE,
+    IvaVariants.CORRCA_CHANNEL_PSILOCYBIN_FIT: ConditionVariants.JOINED_SEPARATE,
 }
 
 
@@ -300,7 +301,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         choices=[v.value for v in CORRCA_LOG_OF],
         help="Which stage-06b run to read: subject axis (separate), time axis, "
         "each condition alone, or the subject axis with the filters fitted on "
-        "Placebo alone (placebo_fit). Its full store, then the stores the flags "
+        "one condition alone (placebo_fit, psilocybin_fit). Its full store, then "
+        "the stores the flags "
         "below select, in the fit order.",
     )
     # Only the full store by default; these add the opt-in fits' stores.

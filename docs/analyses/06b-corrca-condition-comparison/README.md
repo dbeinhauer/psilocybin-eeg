@@ -15,6 +15,7 @@ compared panel for panel.
 | Decompose, compare, store: time axis (`JoinedTracks`) | `scripts/run_corrca_condition_tracks.py` | `run_condition_tracks.pbs` |
 | Decompose, store: each condition alone (§2) | `scripts/run_corrca_individual_conditions.py` | `run_individual_conditions.pbs` |
 | Decompose on Placebo, read both, compare, store: subject axis (§2) | `scripts/run_corrca_condition_comparison.py --fit_condition Placebo` | `run_placebo_fit.pbs` |
+| Decompose on Psilocybin, read both, compare, store: subject axis (§2) | `scripts/run_corrca_condition_comparison.py --fit_condition Psilocybin` | `run_psilocybin_fit.pbs` |
 | SNR / contrast grid on the stored components (§5) | `scripts/run_corrca_snr_grid.py` | the same job, second step |
 | Compare fits across `n_pca`, bands or joins, read-only (§5d) | `scripts/run_corrca_comparison.py` | `run_comparison.pbs` |
 
@@ -203,6 +204,16 @@ So there is one set of filters, as in the join, but only Placebo chose it, and
   holds the join's rows, so it keeps the join's condition). The store adds the extra
   `corrca_fit_condition` (`"Placebo"`).
 
+**`corrca_channel_psilocybin_fit`** is its mirror (`--fit_condition Psilocybin`, job
+`run_psilocybin_fit.pbs` and its `_gamma` / `_1_30hz` twins): the filters are fitted on
+the Psilocybin recordings alone, so Placebo is the out-of-sample condition and the
+contrast's one-sided bias runs the other way, towards Psilocybin. Everything else is the
+Placebo-fitted run's, with `Psilocybin` for `Placebo`: the refits on Psilocybin alone,
+the figures under `JoinedPsilocybinFitted_<MusicType>/`, the store beside the join's
+with `corrca_fit_condition` `"Psilocybin"`. Read together, the two runs bound the
+fitted-condition bias: an effect present in both directions is not one condition's
+filters reading the other.
+
 ## 3. Synchrony per condition
 
 The read-out IVA has no counterpart for. For each condition, using the **same**
@@ -321,6 +332,9 @@ plots/06b-corrca-condition-comparison/IndividualConditions_<MusicType>/
         the same, with no _test.csv
 plots/06b-corrca-condition-comparison/JoinedPlaceboFitted_<MusicType>/
     <broadband|bands>/corrca_channel_placebo_fit/pca_<n>/
+        the same as the joins
+plots/06b-corrca-condition-comparison/JoinedPsilocybinFitted_<MusicType>/
+    <broadband|bands>/corrca_channel_psilocybin_fit/pca_<n>/
         the same as the joins
 data/processed/<experiment>/iva_results/<JoinedSeparate|JoinedTracks|Condition>/
     <variant>__<MusicType>__<spectrum>__pca<n>.npz        (--store_components)
@@ -555,7 +569,7 @@ changes, and the SNR grid's `swapped_filter` rows sit against the same reference
 across the frequency cut instead of the power scale. It is read-only and pairs each
 broadband store with its band twin (`--band 30-50hz` or `--band 1-30hz`; the job runs
 both, or `qsub -v BANDS=1-30hz` for one). The job reads only the runs in `RUNS`
-(default `tracks`; any of `tracks separate placebo_fit individual`) at `N_PCA`
+(default `tracks`; any of `tracks separate placebo_fit psilocybin_fit individual`) at `N_PCA`
 (default 5), and of each only its full fit (full montage, raw power); the twin has the
 same run, electrode cut and `--n_pca`. The broadband fit's directory gets `band_swapped_filter_<band>_*` TF maps of
 the band fit's filters on broadband input, at every frequency. The band's inner edge
@@ -687,7 +701,7 @@ full-montage raw-power fit of each run, along one of three axes:
 |---|---|---|
 | `pca` | `--run`, `--band` | every `--n_pca` (default 3 5 10 20) |
 | `band` | `--run`, `--n_pca` | `--bands` (default broadband, 1-30hz, 30-50hz) |
-| `join` | `--band`, `--n_pca` | `--runs` (default separate, tracks, individual) |
+| `join` | `--band`, `--n_pca` | `--runs` (default tracks, separate, placebo_fit, psilocybin_fit) |
 
 The leading `--components` (default 3) are compared **by index**. CC 1 at `n_pca = 5`
 and CC 1 at `n_pca = 20` are sought in different subspaces, so they need not be the
@@ -706,8 +720,9 @@ onset, and the grid's `contrast` family on `full` at `--snr_selection` for every
 divides by `√eigenvalue`, so the filters can use directions of little variance that
 correlate across people by chance. The held-out ISC and the in-sample − held-out gap
 are the guard. A value of `n_pca` that raises the held-out ISC found real structure;
-one that only widens the gap fits noise. With `corrca_channel_placebo_fit` the
-optimism is one-sided (§2), so a widening gap there also biases the contrast.
+one that only widens the gap fits noise. With `corrca_channel_placebo_fit` and
+`corrca_channel_psilocybin_fit` the optimism is one-sided (§2), so a widening gap there
+also biases the contrast, towards the fitted condition.
 
 **The two terms of the ISC.** `ISC = wᵀR_b w / wᵀR_w w` cannot tell a weaker shared
 response from a stronger unshared one. The comparison therefore reads both terms per
@@ -751,6 +766,3 @@ fit and component), `_snr_course.png`, `_variance_terms.{png,csv}` (+
 - **A time-shift surrogate null for the group ISC.**
 - **Time-resolved ISC on the component signals.** Sliding windows, to locate *when* each
   condition is synchronised.
-- **Projecting Placebo through the Psilocybin filters.** `corrca_channel_placebo_fit`
-  scores Psilocybin through the Placebo filters (§2); the reverse direction is not
-  wired (`CORRCA_SEPARATE_FIT_RUNS` has no Psilocybin run).

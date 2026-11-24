@@ -36,16 +36,18 @@ What changes with CorrCA (:mod:`src.analysis.corrca`, method in
 The fit pools both conditions, so the filters are symmetric in them. Its
 between-recording term includes each participant's own Placebo-Psilocybin pair.
 
-**Placebo-fitted filters** (``--fit_condition Placebo``, variant
-``corrca_channel_placebo_fit``). The same join, loaded and drawn the same way, but
-CorrCA is fitted on the Placebo recordings alone and every recording of both
-conditions is then projected through those filters. The Psilocybin recordings never
-shape the filters, so their ISC is an out-of-sample read-out of the Placebo
-components, while the Placebo ISC stays in-sample (optimistic). The fit's own ISC and
-shared patterns are Placebo's, and the leave-one-participant-out influence and the
-leave-subset-out refits are refits on Placebo alone, read on the Placebo recordings.
-Its figures go under ``JoinedPlaceboFitted_<MusicType>/``; its store sits beside the
-pooled fit's under ``JoinedSeparate/``, as its own variant.
+**Filters fitted on one condition** (``--fit_condition Placebo``, variant
+``corrca_channel_placebo_fit``; ``--fit_condition Psilocybin``, variant
+``corrca_channel_psilocybin_fit``). The same join, loaded and drawn the same way, but
+CorrCA is fitted on that condition's recordings alone and every recording of both
+conditions is then projected through those filters. The other condition's recordings
+never shape the filters, so their ISC is an out-of-sample read-out of the fitted
+condition's components, while the fitted condition's ISC stays in-sample
+(optimistic). The fit's own ISC and shared patterns are the fitted condition's, and
+the leave-one-participant-out influence and the leave-subset-out refits are refits on
+that condition alone, read on its recordings. The figures go under
+``JoinedPlaceboFitted_<MusicType>/`` or ``JoinedPsilocybinFitted_<MusicType>/``; the
+store sits beside the pooled fit's under ``JoinedSeparate/``, as its own variant.
 
 Figures (panels labelled ``CC <k>``):
 
@@ -102,6 +104,8 @@ Output::
         broadband/corrca_channel_joined_separate_non_roi/pca_<n_pca>/  # the rest
     plots/06b-corrca-condition-comparison/JoinedPlaceboFitted_<MusicType>/
         broadband/corrca_channel_placebo_fit*/pca_<n_pca>/   # --fit_condition Placebo
+    plots/06b-corrca-condition-comparison/JoinedPsilocybinFitted_<MusicType>/
+        broadband/corrca_channel_psilocybin_fit*/pca_<n_pca>/  # --fit_condition Psilocybin
 
 Examples::
 
@@ -140,7 +144,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.analysis_common import (  # noqa: E402
     CORRCA_MASKED_READINGS,
-    CORRCA_PLACEBO_FIT_LABEL,
+    CORRCA_FIT_CONDITION_LABELS,
     CORRCA_SEPARATE_FIT_RUNS,
     CorrcaFit,
     drawn_components,
@@ -220,7 +224,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Fit the CorrCA filters on this condition's recordings alone, then project "
             "every recording of both conditions through them (the "
-            "'corrca_channel_placebo_fit' run). Default: fit on every recording."
+            "'corrca_channel_placebo_fit' / 'corrca_channel_psilocybin_fit' run). "
+            "Default: fit on every recording."
         ),
     )
     return parser
@@ -250,7 +255,7 @@ def run_corrca_condition_comparison(
     run_variant = CORRCA_SEPARATE_FIT_RUNS[fit_condition]
     run_label = f"{ConditionVariants.JOINED_SEPARATE.value}_{music_type.value}"
     if fit_condition is not None:
-        run_label = f"{CORRCA_PLACEBO_FIT_LABEL}_{music_type.value}"
+        run_label = f"{CORRCA_FIT_CONDITION_LABELS[fit_condition]}_{music_type.value}"
     band = tuple(args.band_range) if args.band_range is not None else args.band
     band_name = band_token(band)
     freqs_full = np.linspace(

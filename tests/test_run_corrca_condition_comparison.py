@@ -155,13 +155,26 @@ def test_store_keeps_rows_and_corrca_extras(tmp_path, stub_loaders):
     assert loaded.extras["corrca_condition_isc"].shape == (2, N_PCA)
 
 
-def test_placebo_fit_is_its_own_run_on_every_recording(tmp_path, stub_loaders):
+@pytest.mark.parametrize(
+    ("condition", "variant", "label"),
+    [
+        ("Placebo", IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT, "JoinedPlaceboFitted"),
+        (
+            "Psilocybin",
+            IvaVariants.CORRCA_CHANNEL_PSILOCYBIN_FIT,
+            "JoinedPsilocybinFitted",
+        ),
+    ],
+)
+def test_condition_fit_is_its_own_run_on_every_recording(
+    tmp_path, stub_loaders, condition, variant, label
+):
     store = tmp_path / "store"
     main(
         _argv(
             tmp_path / "plots",
             "--fit_condition",
-            "Placebo",
+            condition,
             "--skip_onset_average",
             "--store_components",
             "--store_dir",
@@ -172,9 +185,9 @@ def test_placebo_fit_is_its_own_run_on_every_recording(tmp_path, stub_loaders):
         tmp_path
         / "plots"
         / _STAGE_DIR
-        / "JoinedPlaceboFitted_ASSR"
+        / f"{label}_ASSR"
         / "broadband"
-        / IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT.value
+        / variant.value
         / f"pca_{N_PCA}"
     )
     assert (out / "corrca_condition_isc.png").exists()
@@ -182,15 +195,15 @@ def test_placebo_fit_is_its_own_run_on_every_recording(tmp_path, stub_loaders):
     loaded = load_iva_components(
         experiment=ExperimentNames.ASSR,
         condition=ConditionVariants.JOINED_SEPARATE,
-        variant=IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT,
+        variant=variant,
         music_type=MusicTypeVariants.ASSR,
         n_pca=N_PCA,
         processed_data_dir=store,
     )
-    # Fitted on Placebo, but every recording of both conditions is read and stored.
+    # Fitted on one condition, but every recording of both is read and stored.
     assert loaded.n_subjects == 6
     assert set(loaded.subject_conditions) == {"Placebo", "Psilocybin"}
-    assert str(loaded.extras["corrca_fit_condition"]) == "Placebo"
-    # The refits leave out Placebo participants: one row each, no Psilocybin row.
+    assert str(loaded.extras["corrca_fit_condition"]) == condition
+    # The refits leave out that condition's participants: one row each.
     with np.load(corrca_refit_path(loaded.path)) as refits:
         assert len(refits["participants"]) == 3

@@ -12,4 +12,5 @@ done
 echo
 echo "Parameters and examples: bash <job>.pbs --help"
 echo "Common ones: N_PCA (default 5); FITS (fit jobs: log_power roi_fit non_roi_fit"
-echo "roi_masked); RUNS (readers: tracks separate placebo_fit individual)."
+echo "roi_masked); RUNS (readers: tracks separate placebo_fit psilocybin_fit"
+echo "individual)."

@@ -12,8 +12,8 @@ only (never ``_log``, ``_roi`` or ``_non_roi``):
 * ``band`` — one run at one ``--n_pca``, broadband against its band-restricted
   twins (``--bands``, default ``broadband 1-30hz 30-50hz``);
 * ``join`` — one band and ``--n_pca``, the runs against each other (``--runs``,
-  default the time-axis join, the subject-axis join and the Placebo-fitted join; the
-  first is the topomaps' reference row).
+  default the time-axis join, the subject-axis join and the joins fitted on Placebo
+  and on Psilocybin alone; the first is the topomaps' reference row).
   An individual-conditions run holds two fits, one per condition, with different
   filters: its rows are drawn per condition and it has no paired test.
 
@@ -166,6 +166,7 @@ RUNS = {
     "tracks": IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS,
     "individual": IvaVariants.CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS,
     "placebo_fit": IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT,
+    "psilocybin_fit": IvaVariants.CORRCA_CHANNEL_PSILOCYBIN_FIT,
 }
 COMPARISONS = ("pca", "band", "join")
 BROADBAND = "broadband"
@@ -903,7 +904,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--runs",
         nargs="+",
         choices=list(RUNS),
-        default=["tracks", "separate", "placebo_fit"],
+        default=["tracks", "separate", "placebo_fit", "psilocybin_fit"],
         help="The runs compared (join); the first is the topomaps' reference row.",
     )
     what.add_argument(

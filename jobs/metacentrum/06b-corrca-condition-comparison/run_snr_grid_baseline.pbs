@@ -25,9 +25,9 @@
 #                            = the whole pre-onset span, i.e. the fit jobs' own grid
 #                            and maps redrawn into the usual directories (overwriting)
 #   RUNS           [tracks]  which runs, any of: tracks (time-axis join),
-#                            separate (subject-axis join), placebo_fit (separate,
-#                            filters fitted on Placebo), individual (each condition
-#                            alone)
+#                            separate (subject-axis join), placebo_fit /
+#                            psilocybin_fit (separate, filters fitted on Placebo /
+#                            on Psilocybin), individual (each condition alone)
 #   N_PCA          [5]       the component count of the stores read
 #   STORE_BANDS    [30-50hz] band stores whose own grid is also redone ("" = none;
 #                            1-30hz has no 40 Hz bin)
@@ -138,6 +138,7 @@ for RUN in ${RUNS:-tracks}; do
         separate)    VARIANTS+=" corrca_channel_joined_separate" ;;
         tracks)      VARIANTS+=" corrca_channel_joined_tracks" ;;
         placebo_fit) VARIANTS+=" corrca_channel_placebo_fit" ;;
+        psilocybin_fit) VARIANTS+=" corrca_channel_psilocybin_fit" ;;
         individual)  VARIANTS+=" corrca_channel_individual_conditions" ;;
         *) echo >&2 "unknown RUNS entry: $RUN"; exit 1 ;;
     esac

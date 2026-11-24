@@ -22,9 +22,9 @@
 #
 # PARAMETERS   (qsub -v NAME=value,NAME2="a b"; the defaults in brackets)
 #   RUNS           [tracks]  which runs, any of: tracks (time-axis join),
-#                            separate (subject-axis join), placebo_fit (separate,
-#                            filters fitted on Placebo), individual (each condition
-#                            alone)
+#                            separate (subject-axis join), placebo_fit /
+#                            psilocybin_fit (separate, filters fitted on Placebo /
+#                            on Psilocybin), individual (each condition alone)
 #   N_PCA          [5]       the component count of the stores read
 #   BANDS          [30-50hz 1-30hz]  the band twins each broadband store is swapped with
 #   STEPS          [tf snr]  tf: the TF maps; snr: the SNR grid of the same reading
@@ -139,6 +139,7 @@ for RUN in ${RUNS:-tracks}; do
         separate)    VARIANTS+=" corrca_channel_joined_separate" ;;
         tracks)      VARIANTS+=" corrca_channel_joined_tracks" ;;
         placebo_fit) VARIANTS+=" corrca_channel_placebo_fit" ;;
+        psilocybin_fit) VARIANTS+=" corrca_channel_psilocybin_fit" ;;
         individual)  VARIANTS+=" corrca_channel_individual_conditions" ;;
         *) echo >&2 "unknown RUNS entry: $RUN"; exit 1 ;;
     esac

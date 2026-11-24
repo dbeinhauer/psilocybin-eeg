@@ -329,6 +329,16 @@ CORRCA_FITS = {
         IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT_LOG_ROI,
         IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT_LOG_NON_ROI,
     ),
+    IvaVariants.CORRCA_CHANNEL_PSILOCYBIN_FIT: (
+        IvaVariants.CORRCA_CHANNEL_PSILOCYBIN_FIT,
+        IvaVariants.CORRCA_CHANNEL_PSILOCYBIN_FIT_ROI,
+        IvaVariants.CORRCA_CHANNEL_PSILOCYBIN_FIT_NON_ROI,
+    ),
+    IvaVariants.CORRCA_CHANNEL_PSILOCYBIN_FIT_LOG: (
+        IvaVariants.CORRCA_CHANNEL_PSILOCYBIN_FIT_LOG,
+        IvaVariants.CORRCA_CHANNEL_PSILOCYBIN_FIT_LOG_ROI,
+        IvaVariants.CORRCA_CHANNEL_PSILOCYBIN_FIT_LOG_NON_ROI,
+    ),
 }
 #: The log-power counterpart of each raw-power run, keyed by the full fit.
 CORRCA_LOG_OF = {
@@ -340,6 +350,9 @@ CORRCA_LOG_OF = {
         IvaVariants.CORRCA_CHANNEL_INDIVIDUAL_CONDITIONS_LOG
     ),
     IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT: IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT_LOG,
+    IvaVariants.CORRCA_CHANNEL_PSILOCYBIN_FIT: (
+        IvaVariants.CORRCA_CHANNEL_PSILOCYBIN_FIT_LOG
+    ),
 }
 #: The subject-axis join's runs by the condition their filters are fitted on: ``None``
 #: fits on every recording, a condition on its recordings alone, every recording of
@@ -347,6 +360,7 @@ CORRCA_LOG_OF = {
 CORRCA_SEPARATE_FIT_RUNS = {
     None: IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE,
     ConditionVariants.PLACEBO: IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT,
+    ConditionVariants.PSILOCYBIN: IvaVariants.CORRCA_CHANNEL_PSILOCYBIN_FIT,
 }
 #: Every variant fitted on ``log10`` power, whose readers must take the log too.
 CORRCA_LOG_VARIANTS = frozenset(
@@ -472,15 +486,20 @@ def drawn_components(
 
 #: Plot label of those fits, the counterpart of a join's ``JoinedTracks``.
 CORRCA_INDIVIDUAL_LABEL = "IndividualConditions"
-#: Plot label of the subject-axis join fitted on Placebo alone. Its store stays under
-#: ``JoinedSeparate``, the join whose rows it holds; only its figures move.
-CORRCA_PLACEBO_FIT_LABEL = "JoinedPlaceboFitted"
-CORRCA_PLACEBO_FIT_VARIANTS = frozenset(
-    (
-        *CORRCA_FITS[IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT],
-        *CORRCA_FITS[IvaVariants.CORRCA_CHANNEL_PLACEBO_FIT_LOG],
-    )
-)
+#: Plot label of the subject-axis join fitted on one condition alone, by that
+#: condition. Its store stays under ``JoinedSeparate``, the join whose rows it holds;
+#: only its figures move.
+CORRCA_FIT_CONDITION_LABELS = {
+    ConditionVariants.PLACEBO: "JoinedPlaceboFitted",
+    ConditionVariants.PSILOCYBIN: "JoinedPsilocybinFitted",
+}
+#: Every variant of those runs (each fit and its log twin) -> its plot label.
+CORRCA_CONDITION_FIT_LABEL_OF = {
+    variant: CORRCA_FIT_CONDITION_LABELS[condition]
+    for condition, full in CORRCA_SEPARATE_FIT_RUNS.items()
+    if condition is not None
+    for variant in (*CORRCA_FITS[full], *CORRCA_FITS[CORRCA_LOG_OF[full]])
+}
 
 
 def corrca_plots_dir(
@@ -497,8 +516,9 @@ def corrca_plots_dir(
     A join draws under its own label, ``<Join>_<music>/<spectrum>/<variant>/pca_<n>/``;
     an individual-condition fit under :data:`CORRCA_INDIVIDUAL_LABEL`, with its
     condition one level below the variant,
-    ``.../corrca_channel_individual_conditions/<Condition>/pca_<n>/``; the Placebo-fitted
-    join under :data:`CORRCA_PLACEBO_FIT_LABEL`, though its store is the join's.
+    ``.../corrca_channel_individual_conditions/<Condition>/pca_<n>/``; a join fitted on
+    one condition under its :data:`CORRCA_FIT_CONDITION_LABELS` label, though its store
+    is the join's.
 
     :param condition: The store's condition: the join, or the one real condition.
     :param band: Band token, ``None`` for broadband.
@@ -513,8 +533,8 @@ def corrca_plots_dir(
             CORRCA_INDIVIDUAL_LABEL,
             f"{variant.value}/{condition.value}",
         )
-    elif variant in CORRCA_PLACEBO_FIT_VARIANTS:
-        label, analysis_type = CORRCA_PLACEBO_FIT_LABEL, variant.value
+    elif variant in CORRCA_CONDITION_FIT_LABEL_OF:
+        label, analysis_type = CORRCA_CONDITION_FIT_LABEL_OF[variant], variant.value
     else:
         label, analysis_type = condition.value, variant.value
     return ProjectPaths.analysis_plots_dir(
