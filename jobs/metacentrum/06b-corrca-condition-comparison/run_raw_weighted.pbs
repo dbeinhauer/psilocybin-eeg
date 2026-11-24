@@ -6,12 +6,16 @@
 #PBS -j oe
 
 # ---------------------------------------------------------------------------
+# DEFAULT: only each run's full-montage, raw-power store is read. qsub -v
+# FITS="<any of: log_power roi_fit non_roi_fit roi_masked>" adds the other
+# stores (as the fit jobs' FITS made them).
+#
 # Stage-06b CorrCA — raw voltages weighted by the CC topographies, read as PC1
 # and as the mean over all electrodes. READ-ONLY: nothing is fitted.
 #
 # scripts/run_corrca_raw_weighted.py, per recording: z-score the RAW
 # concatenated voltage per channel -> cut at every fam+ onset -> multiply every
-# electrode by its weight (|CC 1| and |CC 2| shared topography of every stored
+# electrode by its weight (|CC 1|, |CC 2| and |CC 3| shared topography of every stored
 # fit, the binary ASSR ROI, or uniform = the stage-00 reference). Then two
 # readouts, each trial minus its pre-onset mean / pre-onset SD pooled over
 # trials -> trial mean:
@@ -78,12 +82,28 @@ echo "PCA dimensions: $N_PCA"
 # environment at run time rather than substituted here.
 export SINGULARITYENV_N_PCA="$N_PCA" APPTAINERENV_N_PCA="$N_PCA"
 
+FITS="${FITS:-}"
+echo "opt-in fits and readings: ${FITS:-none}"
+export SINGULARITYENV_FITS="$FITS" APPTAINERENV_FITS="$FITS"
+
 cat << 'EOF' > run_inside.sh
 #!/bin/bash
 set -e
 source /opt/myproject/.venv/bin/activate
 
 DATA_DIR="/mnt/data/processed"
+
+# Opt-in stores and readings (FITS); the full-montage raw-power store always.
+FIT_FLAGS=()
+SIGNALS=(full)
+for F in ${FITS:-}; do
+    case "$F" in
+        log_power) FIT_FLAGS+=(--log_power); SIGNALS+=(swapped_filter) ;;
+        roi_fit|non_roi_fit) FIT_FLAGS+=("--$F") ;;
+        roi_masked) SIGNALS+=(roi_masked non_roi_masked) ;;
+        *) echo >&2 "unknown FITS entry: $F"; exit 1 ;;
+    esac
+done
 
 echo "=== raw weighted (PC1 + mean): every run at $(date) ==="
 python /mnt/scripts/run_corrca_raw_weighted.py \
@@ -94,7 +114,8 @@ python /mnt/scripts/run_corrca_raw_weighted.py \
     --bands broadband 30-50hz \
     --conditions Placebo Psilocybin \
     --n_pca "${N_PCA:-5}" \
-    --components 2 \
+    --components 3 \
+    "${FIT_FLAGS[@]}" \
     --store_dir "$DATA_DIR" \
     --wavelet_data_dir "$DATA_DIR" \
     --save_dir /mnt/plots

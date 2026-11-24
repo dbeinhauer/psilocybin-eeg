@@ -4,8 +4,9 @@ band-restricted twin's filters, and the band fit through the broadband one's.
 
 Read-only: every store must already exist, written by a broadband and a banded run
 (e.g. ``--band_range 30 50``, token ``--band 30-50hz``, or ``--band_range 1 30``,
-token ``--band 1-30hz``) of the same fit script and ``--n_pca``. Nothing is fitted. For each fit of the run (full, ``_log``, ``_roi``,
-``_non_roi``, ``_log_roi``, ``_log_non_roi``), the broadband store and its band twin
+token ``--band 1-30hz``) of the same fit script and ``--n_pca``. Nothing is fitted. For the run's full fit (and, with
+``--log_power`` / ``--roi_fit`` / ``--non_roi_fit``, its ``_log``, ``_roi``, ``_non_roi``
+fits and their log twins), the broadband store and its band twin
 (same variant and electrode cut) are paired. The pairing and outputs mirror the raw <-> log
 ``swapped_filter`` reading of ``run_corrca_snr_grid.py``:
 
@@ -77,6 +78,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from scripts.analysis_common import (  # noqa: E402
     CORRCA_INDIVIDUAL_VARIANTS,
     CORRCA_LOG_OF,
+    MAX_DRAWN_COMPONENTS,
+    STABILITY_COMPONENTS,
+    add_corrca_fit_selection_args,
     corrca_plots_dir,
     corrca_run_plan,
 )
@@ -226,14 +230,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     stored.add_argument("--experiment", default=ExperimentNames.ASSR.value)
     stored.add_argument(
         "--variant",
-        default=IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE.value,
+        default=IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS.value,
         choices=[v.value for v in CORRCA_LOG_OF],
-        help="Which stage-06b run: its full fit and every '_log', '_roi', '_non_roi' "
-        "one are paired with their band twins.",
+        help="Which stage-06b run: its full fit (plus the fits the flags below "
+        "select) is paired with its band twin.",
     )
-    stored.add_argument("--skip_log_power", action="store_true")
-    stored.add_argument("--skip_roi", action="store_true")
-    stored.add_argument("--skip_non_roi", action="store_true")
+    add_corrca_fit_selection_args(stored)
     stored.add_argument("--music_type", default=MusicTypeVariants.ASSR.value)
     stored.add_argument(
         "--band",
@@ -271,7 +273,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     output.add_argument(
         "--swapped_components",
         type=int,
-        default=2,
+        default=STABILITY_COMPONENTS,
         help="Project and draw this many leading components. The correlation CSVs "
         "always cover every component.",
     )
@@ -285,14 +287,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 def run(args: argparse.Namespace) -> None:
     """Pair and read every fit of the run; an individual-condition run per condition."""
     variant = IvaVariants(args.variant)
-    plan = corrca_run_plan(
-        variant,
-        argparse.Namespace(
-            skip_log_power=args.skip_log_power,
-            skip_roi_fit=args.skip_roi,
-            skip_non_roi_fit=args.skip_non_roi,
-        ),
-    )
+    plan = corrca_run_plan(variant, args)
     if variant in CORRCA_INDIVIDUAL_VARIANTS:
         stores = [
             (ConditionVariants(c), [c])
@@ -418,7 +413,11 @@ def run_join(
             tables[pair.variant].assign(spectrum=spectrum, twin_spectrum=twin).to_csv(
                 fit_dir / f"{_prefix(spectrum)}topomap_correlation.csv", index=False
             )
-    n_components = min(args.swapped_components, pairs[0].broadband.filters.shape[0])
+    n_components = min(
+        args.swapped_components,
+        pairs[0].broadband.filters.shape[0],
+        MAX_DRAWN_COMPONENTS,
+    )
     if args.skip_plots or n_components <= 0:
         return
 

@@ -17,6 +17,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.analysis_common import (
+    MAX_DRAWN_COMPONENTS,
+    corrca_run_plan,
+    drawn_components,
     _check_plan_against_concatenated,
     _refuse_stale_subjects,
     add_common_arguments,
@@ -814,9 +817,9 @@ class TestAssrRoiCorrca:
         args = SimpleNamespace(
             n_pca=2,
             lenient_mask=True,
-            skip_log_power=False,
-            skip_roi_fit=False,
-            skip_non_roi_fit=False,
+            log_power=True,
+            roi_fit=True,
+            non_roi_fit=True,
             parallel_fits=parallel_fits,
         )
 
@@ -904,3 +907,29 @@ class TestStoreTimeBaseChecks:
         store = self._store({"019": 1000, "023": 996})
         with pytest.raises(ValueError, match="another alignment"):
             _refuse_stale_subjects("L", store, ["019", "023"], 1000)
+
+
+def test_only_the_full_raw_power_fit_runs_unless_others_are_asked_for():
+    full = IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE
+
+    def plan(**flags):
+        args = SimpleNamespace(log_power=False, roi_fit=False, non_roi_fit=False)
+        args.__dict__.update(flags)
+        return [variant for variant, _channels, _log in corrca_run_plan(full, args)]
+
+    assert plan() == [full]
+    assert plan(log_power=True) == [
+        full,
+        IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE_LOG,
+    ]
+    # A log-power cut needs both of its flags.
+    assert plan(roi_fit=True) == [full, IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE_ROI]
+    assert len(plan(log_power=True, roi_fit=True, non_roi_fit=True)) == 6
+
+
+def test_figures_draw_at_most_five_components():
+    assert drawn_components(3) == [0, 1, 2]
+    assert drawn_components(20) == list(range(MAX_DRAWN_COMPONENTS))
+    assert drawn_components(20, [2, 7, 8, 9, 10, 11]) == [1, 6, 7, 8, 9]
+    with pytest.raises(ValueError, match="outside"):
+        drawn_components(3, [4])

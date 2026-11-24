@@ -74,11 +74,13 @@ the unit, exact Wilcoxon, uncorrected): ``contrast`` (Placebo − Psilocybin per
 ``discrimination`` (does a component separate the conditions better than a reference)
 and ``snr`` (is a component's response weaker than a reference's, per condition).
 
-**Every store of the run.** The full store first, then — in the order the fit scripts
-made them — its log-power twin (``_log``), the fits on the ASSR electrodes alone
-(``_roi``) and on every other electrode (``_non_roi``), and their log-power twins
-(``_log_roi``, ``_log_non_roi``). A missing one is skipped with a warning;
-``--skip_log_power`` / ``--skip_roi`` / ``--skip_non_roi`` skip them outright.
+**The stores of the run.** The full store only, by default. ``--log_power``,
+``--roi_fit`` and ``--non_roi_fit`` (the fit scripts' own flags) add, in the order the
+fit scripts made them, its log-power twin (``_log``), the fits on the ASSR electrodes
+alone (``_roi``) and on every other electrode (``_non_roi``), and their log-power twins
+(``_log_roi``, ``_log_non_roi``). A missing one is skipped with a warning. Only the
+stored sources (``full``) are read unless ``--signal_variants`` asks for the masked
+or swapped readings; figures draw at most five components, the tables all.
 
 An ROI store's cache is read on its electrodes only, and ``roi_masked`` coincides with
 ``full`` by construction — every weight is already inside the ROI — which is a free
@@ -135,7 +137,7 @@ Outputs::
                 pvalue_summary__<variant>.png
                 snr_by_condition__<variant>.png
                 trial_course_by_source__<variant>.png
-                trial_course_by_participant__<variant>.png   # CC 1, CC 2, (PCA, z)
+                trial_course_by_participant__<variant>.png   # CC 1-3, (PCA, z)
                 robustness__full.png   # the contrast's dependence on the participants
             snr_by_condition__band_swapped_filter_<band>.png   # --swap_band, and its
                                       # pvalue_summary__ / trial_course_by_source__
@@ -185,7 +187,9 @@ from scripts.analysis_common import (  # noqa: E402
     CORRCA_LOG_VARIANTS,
     CORRCA_SWAPPED_OF,
     CORRCA_SWAPPED_READING,
+    MAX_DRAWN_COMPONENTS,
     STABILITY_COMPONENTS,
+    add_corrca_fit_selection_args,
     corrca_plots_dir,
     corrca_refit_path,
     corrca_run_plan,
@@ -269,7 +273,7 @@ _MASKED = {
 }
 _LOG_LABEL = at.LOG_PCA_Z_MASK_LABEL
 #: Components drawn per participant beside the ROI reference.
-_PARTICIPANT_COURSE_COMPONENTS = 2
+_PARTICIPANT_COURSE_COMPONENTS = STABILITY_COMPONENTS
 #: Every reference row project_condition can give, in the order its blocks stack.
 _REFERENCE_ORDER = (*_MASK_LABELS, _LOG_LABEL)
 #: The band-swapped reading's label (``run_corrca_band_swap.py``'s); its signal
@@ -292,28 +296,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     stored.add_argument("--experiment", default=ExperimentNames.ASSR.value)
     stored.add_argument(
         "--variant",
-        default=IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE.value,
+        default=IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS.value,
         choices=[v.value for v in CORRCA_LOG_OF],
         help="Which stage-06b run to read: subject axis (separate), time axis, "
         "each condition alone, or the subject axis with the filters fitted on "
-        "Placebo alone (placebo_fit). Its full store is read first, then its '_log', "
-        "'_roi', '_non_roi', '_log_roi' and '_log_non_roi' ones — the fit order.",
+        "Placebo alone (placebo_fit). Its full store, then the stores the flags "
+        "below select, in the fit order.",
     )
-    stored.add_argument(
-        "--skip_log_power",
-        action="store_true",
-        help="Do not read the three log-power ('*_log') stores.",
-    )
-    stored.add_argument(
-        "--skip_roi",
-        action="store_true",
-        help="Do not read the '_roi' store.",
-    )
-    stored.add_argument(
-        "--skip_non_roi",
-        action="store_true",
-        help="Do not read the '_non_roi' store.",
-    )
+    # Only the full store by default; these add the opt-in fits' stores.
+    add_corrca_fit_selection_args(stored)
     stored.add_argument("--music_type", default=MusicTypeVariants.ASSR.value)
     stored.add_argument("--band", default=None)
     stored.add_argument(
@@ -323,7 +314,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "1-30hz or 30-50hz) instead: the band_swapped_filter_<band> rows only, into "
         "corrca_band_swap_snr__* result files. Needs --band unset.",
     )
-    stored.add_argument("--n_pca", type=int, default=10)
+    stored.add_argument("--n_pca", type=int, default=5)
     stored.add_argument("--store_dir", type=Path, default=None)
 
     data = parser.add_argument_group("the wavelet cache and the cohort")
@@ -392,9 +383,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     analysis.add_argument(
         "--signal_variants",
         nargs="+",
-        default=list(_SIGNAL_VARIANTS),
+        default=["full"],
         choices=list(_SIGNAL_VARIANTS),
-        help="Which readings of the learned rows to test side by side. "
+        help="Which readings of the learned rows to test side by side; only the "
+        "stored sources ('full') by default, the masked and swapped ones on request. "
         "'swapped_filter' reads the raw <-> log twin store's filters on this store's "
         "input.",
     )
@@ -440,7 +432,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     output.add_argument(
         "--swapped_components",
         type=int,
-        default=2,
+        default=STABILITY_COMPONENTS,
         help="Draw the swapped_filter TF maps of this many leading components, into "
         "the fit's own directory beside its condition_mean_tf_maps (needs "
         "--masked_tf_maps). 0 draws none; the SNR rows always cover every component.",
@@ -628,14 +620,7 @@ def run(args: argparse.Namespace) -> None:
             "--swap_band reads a broadband store through its band twin's filters; "
             f"leave --band unset (got --band {args.band})."
         )
-    plan = corrca_run_plan(
-        variant,
-        argparse.Namespace(
-            skip_log_power=args.skip_log_power,
-            skip_roi_fit=args.skip_roi,
-            skip_non_roi_fit=args.skip_non_roi,
-        ),
-    )
+    plan = corrca_run_plan(variant, args)
     if variant in CORRCA_INDIVIDUAL_VARIANTS:
         stores = [
             (ConditionVariants(c), [c])
@@ -1241,7 +1226,9 @@ def run_store(
         elif args.swapped_components > 0:
             twin = CORRCA_SWAPPED_OF[variant]
             scale = "log-power" if twin in CORRCA_LOG_VARIANTS else "raw-power"
-            shown = list(range(min(args.swapped_components, n_components)))
+            shown = list(
+                range(min(args.swapped_components, n_components, MAX_DRAWN_COMPONENTS))
+            )
             _draw_swapped_tf_maps(
                 {c: projected[c].swapped_tf_z for c in conditions},
                 {c: onsets[c] for c in conditions},
@@ -1266,14 +1253,15 @@ def run_store(
     if baseline_token and not args.skip_plots:
         lo, hi = args.baseline
         out_dir = fit_dir / baseline_token
-        shown_swapped = list(range(min(args.swapped_components, n_components)))
+        drawn = min(n_components, MAX_DRAWN_COMPONENTS)
+        shown_swapped = list(range(min(args.swapped_components, drawn)))
         # File prefix -> (condition -> (K, P, F, W) maps, components drawn, what reads).
         readings = {}
         if tf_baseline:
-            readings[plot_prefix] = (tf_baseline, list(range(n_components)), "")
+            readings[plot_prefix] = (tf_baseline, list(range(drawn)), "")
         for signal, maps in masked_tf.items():
             shown = (
-                list(range(n_components))
+                list(range(drawn))
                 if signal in ("roi_masked", "non_roi_masked")
                 else shown_swapped
             )
@@ -1786,7 +1774,8 @@ def _write_cell_plots(
 ) -> None:
     """The stage-06 three figures for one grid cell, with components named ``CC``.
 
-    Plus the per-participant trial courses of the first two components beside the
+    At most :data:`MAX_DRAWN_COMPONENTS` components are drawn; the tables keep all.
+    Plus the per-participant trial courses of the first three components beside the
     ``(PCA, z)`` reference (``(full)`` in a non-ROI store, which has no other). A single
     condition has no contrast, so it gets no p-value summary and no contrast box on its
     courses. *mask_labels* are the store's reference rows; *title_note* is appended to
@@ -1794,6 +1783,16 @@ def _write_cell_plots(
     """
     tag = f"{cell['variant']}__{cell['selection']}__{cell['window']}{title_note}"
     variant = cell["variant"]
+    # At most MAX_DRAWN_COMPONENTS components, then the references, in label order.
+    keep = [
+        i
+        for i, name in enumerate(labels)
+        if name not in comp_labels[MAX_DRAWN_COMPONENTS:]
+    ]
+    labels = [labels[i] for i in keep]
+    comp_labels = comp_labels[:MAX_DRAWN_COMPONENTS]
+    value = {c: v[:, keep] for c, v in value.items()}
+    course = {c: v[:, keep] for c, v in course.items()}
     cell_dir = plots_dir / cell["selection"] / cell["window"]
     cell_dir.mkdir(parents=True, exist_ok=True)
     frame = pd.DataFrame([r for r in rows_out if all(r[k] == cell[k] for k in cell)])

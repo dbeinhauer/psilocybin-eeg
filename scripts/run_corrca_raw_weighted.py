@@ -2,8 +2,8 @@
 Raw voltages weighted by the stage-06b CorrCA topographies, read two ways: their PC1
 and their mean over all electrodes (stage 06b).
 
-Read-only: every store must already exist, and nothing is fitted. For each fit of each
-run (full, ``_log``, ``_roi``, ``_non_roi``, ``_log_roi``, ``_log_non_roi``) and each
+Read-only: every store must already exist, and nothing is fitted. For the full fit of each
+run (plus, with ``--log_power`` / ``--roi_fit`` / ``--non_roi_fit``, its other fits) and each
 spectrum (broadband, and the ``--bands`` twins), the leading ``--components`` shared
 forward patterns are read from the store (``corrca_shared_patterns``):
 one topography per component, the same for both conditions. Each is taken in absolute
@@ -99,6 +99,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from scripts.analysis_common import (  # noqa: E402
     CORRCA_INDIVIDUAL_VARIANTS,
     CORRCA_LOG_OF,
+    MAX_DRAWN_COMPONENTS,
+    STABILITY_COMPONENTS,
+    add_corrca_fit_selection_args,
     corrca_plots_dir,
     corrca_run_plan,
 )
@@ -335,14 +338,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     stored.add_argument(
         "--variant",
         nargs="+",
-        default=[IvaVariants.CORRCA_CHANNEL_JOINED_SEPARATE.value],
+        default=[IvaVariants.CORRCA_CHANNEL_JOINED_TRACKS.value],
         choices=[v.value for v in CORRCA_LOG_OF],
-        help="Which stage-06b runs: each full fit and every '_log', '_roi', "
-        "'_non_roi' one are read. Several share one y-scale.",
+        help="Which stage-06b runs: each full fit (plus the fits the flags below "
+        "select) is read. Several share one y-scale.",
     )
-    stored.add_argument("--skip_log_power", action="store_true")
-    stored.add_argument("--skip_roi", action="store_true")
-    stored.add_argument("--skip_non_roi", action="store_true")
+    add_corrca_fit_selection_args(stored)
     stored.add_argument("--music_type", default=MusicTypeVariants.ASSR.value)
     stored.add_argument(
         "--bands",
@@ -386,8 +387,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     output.add_argument(
         "--components",
         type=int,
-        default=2,
-        help="Weight by this many leading components' topographies.",
+        default=STABILITY_COMPONENTS,
+        help="Weight by this many leading components' topographies (fewer when the "
+        f"fit has fewer, at most {MAX_DRAWN_COMPONENTS}).",
     )
     output.add_argument(
         "--ylim",
@@ -412,16 +414,11 @@ def _store_runs(
     args: argparse.Namespace,
 ) -> list[tuple[ConditionVariants, list[str], list]]:
     """``(store condition, conditions, heads)`` of every run and join with a store."""
-    skips = argparse.Namespace(
-        skip_log_power=args.skip_log_power,
-        skip_roi_fit=args.skip_roi,
-        skip_non_roi_fit=args.skip_non_roi,
-    )
     conditions = at.resolve_conditions(args.conditions or list(REAL_CONDITIONS))
     runs = []
     for name in args.variant:
         variant = IvaVariants(name)
-        plan = corrca_run_plan(variant, skips)
+        plan = corrca_run_plan(variant, args)
         if variant in CORRCA_INDIVIDUAL_VARIANTS:
             stores = [(ConditionVariants(c), [c]) for c in conditions]
         else:
@@ -623,7 +620,7 @@ def store_spec(
 ) -> StoreSpec:
     """One store's weightings, labels and output directory."""
     music_type = MusicTypeVariants(args.music_type)
-    n_components = min(args.components, head.patterns.shape[0])
+    n_components = min(args.components, head.patterns.shape[0], MAX_DRAWN_COMPONENTS)
     weights = np.vstack(
         [
             abs_pattern_weights(head.patterns[:n_components], head.channels, channels),

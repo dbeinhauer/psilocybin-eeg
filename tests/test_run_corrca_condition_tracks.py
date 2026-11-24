@@ -225,12 +225,13 @@ def test_individual_conditions_fit_each_condition_alone(tmp_path, stub_loaders):
         assert loaded.extras["corrca_condition_isc"].shape == (1, N_PCA)
 
 
-def test_every_run_also_fits_on_log_power(tmp_path, stub_loaders):
+def test_log_power_adds_the_log_power_fit(tmp_path, stub_loaders):
     store = tmp_path / "store"
     main(
         _argv(
             tmp_path / "plots",
             "--skip_onset_average",
+            "--log_power",
             "--store_components",
             "--store_dir",
             str(store),
@@ -260,13 +261,12 @@ def test_every_run_also_fits_on_log_power(tmp_path, stub_loaders):
     assert (out / "condition_mean_tf_maps.png").exists()
 
 
-def test_skip_log_power_fits_raw_power_only(tmp_path, stub_loaders):
+def test_only_the_full_raw_power_fit_runs_by_default(tmp_path, stub_loaders):
     store = tmp_path / "store"
     main(
         _argv(
             tmp_path / "plots",
             "--skip_onset_average",
-            "--skip_log_power",
             "--store_components",
             "--store_dir",
             str(store),
@@ -275,4 +275,6 @@ def test_skip_log_power_fits_raw_power_only(tmp_path, stub_loaders):
     names = [
         p.name for p in (store / "assr" / "iva_results" / "JoinedTracks").iterdir()
     ]
-    assert names and not any("_log" in name for name in names)
+    assert names and not any(
+        tag in name for name in names for tag in ("_log", "_roi", "_non_roi")
+    )

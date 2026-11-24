@@ -383,8 +383,9 @@ def corrca_run_plan(
     """``(variant, channels, log_power)`` of every fit of a run, in run order.
 
     Full montage, then the same on log power, then the ROI and non-ROI cuts, then
-    their log-power twins. ``--skip_log_power``, ``--skip_roi_fit`` and
-    ``--skip_non_roi_fit`` drop fits.
+    their log-power twins. Only the full montage on raw power runs by default;
+    ``--log_power``, ``--roi_fit`` and ``--non_roi_fit`` add the others (a log-power
+    cut needs both its flags).
 
     :param full: The raw-power full fit, a key of :data:`CORRCA_LOG_OF`.
     """
@@ -397,12 +398,76 @@ def corrca_run_plan(
         (log[1], "roi", True),
         (log[2], "non_roi", True),
     ]
-    skipped = {"roi": args.skip_roi_fit, "non_roi": args.skip_non_roi_fit}
+    wanted = {"full": True, "roi": args.roi_fit, "non_roi": args.non_roi_fit}
     return [
         (variant, channels, log_power)
         for variant, channels, log_power in plan
-        if not (log_power and args.skip_log_power) and not skipped.get(channels, False)
+        if wanted[channels] and (args.log_power or not log_power)
     ]
+
+
+def add_corrca_fit_selection_args(parser: argparse.ArgumentParser) -> None:
+    """The opt-in fits beside the full montage on raw power, the one run by default.
+
+    Shared by the fit scripts (which fit them) and the readers (which read their
+    stores), so one set of flags serves both steps of a job.
+    """
+    parser.add_argument(
+        "--log_power",
+        action="store_true",
+        help=(
+            "Add the log-power fits ('*_log' variants: log10 of the wavelet power "
+            "taken BEFORE any z-scoring), for every electrode cut selected."
+        ),
+    )
+    parser.add_argument(
+        "--roi_fit",
+        action="store_true",
+        help=(
+            "Add the fit on the binary ASSR ROI alone (the channel axis cut to the "
+            "electrodes of config/assr_electrodes/ BEFORE the z-scoring), the '_roi' "
+            "variant."
+        ),
+    )
+    parser.add_argument(
+        "--non_roi_fit",
+        action="store_true",
+        help=(
+            "Add the fit on every electrode BUT the ASSR ones (cut BEFORE the "
+            "z-scoring), the '_non_roi' variant."
+        ),
+    )
+
+
+#: Most components any stage-06b figure draws, whatever ``--n_pca``: every table
+#: still covers every component.
+MAX_DRAWN_COMPONENTS = 5
+
+
+def drawn_components(
+    n_components: int,
+    requested: Sequence[int] | None = None,
+    *,
+    logger: logging.Logger | None = None,
+) -> list[int]:
+    """0-based components a figure draws: *requested* (1-based) or every one, at most
+    :data:`MAX_DRAWN_COMPONENTS`.
+
+    :raises ValueError: If a requested component is outside ``1..n_components``.
+    """
+    if requested is None:
+        indices = list(range(n_components))
+    else:
+        indices = [int(k) - 1 for k in requested]
+        outside = [k + 1 for k in indices if not 0 <= k < n_components]
+        if outside:
+            raise ValueError(f"--components {outside} are outside 1..{n_components}.")
+    if len(indices) > MAX_DRAWN_COMPONENTS and logger is not None and requested:
+        logger.warning(
+            f"{len(indices)} components requested; figures draw the first "
+            f"{MAX_DRAWN_COMPONENTS}."
+        )
+    return indices[:MAX_DRAWN_COMPONENTS]
 
 
 #: Plot label of those fits, the counterpart of a join's ``JoinedTracks``.
@@ -585,7 +650,7 @@ def add_corrca_condition_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--n_pca",
         type=int,
-        default=10,
+        default=5,
         help=(
             "Dimension of the pooled within-subject covariance subspace the shared "
             "filters are sought in, i.e. the number of components. Must be ≤ the "
@@ -606,7 +671,10 @@ def add_corrca_condition_args(parser: argparse.ArgumentParser) -> None:
         type=int,
         nargs="+",
         default=None,
-        help="1-based component numbers to draw ('CC <k>'). Defaults to all.",
+        help=(
+            "1-based component numbers to draw ('CC <k>'). Defaults to all; figures "
+            "draw at most the first 5."
+        ),
     )
     parser.add_argument(
         "--n_pairs",
@@ -707,31 +775,7 @@ def add_corrca_condition_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Accept the intersection when anchor electrodes are missing.",
     )
-    parser.add_argument(
-        "--skip_roi_fit",
-        action="store_true",
-        help=(
-            "Skip the second fit on the binary ASSR ROI alone (the channel axis cut to "
-            "the electrodes of config/assr_electrodes/ BEFORE the z-scoring), which "
-            "is otherwise stored and drawn as the '_roi' variant."
-        ),
-    )
-    parser.add_argument(
-        "--skip_log_power",
-        action="store_true",
-        help=(
-            "Skip the three log-power fits ('*_log' variants: log10 of the wavelet "
-            "power taken BEFORE any z-scoring), which otherwise follow the full fit."
-        ),
-    )
-    parser.add_argument(
-        "--skip_non_roi_fit",
-        action="store_true",
-        help=(
-            "Skip the third fit on every electrode BUT the ASSR ones (cut BEFORE the "
-            "z-scoring), which is otherwise stored and drawn as the '_non_roi' variant."
-        ),
-    )
+    add_corrca_fit_selection_args(parser)
     parser.add_argument(
         "--parallel_fits",
         type=float,
@@ -766,10 +810,10 @@ def add_corrca_condition_args(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
-        "--skip_roi_masked",
+        "--roi_masked",
         action="store_true",
         help=(
-            "Skip the masked TF maps of the full fit: 'roi_masked_' (every filter "
+            "Add the masked TF maps of the full fit: 'roi_masked_' (every filter "
             "weight outside the ASSR electrodes zeroed) and 'non_roi_masked_' (the "
             "ASSR electrodes zeroed instead), on the z-scored signal."
         ),
@@ -1332,9 +1376,10 @@ def write_subset_refits(
     logger.info(f"[{label}] wrote {path}")
 
 
-#: Components every stability figure (influence, held-out ISC, SNR robustness) draws:
-#: the leading CorrCA components, which carry the synchrony; their tables keep all.
-STABILITY_COMPONENTS = 2
+#: Components every stability figure (influence, held-out ISC, SNR robustness) and its
+#: refits' onset maps draw: the leading CorrCA components, which carry the synchrony
+#: (fewer only when the fit has fewer); their tables keep all.
+STABILITY_COMPONENTS = 3
 
 
 def write_corrca_influence(

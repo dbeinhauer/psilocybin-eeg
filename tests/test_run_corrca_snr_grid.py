@@ -65,15 +65,11 @@ def test_masked_filters_read_only_the_anchor(ops, mask):
 
 def test_cli_defaults_and_variants():
     args = _build_arg_parser().parse_args([])
-    assert args.variant == "corrca_channel_joined_separate"
-    assert args.signal_variants == [
-        "full",
-        "roi_masked",
-        "non_roi_masked",
-        "swapped_filter",
-    ]
+    assert args.variant == "corrca_channel_joined_tracks"
+    # Only the stored sources of the full store, unless asked for more.
+    assert args.signal_variants == ["full"]
     assert args.masked_tf_maps is False
-    assert args.skip_roi is False
+    assert (args.log_power, args.roi_fit, args.non_roi_fit) == (False, False, False)
     # The ROI store is read after its join's full one, not named on its own.
     with pytest.raises(SystemExit):
         _build_arg_parser().parse_args(
@@ -101,8 +97,8 @@ def test_an_roi_store_has_no_complement(shared_filters):
 
 def test_cli_reads_the_log_power_stores_with_their_run():
     # The log stores are read with the raw run, after the full store; not on their own.
-    assert _build_arg_parser().parse_args([]).skip_log_power is False
-    assert _build_arg_parser().parse_args(["--skip_log_power"]).skip_log_power
+    assert _build_arg_parser().parse_args([]).log_power is False
+    assert _build_arg_parser().parse_args(["--log_power"]).log_power
     with pytest.raises(SystemExit):
         _build_arg_parser().parse_args(
             ["--variant", "corrca_channel_joined_tracks_log"]

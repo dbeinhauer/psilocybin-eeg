@@ -6,6 +6,10 @@
 #PBS -j oe
 
 # ---------------------------------------------------------------------------
+# DEFAULT: only each run's full-montage, raw-power store is read. qsub -v
+# FITS="<any of: log_power roi_fit non_roi_fit roi_masked>" adds the other
+# stores (as the fit jobs' FITS made them) and, with roi_masked / log_power, the masked and swapped_filter rows.
+#
 # Stage-06b CorrCA — the SNR grid and the stimulus-averaged TF maps again,
 # normalised by ANOTHER BASELINE.
 # READ-ONLY: nothing is fitted, and the default figures and files are not touched.
@@ -21,7 +25,7 @@
 #   snr_grid/<selection>/<window>/*.png      the grid figures
 #   condition_mean_tf_maps_onset.png         stored sources, every component
 #   roi_masked_*, non_roi_masked_*           every component
-#   swapped_filter_*, band_swapped_filter_<band>_*   CC 1-2
+#   swapped_filter_*, band_swapped_filter_<band>_*   CC 1-3
 #   participants/*onset_*                    the same per participant
 #
 # For each run (joined separate, joined tracks, individual conditions), with
@@ -108,12 +112,28 @@ for NAME in N_PCA BASELINE STORE_BANDS SWAP_BANDS VARIANTS TF_MAPS; do
   export "SINGULARITYENV_$NAME=${!NAME}" "APPTAINERENV_$NAME=${!NAME}"
 done
 
+FITS="${FITS:-}"
+echo "opt-in fits and readings: ${FITS:-none}"
+export SINGULARITYENV_FITS="$FITS" APPTAINERENV_FITS="$FITS"
+
 cat << 'EOF' > run_inside.sh
 #!/bin/bash
 set -e
 source /opt/myproject/.venv/bin/activate
 
 DATA_DIR="/mnt/data/processed"
+
+# Opt-in stores and readings (FITS); the full-montage raw-power store always.
+FIT_FLAGS=()
+SIGNALS=(full)
+for F in ${FITS:-}; do
+    case "$F" in
+        log_power) FIT_FLAGS+=(--log_power); SIGNALS+=(swapped_filter) ;;
+        roi_fit|non_roi_fit) FIT_FLAGS+=("--$F") ;;
+        roi_masked) SIGNALS+=(roi_masked non_roi_masked) ;;
+        *) echo >&2 "unknown FITS entry: $F"; exit 1 ;;
+    esac
+done
 FAILED=0
 TF_FLAG=()
 [ "$TF_MAPS" = "1" ] && TF_FLAG=(--masked_tf_maps)
@@ -136,6 +156,7 @@ grid() {
         --results_dir /mnt/results/assr \
         --save_dir /mnt/plots \
         "${TF_FLAG[@]}" \
+        "${FIT_FLAGS[@]}" \
         "$@" || {
         echo >&2 "FAILED: $*"
         FAILED=1
@@ -145,11 +166,11 @@ grid() {
 for VARIANT in $VARIANTS; do
     echo "=== $VARIANT, broadband, baseline $BASELINE at $(date) ==="
     grid --variant "$VARIANT" \
-        --signal_variants full roi_masked non_roi_masked swapped_filter
+        --signal_variants "${SIGNALS[@]}"
     for BAND in $STORE_BANDS; do
         echo "=== $VARIANT, $BAND, baseline $BASELINE at $(date) ==="
         grid --variant "$VARIANT" --band "$BAND" \
-            --signal_variants full roi_masked non_roi_masked swapped_filter
+            --signal_variants "${SIGNALS[@]}"
     done
     for BAND in $SWAP_BANDS; do
         echo "=== $VARIANT, band swap $BAND, baseline $BASELINE at $(date) ==="

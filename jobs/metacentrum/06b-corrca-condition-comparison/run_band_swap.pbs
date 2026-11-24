@@ -1,15 +1,23 @@
 #!/bin/bash
 #PBS -N PSILO_CORRCA_06B_BAND_SWAP
-#PBS -l walltime=6:00:00
+#PBS -l walltime=3:00:00
 #PBS -l select=1:ncpus=2:mem=100gb:scratch_local=100gb
 #PBS -m ae
 #PBS -j oe
 
 # ---------------------------------------------------------------------------
+# WHAT IS READ: only the selected runs (RUNS, default "tracks"; any of
+# separate tracks placebo_fit individual) at one component count (N_PCA, default
+# 5), and of each only its FULL fit: full montage, raw power. The '_log',
+# '_roi', '_non_roi' fits are never read here.
+#
+#   qsub -v RUNS=separate,N_PCA=10 run_band_swap.pbs
+#   qsub -v RUNS="separate placebo_fit tracks" run_band_swap.pbs
+#
 # Stage-06b CorrCA — band-swapped filters, READ-ONLY: nothing is fitted.
 #
-# scripts/run_corrca_band_swap.py pairs every broadband store with its
-# band twin (same run, same electrode cut, same N_PCA) and reads each fit
+# scripts/run_corrca_band_swap.py pairs each selected run's broadband full
+# store with its band twin (same run, same N_PCA) and reads each fit
 # through the other's filters, once per band in BANDS (default
 # "30-50hz 1-30hz"):
 #   - the band fit's filters on the broadband fit's input (every
@@ -19,20 +27,19 @@
 #     carry the 40 Hz response above the edge?
 #   - the broadband fit's filters on the band fit's input (the band only)
 #     -> drawn into the BAND fit's directory
-# Input as each fit saw it: log10 first for a '*_log*' fit, z-scored along
-# time per (channel, frequency), per condition. TF maps of CC 1-2 (whole
+# Input as each fit saw it: z-scored along time per (channel, frequency), per
+# condition. TF maps of CC 1-3 (whole
 # recording + stimulus average + participants/), plus the topomap / filter
 # Pearson r of every component (the same CSV as the raw <-> log
 # swapped_filter reading).
 #
-# Needs the stores of BOTH runs: run_condition_{separate,tracks}.pbs and
-# their band twins, _gamma (30-50hz) and _1_30hz (and the individual-condition
-# and run_placebo_fit{,_gamma,_1_30hz}.pbs ones, if wanted). A missing store
-# skips only its pair, with a warning; a run
-# with no store at all only logs "nothing to do".
+# Needs, for each run of RUNS at N_PCA, the broadband store and its band twins:
+# the run's fit job and its _gamma (30-50hz) and _1_30hz twins
+# (run_condition_{separate,tracks}*, run_placebo_fit*,
+# run_individual_conditions*). A missing store skips only its pair, with a
+# warning; a run with no store at all only logs "nothing to do".
 #
-# One pass over the wavelet cache per condition, run and band serves all six
-# pairs.
+# One pass over the wavelet cache per condition, run and band.
 #
 # Then the SNR GRID of the same reading (scripts/run_corrca_snr_grid.py
 # --swap_band <band>): every broadband store read through its band twin's
@@ -43,7 +50,6 @@
 # results into corrca_band_swap_snr__* files, so the store's own grid files are
 # never touched. The grid reads only the 40 Hz bins of the cache.
 #
-# qsub -v N_PCA=10 reads another component count (default 5).
 # qsub -v BANDS=1-30hz reads one band only.
 # qsub -v STEPS=snr runs only the SNR grid (STEPS=tf only the TF maps;
 #   default both).
@@ -62,9 +68,10 @@
 #   results/assr/corrca_band_swap_snr__<variant>__<band>__pca<N>{.csv,__courses.npz,__values.npz}
 #
 # MEMORY: one participant's broadband block (~2.4 GB float32, full montage)
-# plus its raw and log z-scored copies and the float64 upcast of a projection,
-# ~15 GB at peak, beside the CC 1-2 projections of six pairs x two conditions
-# (~4 GB). The SNR grid holds one ~1 GB store and the 40 Hz bins. CPU: numpy
+# plus its z-scored copy and the float64 upcast of a projection, beside the
+# CC 1-3 projections of the pair x two conditions: well below the request, which
+# is kept as it was sized for all six pairs. WALLTIME: about 1.5 h per run of
+# RUNS (both bands, both steps); raise it for more than two runs. The SNR grid holds one ~1 GB store and the 40 Hz bins. CPU: numpy
 # z-scoring is single-threaded; the projections use BLAS.
 # ---------------------------------------------------------------------------
 
@@ -99,15 +106,17 @@ cd "$DATADIR" || {
 cd "$SCRATCHDIR"
 
 N_PCA="${N_PCA:-5}"
+RUNS="${RUNS:-tracks}"
 BANDS="${BANDS:-30-50hz 1-30hz}"
 STEPS="${STEPS:-tf snr}"
-echo "PCA dimensions: $N_PCA, bands: $BANDS, steps: $STEPS"
+echo "runs: $RUNS, PCA dimensions: $N_PCA, bands: $BANDS, steps: $STEPS"
 
 # The runner heredoc below is quoted, so these are read from the container
 # environment at run time rather than substituted here.
 export SINGULARITYENV_N_PCA="$N_PCA" APPTAINERENV_N_PCA="$N_PCA"
 export SINGULARITYENV_BANDS="$BANDS" APPTAINERENV_BANDS="$BANDS"
 export SINGULARITYENV_STEPS="$STEPS" APPTAINERENV_STEPS="$STEPS"
+export SINGULARITYENV_RUNS="$RUNS" APPTAINERENV_RUNS="$RUNS"
 
 cat << 'EOF' > run_inside.sh
 #!/bin/bash
@@ -115,8 +124,19 @@ set -e
 source /opt/myproject/.venv/bin/activate
 
 DATA_DIR="/mnt/data/processed"
-VARIANTS="corrca_channel_joined_separate corrca_channel_joined_tracks
-          corrca_channel_individual_conditions corrca_channel_placebo_fit"
+
+# RUNS -> store variants. No --log_power / --roi_fit / --non_roi_fit is ever
+# passed, so each run is read on its full fit alone.
+VARIANTS=""
+for RUN in ${RUNS:-tracks}; do
+    case "$RUN" in
+        separate)    VARIANTS+=" corrca_channel_joined_separate" ;;
+        tracks)      VARIANTS+=" corrca_channel_joined_tracks" ;;
+        placebo_fit) VARIANTS+=" corrca_channel_placebo_fit" ;;
+        individual)  VARIANTS+=" corrca_channel_individual_conditions" ;;
+        *) echo >&2 "unknown RUNS entry: $RUN"; exit 1 ;;
+    esac
+done
 
 if [[ " ${STEPS:-tf snr} " == *" tf "* ]]; then
 for BAND in ${BANDS:-30-50hz 1-30hz}; do
@@ -129,7 +149,7 @@ for VARIANT in $VARIANTS; do
         --band "$BAND" \
         --conditions Placebo Psilocybin \
         --n_pca "${N_PCA:-5}" \
-        --swapped_components 2 \
+        --swapped_components 3 \
         --store_dir "$DATA_DIR" \
         --wavelet_data_dir "$DATA_DIR" \
         --results_dir /mnt/results/assr \

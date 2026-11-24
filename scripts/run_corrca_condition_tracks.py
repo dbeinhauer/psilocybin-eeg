@@ -49,7 +49,7 @@ Figures (panels labelled ``CC <k>``):
   - ``influence/corrca_influence`` / ``influence/corrca_heldout_isc`` (+
     ``influence/corrca_influence.csv``) — the leave-one-participant-out check: one refit per participant, the ISC and topography
     each component loses without them, and every recording's in-sample, held-out and
-    own-pair ISC (figures for CC 1-2); ``influence/corrca_onset_*`` the same on the
+    own-pair ISC (figures for CC 1-3); ``influence/corrca_onset_*`` the same on the
     onset-locked, trial-averaged maps. With ``--store_components`` and two conditions
     the refits leaving out every subset of ``--refit_subset_sizes`` participants are
     stored beside the store, for the SNR grid's robustness rows.
@@ -58,17 +58,18 @@ Figures (panels labelled ``CC <k>``):
     — the same TF maps with the fitted filter restricted to the ASSR electrodes (every
     other weight zeroed) on the z-scored signal
   - ``non_roi_masked_*`` — the same with the ASSR electrodes zeroed instead; the two
-    add up to the full maps. ``--skip_roi_masked`` drops both.
+    add up to the full maps. Only with ``--roi_masked``.
   - ``swapped_filter_*`` TF maps (the raw <-> log twin's filters on this fit's input)
     are drawn into this directory by ``run_corrca_snr_grid.py``, after every fit is
     stored, not here.
 
-Every run then fits twice more from the same loaded tensor, the channel axis cut
+Only the full montage on raw power is fitted by default. ``--roi_fit`` and
+``--non_roi_fit`` add fits from the same loaded tensor, the channel axis cut
 BEFORE the z-scoring: on the binary ASSR ROI alone (ROI → z-score → PCA → CorrCA),
 stored and drawn as ``corrca_channel_joined_tracks_roi``, then on every other electrode,
 as ``corrca_channel_joined_tracks_non_roi``. A cut is skipped, with a warning, when the
 montage holds no ASSR electrode or fewer than ``--n_pca`` kept channels;
-``--skip_roi_fit`` / ``--skip_non_roi_fit`` skip it outright. The non-ROI fit has no
+``--log_power`` adds the log-power twin of every selected fit. The non-ROI fit has no
 anchor electrode, so it keeps the fit's own orientation.
 
 With ``--skip_stored --store_components`` a fit whose store exists is read back
@@ -120,6 +121,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from scripts.analysis_common import (  # noqa: E402
     CORRCA_MASKED_READINGS,
     CorrcaFit,
+    drawn_components,
     add_corrca_condition_args,
     anchor_corrca_signs,
     corrca_plots_dir,
@@ -378,16 +380,8 @@ def run_corrca_condition_tracks(
             )
 
         n_components = corrca.model.n_components
-        comp_indices = (
-            list(range(n_components))
-            if args.components is None
-            else [k - 1 for k in args.components]
-        )
-        out_of_range = [k + 1 for k in comp_indices if not 0 <= k < n_components]
-        if out_of_range:
-            raise ValueError(
-                f"--components {out_of_range} are outside 1..{n_components}."
-            )
+        # Every figure draws at most MAX_DRAWN_COMPONENTS; the tables keep all.
+        comp_indices = drawn_components(n_components, args.components, logger=_logger)
 
         # The length stack_conditions_on_subject_axis trims every condition to.
         n_split = min(track.shape[-1] for track in sources_by_condition.values())
@@ -555,7 +549,7 @@ def run_corrca_condition_tracks(
         # cut fit has only one of the two electrode sets, so it has no masked reading.
         masked_readings = (
             {}
-            if fit.channels != "full" or args.skip_roi_masked
+            if fit.channels != "full" or not args.roi_masked
             else CORRCA_MASKED_READINGS
         )
         for reading, note in masked_readings.items():

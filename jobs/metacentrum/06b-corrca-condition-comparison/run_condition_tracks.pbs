@@ -1,11 +1,23 @@
 #!/bin/bash
 #PBS -N PSILO_CORRCA_TRACKS_06B
-#PBS -l walltime=4:00:00
+#PBS -l walltime=3:00:00
 #PBS -l select=1:ncpus=4:mem=450gb:scratch_local=100gb
 #PBS -m ae
 #PBS -j oe
 
 # ---------------------------------------------------------------------------
+# DEFAULT: only the full montage on raw power is fitted, and only its stored
+# sources ('full') are read by the grid. qsub -v FITS="<any of: log_power roi_fit
+# non_roi_fit roi_masked>" adds the log-power twins, the ROI / non-ROI cuts, the
+# masked readings (roi_masked, non_roi_masked) and, with log_power, the
+# swapped_filter rows. The fits and memory below describe every fit selected;
+# the full fit alone needs the raw tensor plus one full-montage fit.
+#
+# RESOURCES: memory and CPUs as for every fit (mem=450gb, ncpus=4,
+# --parallel_fits 2), so any FITS selection fits; only the walltime is sized for
+# the default full fit (3:00:00). With FITS, request the old walltime too: qsub
+# -l walltime=4:00:00. PARALLEL_FITS (default 2) sets how many fits run at once.
+#
 # Stage-06b CorrCA — condition comparison on the JOINED_TRACKS condition,
 # then the ASSR SNR / condition-contrast grid on the stored fit.
 #
@@ -27,8 +39,7 @@
 #    log-power fits take log10 of the power (floored at the dtype's smallest
 #    normal number) BEFORE any z-scoring. Both full-montage fits also draw their
 #    filter read through the ROI alone (roi_masked_*) and through the rest of the
-#    head (non_roi_masked_*). --skip_log_power / --skip_roi_fit /
-#    --skip_non_roi_fit drop fits.
+#    head (non_roi_masked_*). Only the ones FITS selects (see the top).
 #    The fits run in parallel, each in its own forked process reading the one
 #    loaded tensor; --parallel_fits caps how many at once (see MEMORY).
 #
@@ -45,7 +56,7 @@
 #    discrimination, snr; exact Wilcoxon over participants, uncorrected) as
 #    stage 06. Signal variants: full, roi_masked, non_roi_masked,
 #    plus swapped_filter (the raw <-> log twin store's filters on this
-#    store's input; its CC 1-2 TF maps and the topomap r CSV are drawn
+#    store's input; its CC 1-3 TF maps and the topomap r CSV are drawn
 #    into the fit's directory),
 #    all storing their trial-normalised TF maps (--masked_tf_maps).
 #    A '_non_roi' store has no ASSR
@@ -59,7 +70,7 @@
 #                                         _log_roi, _log_non_roi
 #           condition_mean_*, participants/, corrca_*,
 #           roi_masked_*, non_roi_masked_*,            # fit
-#           swapped_filter_* (CC 1-2: the raw <-> log twin's filters
+#           swapped_filter_* (CC 1-3: the raw <-> log twin's filters
 #             on this fit's input; drawn by the SNR grid, after all fits)
 #           snr_grid/<selection>/<window>/*.png        # SNR grid: p-values,
 #                                     SNR, trial courses only
@@ -116,6 +127,12 @@ echo "PCA dimensions: $N_PCA, force fit: $FORCE_FIT"
 # environment at run time rather than substituted here.
 export SINGULARITYENV_N_PCA="$N_PCA" APPTAINERENV_N_PCA="$N_PCA"
 export SINGULARITYENV_FORCE_FIT="$FORCE_FIT" APPTAINERENV_FORCE_FIT="$FORCE_FIT"
+FITS="${FITS:-}"
+echo "opt-in fits and readings: ${FITS:-none}"
+export SINGULARITYENV_FITS="$FITS" APPTAINERENV_FITS="$FITS"
+PARALLEL_FITS="${PARALLEL_FITS:-2}"
+echo "fits at once: $PARALLEL_FITS"
+export SINGULARITYENV_PARALLEL_FITS="$PARALLEL_FITS" APPTAINERENV_PARALLEL_FITS="$PARALLEL_FITS"
 
 cat << 'EOF' > run_inside.sh
 #!/bin/bash
@@ -124,6 +141,23 @@ set -e
 source /opt/myproject/.venv/bin/activate
 
 DATA_DIR="/mnt/data/processed"
+
+# Opt-in fits and readings (FITS); the full montage on raw power always runs.
+FIT_FLAGS=()
+MASKED_FLAG=()
+SIGNALS=(full)
+for F in ${FITS:-}; do
+    case "$F" in
+        log_power) FIT_FLAGS+=(--log_power); SIGNALS+=(swapped_filter) ;;
+        roi_fit|non_roi_fit) FIT_FLAGS+=("--$F") ;;
+        roi_masked) MASKED_FLAG=(--roi_masked); SIGNALS+=(roi_masked non_roi_masked) ;;
+        *) echo >&2 "unknown FITS entry: $F"; exit 1 ;;
+    esac
+done
+MASKED_TF=()
+if [ "${#SIGNALS[@]}" -gt 1 ]; then
+    MASKED_TF=(--masked_tf_maps)
+fi
 
 SKIP_STORED=(--skip_stored)
 if [ "${FORCE_FIT:-0}" = "1" ]; then
@@ -144,7 +178,8 @@ python /mnt/scripts/run_corrca_condition_tracks.py \
     "${SKIP_STORED[@]}" \
     --save_dir /mnt/plots \
     --n_jobs -1 \
-    --parallel_fits 2
+    --parallel_fits "${PARALLEL_FITS:-2}" \
+    "${FIT_FLAGS[@]}" "${MASKED_FLAG[@]}"
 
 echo "=== SNR grid at $(date) ==="
 python /mnt/scripts/run_corrca_snr_grid.py \
@@ -155,8 +190,8 @@ python /mnt/scripts/run_corrca_snr_grid.py \
     --n_pca "${N_PCA:-5}" \
     --halfwidths 0 5 \
     --stimulus_intervals 0:0.5 0.2:0.5 \
-    --signal_variants full roi_masked non_roi_masked swapped_filter \
-    --masked_tf_maps \
+    --signal_variants "${SIGNALS[@]}" \
+    "${MASKED_TF[@]}" "${FIT_FLAGS[@]}" \
     --contrast_alternative greater \
     --snr_alternative less \
     --store_dir "$DATA_DIR" \
