@@ -16,26 +16,48 @@ compared panel for panel.
 | Decompose, store: each condition alone (§2) | `scripts/run_corrca_individual_conditions.py` | `run_individual_conditions.pbs` |
 | Decompose on Placebo, read both, compare, store: subject axis (§2) | `scripts/run_corrca_condition_comparison.py --fit_condition Placebo` | `run_placebo_fit.pbs` |
 | SNR / contrast grid on the stored components (§5) | `scripts/run_corrca_snr_grid.py` | the same job, second step |
+| Compare fits across `n_pca`, bands or joins, read-only (§5d) | `scripts/run_corrca_comparison.py` | `run_comparison.pbs` |
 
-Each job fits six times from one data load, in this order: the full montage, the full
-montage on log power (`_log`, §5c), the ASSR ROI alone (`_roi`), every other electrode
-(`_non_roi`; §5b), then `_log_roi` and `_log_non_roi`. It then runs the SNR grid on the
-six stores in the same order. The fit runs with `--skip_stored`: a fit whose store for that
+**By default a job fits only the full montage on raw power**, and its SNR grid reads only
+that store's own sources (`full`). The other fits and readings are opt-in, with the same
+flags for the fit scripts and the readers (`qsub -v FITS="..."` in every job, any of the
+four):
+
+| Flag / `FITS` entry | Adds |
+|---|---|
+| `--log_power` / `log_power` | the log-power twin of every selected fit (`_log`, §5c); in the grid, the `swapped_filter` rows |
+| `--roi_fit` / `roi_fit` | the fit on the ASSR ROI alone (`_roi`, §5b) |
+| `--non_roi_fit` / `non_roi_fit` | the fit on every other electrode (`_non_roi`, §5b) |
+| `--roi_masked` / `roi_masked` | the full fit's `roi_masked_*` / `non_roi_masked_*` maps; in the grid, those rows (`--signal_variants`) |
+
+With all of them a job fits six times from one data load, in this order: the full
+montage, the full montage on log power, the ASSR ROI alone, every other electrode, then
+`_log_roi` and `_log_non_roi`, and the SNR grid reads the stores in the same order.
+
+Figures draw at most five components (`MAX_DRAWN_COMPONENTS`), whatever `--n_pca`; the
+tables and stores keep every one. The stability figures (influence, held-out ISC, the
+grid's robustness and per-participant courses) and the swapped and band-swapped TF maps
+draw the leading three (`STABILITY_COMPONENTS`), fewer only when the fit has fewer.
+
+The fit runs with `--skip_stored`: a fit whose store for that
 `--n_pca` and band already exists is read back instead of refit, and every figure is
 still drawn from it. The data is loaded either way, for the masked maps and any fit
 still missing. A store fitted on other data (cohort, channels, time extent: the store
 name does not record `--n_times` or `--n_pairs`) is refused, not reused.
-`qsub -v FORCE_FIT=1` refits all six; `qsub -v N_PCA=<n>` picks the component count
+`qsub -v FORCE_FIT=1` refits every selected fit; `qsub -v N_PCA=<n>` picks the component count
 (default 5).
 
-The six fits run in parallel, each in its own forked process that reads the one loaded
+The selected fits run in parallel, each in its own forked process that reads the one loaded
 tensor without copying it. `--parallel_fits P` is a memory budget in full-montage fits:
 fits start in plan order while the running ones weigh at most `P`, where a cut fit
 weighs its share of the channels (ROI ~0.2, non-ROI ~0.8). A running fit holds about
 three copies of its prepared input at its peak (the input, its z-scored copy and one
 temporary). The broadband joins run with `P = 2`, the individual conditions and the
-gamma jobs with `P = 3`; each job's header gives the memory estimate. `P = 1` (the
-script default) runs the fits one after another in one process.
+gamma jobs with `P = 3` (`qsub -v PARALLEL_FITS=<P>`); each job's header gives the
+memory estimate. `P = 1` (the script default) runs the fits one after another in one
+process. The jobs keep the memory and CPUs every fit needs, so any `FITS` selection
+fits; only their walltime is sized for the default full fit, and each header names the
+walltime to request with `FITS`.
 
 Every job has a `*_gamma.pbs` twin that decomposes only 30–50 Hz (`--band_range 30 50`,
 stored and plotted as `30-50hz`, under `bands/`), whose grid reads the gamma store
@@ -227,13 +249,20 @@ recording's cross-covariance with `Σ` and with its own participant. Per compone
   topography) while every score against others stays near zero. The per-condition ISC
   above cannot show this, because the pair spans the two conditions.
 
+- **The two terms of the ISC** (`within_*`, `between_*`): `wᵀR_w w` and `wᵀR_b w`
+  per unit filter norm (§5d), for the full fit (`_full`), the full fit's filter on the
+  data without the participant (`_fixed`) and the refit (`_without`, whose ratio is
+  `isc_without`). They say whether leaving someone out moves the ISC through the
+  variance the component carries or through its shared covariance, and whether
+  removing the data or rotating the filter does it.
+
 A participant is flagged as an outlier when their loss has a robust z (median/MAD over
 participants) above 3.5 **and** costs at least 10% of the component's ISC. The share
 floor keeps a negligible loss from being flagged where every loss is near zero. On
 components whose ISC is itself near zero, the flag is meaningless. The results go to
 `influence/corrca_influence.png`, `influence/corrca_heldout_isc.png` and
 `influence/corrca_influence.csv`, plus one log line per component. The figures and
-log lines cover CC 1 and CC 2 only (`STABILITY_COMPONENTS`, as every stability
+log lines cover CC 1-3 only (`STABILITY_COMPONENTS`, as every stability
 figure); the CSV keeps every component. In the held-out figure a flagged recording's
 line is red and named at its held-out reading. `--skip_influence` skips all of it.
 The cost is one extra chunked pass over the data and one small eigenproblem per
@@ -243,13 +272,13 @@ participant.
 trial-averaged TF map, the signal `corrca_onset_condition_isc` scores, so the
 influence can be compared on the stimulus response the ASSR question is about. The
 covariances cannot score a trial average, so the full fit's and every
-leave-one-out refit's filters for CC 1–2 are applied to the input in one projection,
+leave-one-out refit's filters for CC 1–3 are applied to the input in one projection,
 averaged around the onsets with the fit script's own call, and the ISCs taken on
 the maps (`corrca.map_influence`). The ISC lost is then the full maps' group ISC
 minus the group ISC of the remaining participants' maps through the refit; the
 topography |r| is the refit's, as above. They go to `influence/corrca_onset_influence.png`,
 `influence/corrca_onset_heldout_isc.png` and `influence/corrca_onset_influence.csv`.
-The projection holds `(recordings, 2 + 2·participants, F, T)` in float32, about 6 GB
+The projection holds `(recordings, 3 + 3·participants, F, T)` in float32, about 9 GB
 for the broadband join.
 
 **Caveats.**
@@ -333,7 +362,7 @@ the same three exact-Wilcoxon test families:
 It draws the same figures per grid cell: `pvalue_summary__<variant>`,
 `snr_by_condition__<variant>` and `trial_course_by_source__<variant>`. It adds
 `trial_course_by_participant__<variant>`: each participant's median-over-trials course
-for CC 1, CC 2 and the `ASSR-mask (PCA, z)` reference (what the fit was handed;
+for CC 1-3 and the `ASSR-mask (PCA, z)` reference (what the fit was handed;
 `ASSR-mask (full)` in a non-ROI store, which has no other), with one row per
 condition. A participant keeps the same line style in every panel, and the bold
 line is the all-participant mean, the centre line of `trial_course_by_source`.
@@ -424,7 +453,7 @@ Outputs, beside the grid CSV:
 - `__robustness_summary.csv`: per source, test and k, with `n_significant`,
   `n_flips`, `max_p` with `worst` (the subset at it), the median range, `full_p` and
   `fragility`.
-- `snr_grid/<selection>/<window>/robustness__full.png`, for CC 1 and CC 2. From the
+- `snr_grid/<selection>/<window>/robustness__full.png`, for CC 1-3. From the
   top: the replicate p-values per family and size (red where the verdict changes,
   ringed where the refit's topography is flagged, held-out last). Then one row per
   subset size with the flip shares per participant, fixed and refit side by side
@@ -442,39 +471,39 @@ Outputs, beside the grid CSV:
 
 Two ways of asking what the CorrCA components carry from the ASSR electrodes alone:
 
-- **ROI- and non-ROI-masked maps of the full fit.** Every fit script draws
+- **ROI- and non-ROI-masked maps of the full fit.** With `--roi_masked`, every fit script draws
   `roi_masked_condition_mean_tf_maps.png` (and `_onset`, and `participants/roi_masked_*`):
   the fitted shared filter with every weight outside the ROI zeroed — not renormalised —
   applied to the z-scored signal the fit saw; then `non_roi_masked_*`, the same with the
   ROI zeroed instead. The two add up to the full maps. They are the TF-map counterpart
-  of the grid's `roi_masked` / `non_roi_masked` rows. `--skip_roi_masked` drops both.
-- **A fit on the ROI alone.** Every fit run makes a second fit from the same loaded
+  of the grid's `roi_masked` / `non_roi_masked` rows. Only with `--roi_masked`.
+- **A fit on the ROI alone.** With `--roi_fit`, a run makes a second fit from the same loaded
   tensor, with the channel axis cut to the ROI **before** the z-scoring, so ROI → z-score
   → PCA → CorrCA. It is stored and drawn as `corrca_channel_joined_{separate,tracks}_roi`,
-  beside the full-montage fit, and every grid run reads that store after the full one.
+  beside the full-montage fit, and a grid run with `--roi_fit` reads that store after the full one.
   There `roi_masked` coincides with `full` by construction, a free check that the store
   and the cache agree. The ROI fit is skipped, with a warning, when the montage holds no
-  ASSR electrode or fewer than `--n_pca` of them; `--skip_roi_fit` (fit) and `--skip_roi`
-  (grid) skip it outright.
+  ASSR electrode or fewer than `--n_pca` of them. It runs only with `--roi_fit` (fit and
+  grid alike).
 - **A fit on the rest of the head.** The same cut to every electrode BUT the ROI, stored
   and drawn as `<join>_non_roi`, third. It has no anchor electrode, so it keeps the
   fit's own orientation (largest shared-pattern weight positive). The grid reads its
   store on the full montage, with the filters zero on the ROI, so its references read
   the same electrodes as every other store's; only its `full` rows are tested, and
   only against `ASSR-mask (full)`, since a reference read through its subspace is
-  identically zero. `--skip_non_roi_fit` (fit) and `--skip_non_roi` (grid) skip it.
+  identically zero. It runs only with `--non_roi_fit` (fit and grid alike).
 
 ## 5c. Log-power variant
 
-Every run also fits on log power: `log10` of the wavelet power (floored at the dtype's
+With `--log_power`, a run also fits on log power: `log10` of the wavelet power (floored at the dtype's
 smallest normal number, as in stage 08), taken **before any z-scoring**, including the
 time-axis join's per-condition z-scoring. A component is then fitted on relative power
 changes rather than absolute ones, which the strongest bursts dominate. Everything
 else is the raw-power fit's: the same cuts, the masked maps, the figures and the SNR
 grid. The products are stored and drawn as the `*_log` variants beside the raw ones
 (`corrca_channel_joined_tracks_log`, `..._log_roi`, `..._log_non_roi`, and likewise for
-the subject-axis join and the individual conditions). `--skip_log_power` drops the
-three log-power fits (and the grid's reading of their stores).
+the subject-axis join and the individual conditions), one per selected electrode cut;
+the grid reads their stores with the same flag.
 
 One load serves both: each fit's input is prepared from the raw tensor when the fit
 comes up — cut to its electrodes, then the log if any, then the join's
@@ -505,7 +534,7 @@ changes, and the SNR grid's `swapped_filter` rows sit against the same reference
   filters at every frequency, so it draws `swapped_filter_condition_mean_tf_maps`
   (+ `_onset`, + `participants/`) into the fit's own directory. It uses the fit's
   plotting calls and stimulus average, for the leading `--swapped_components`
-  (default 2). A missing twin store is a warning, not an error.
+  (default 3). A missing twin store is a warning, not an error.
 - Component *k* is paired with the twin's component *k*, never re-matched. Each keeps
   its own sign anchor (§1), so the ASSR-anchored fits should agree in sign. The non-ROI
   fits are unanchored, so a negative r there can be a sign flip.
@@ -520,8 +549,10 @@ changes, and the SNR grid's `swapped_filter` rows sit against the same reference
 `scripts/run_corrca_band_swap.py` (job `run_band_swap.pbs`) does the same swap
 across the frequency cut instead of the power scale. It is read-only and pairs each
 broadband store with its band twin (`--band 30-50hz` or `--band 1-30hz`; the job runs
-both, or `qsub -v BANDS=1-30hz` for one), with the same run, electrode cut and
-`--n_pca`. The broadband fit's directory gets `band_swapped_filter_<band>_*` TF maps of
+both, or `qsub -v BANDS=1-30hz` for one). The job reads only the runs in `RUNS`
+(default `tracks`; any of `tracks separate placebo_fit individual`) at `N_PCA`
+(default 5), and of each only its full fit (full montage, raw power); the twin has the
+same run, electrode cut and `--n_pca`. The broadband fit's directory gets `band_swapped_filter_<band>_*` TF maps of
 the band fit's filters on broadband input, at every frequency. The band's inner edge
 (30 Hz for both bands) is marked there beside the 40 Hz line. The band fit's directory
 gets `<band>_band_swapped_filter_*` maps of the broadband filters on the band input.
@@ -566,7 +597,7 @@ like the fit's directory itself:
 - `condition_mean_tf_maps_onset.png` and `participants/onset_*`: the stored sources, every
   component.
 - With `--masked_tf_maps`, also `roi_masked_*` and `non_roi_masked_*` (every component),
-  `swapped_filter_*` and, with `--swap_band`, `band_swapped_filter_<band>_*` (CC 1-2,
+  `swapped_filter_*` and, with `--swap_band`, `band_swapped_filter_<band>_*` (CC 1-3,
   with the 30 Hz band edge marked). A band-swap run draws only its own reading.
 
 The results go to `assr_snr_grid_baseline_-300_-50ms__*` (and
@@ -640,6 +671,69 @@ across every fit, band and run. `--ylim` / `--ylim_diff` pin them by hand. Every
 marks the stimulus onset (dashed) and offset (dotted). The uniform reference is a
 dashed dark-grey line in the overlays and has a grey panel face where it has its own
 panel.
+
+## 5d. Comparing fits: `n_pca`, bands, joins
+
+`scripts/run_corrca_comparison.py` (job `run_comparison.pbs`, notebook
+`corrca_comparison_{pca,band,join}.ipynb`, one per comparison) is read-only. It sets finished fits side by side, only the
+full-montage raw-power fit of each run, along one of three axes:
+
+| `--compare` | Fixed | Compared |
+|---|---|---|
+| `pca` | `--run`, `--band` | every `--n_pca` (default 3 5 10 20) |
+| `band` | `--run`, `--n_pca` | `--bands` (default broadband, 1-30hz, 30-50hz) |
+| `join` | `--band`, `--n_pca` | `--runs` (default separate, tracks, individual) |
+
+The leading `--components` (default 3) are compared **by index**. CC 1 at `n_pca = 5`
+and CC 1 at `n_pca = 20` are sought in different subspaces, so they need not be the
+same component. The topography figure gives each map's r with the first fit's same
+component, so a re-ordering shows. An individual-conditions run holds two fits with
+different filters, drawn as two rows and never paired.
+
+What is compared comes from the products each fit already wrote: its ISC (the fit's
+own, and per condition on the whole recording and on the onset maps); the held-out ISC,
+the in-sample − held-out gap and the refit topography |r| (median and worst) from the
+influence table (§3); the uncorrected Placebo/Psilocybin p-values (LOO-ISC whole and
+onset, and the grid's `contrast` family on `full` at `--snr_selection` for every
+`--snr_windows`); the grid's SNR courses; and the shared filters and forward patterns.
+
+**Reading `n_pca`.** A larger subspace always raises the in-sample ISC: the whitening
+divides by `√eigenvalue`, so the filters can use directions of little variance that
+correlate across people by chance. The held-out ISC and the in-sample − held-out gap
+are the guard. A value of `n_pca` that raises the held-out ISC found real structure;
+one that only widens the gap fits noise. With `corrca_channel_placebo_fit` the
+optimism is one-sided (§2), so a widening gap there also biases the contrast.
+
+**The two terms of the ISC.** `ISC = wᵀR_b w / wᵀR_w w` cannot tell a weaker shared
+response from a stronger unshared one. The comparison therefore reads both terms per
+condition from the stored sources (`corrca.condition_variance_terms`). Per participant:
+
+- `within`: the variance of the participant's component signal, their term of `R_w`;
+- `between`: its mean covariance with every other participant of the condition, their
+  term of `R_b`.
+
+Both are divided by `‖w‖²`. On power z-scored per (channel, frequency) they are then in
+units of one channel's variance, independent of the filter's arbitrary scale, so fits
+of another `n_pca`, band or join share an axis. A `within` far above 1 means the filter
+follows a high-variance (often global) direction; far below 1, it cancels shared
+variance between electrodes. The condition means' ratio is the condition's ISC
+exactly. Both terms are tested Psilocybin − Placebo like the LOO-ISC (paired
+Wilcoxon, uncorrected). The shift figure reads the `within_*` / `between_*` influence
+columns (§3) as `Δwithin / within` and `Δbetween / within` (the latter in ISC units).
+An influence table written before those columns existed is skipped with a warning,
+and rerunning the fit job adds them.
+
+The stores are read with only the compared components, one recording at a time
+(`load_iva_components(..., components=)`). A missing store, CSV or grid leaves a gap
+and a warning. A 1-30 Hz fit has no SNR grid. A band store's grid file is named
+`__bands__` whatever its band, so the 30-50 Hz grid is the one read.
+
+Outputs, in `plots/06b-corrca-condition-comparison/Comparison_<MusicType>/`:
+`<spectrum>/pca__<variant>/`, `band__<variant>/pca_<n>/` or `<spectrum>/join__<runs>/pca_<n>/` (the runs joined by
+`-`, e.g. `join__separate-placebo_fit-tracks`),
+each with `corrca_comparison_metrics.{png,csv}`, `_topomap_filter.png`,
+`_topomap_pattern.png`, `_snr_course.png`, `_variance_terms.{png,csv}` (+
+`_variance_terms_tests.csv`) and `_variance_shift.{png,csv}`.
 
 ## 6. Not here yet
 

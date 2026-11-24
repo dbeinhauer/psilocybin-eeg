@@ -19,7 +19,11 @@ drawn here, is what has no IVA counterpart:
   each electrode multiplied by a component's absolute shared pattern (or the binary
   ASSR ROI), read as its PC1 and as its mean over all electrodes, each
   onset-normalised, against the uniform reference
-  (``scripts/run_corrca_raw_weighted.py``).
+  (``scripts/run_corrca_raw_weighted.py``);
+* the **comparison of fits** — one run across ``n_pca``, bands or joins: synchrony,
+  held-out stability and condition tests, the topographies, the SNR courses, and
+  the two terms of each ISC (``R_w``'s, ``R_b``'s) with their leave-one-out shift
+  (``scripts/run_corrca_comparison.py``).
 """
 
 from __future__ import annotations
@@ -307,7 +311,7 @@ def plot_participant_influence(
             fontsize=8,
         )
         ax.xaxis.set_major_locator(plt.MaxNLocator(4))
-        ax.tick_params(labelsize=7)
+        ax.tick_params(which="both", labelsize=7)
     for ax in axes[-1, :]:
         ax.set_xlabel("ISC lost without participant", fontsize=8)
     for ax in axes[:, 0]:
@@ -402,7 +406,7 @@ def plot_participant_heldout_isc(
         ax.set_xticklabels([_ISC_READINGS[c] for c in readings], fontsize=7)
         ax.set_xlim(-0.5, len(readings) - 0.5)
         ax.set_title(f"{component_prefix} {k + 1}", fontsize=8)
-        ax.tick_params(labelsize=7)
+        ax.tick_params(which="both", labelsize=7)
     if np.isfinite(shared_ylim).all():
         pad = 0.05 * (shared_ylim[1] - shared_ylim[0] or 1.0)
         for ax in axes.flat:
@@ -893,5 +897,473 @@ def plot_difference_comparison(
     if note:
         full_title += f"\n{note}"
     fig.suptitle(full_title, fontsize=10)
+    save_fig(fig, save_path)
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Comparing fits: n_pca, band, join (scripts/run_corrca_comparison.py)
+# ---------------------------------------------------------------------------
+
+#: One colour per compared component (Tol "muted"), apart from the condition hues.
+COMPARISON_COMPONENT_COLORS = ("#332288", "#117733", "#AA3377", "#999933", "#88CCEE")
+#: Line style and marker per condition; ``both`` is a reading pooled over the
+#: conditions (the time-axis join's held-out ISC), ``""`` one with no condition.
+COMPARISON_CONDITION_STYLES = {
+    "": ("-", "D"),
+    "Placebo": ("-", "o"),
+    "Psilocybin": ("--", "s"),
+    "both": (":", "^"),
+}
+
+
+def _component_color(k: int) -> str:
+    return COMPARISON_COMPONENT_COLORS[k % len(COMPARISON_COMPONENT_COLORS)]
+
+
+def _entry_axis(ax, entries: Sequence[str]) -> None:
+    ax.set_xticks(np.arange(len(entries)))
+    ax.set_xticklabels(entries, fontsize=7, rotation=30, ha="right")
+    ax.set_xlim(-0.5, len(entries) - 0.5)
+
+
+def plot_comparison_metrics(
+    metrics: pd.DataFrame,
+    panels: Sequence[tuple[str, str, bool]],
+    entries: Sequence[str],
+    n_components: int,
+    *,
+    connect: bool,
+    alpha: float,
+    title: str,
+    save_path: Optional[Path] = None,
+):
+    """One panel per metric, the compared fits on x, one colour per component.
+
+    :param metrics: Long frame with ``entry``, ``component`` (1-based),
+        ``condition`` (``""`` when the metric has none), ``metric`` and ``value``.
+    :param panels: ``(metric, panel title, is a p-value)`` in panel order; a p-value
+        panel is on a log axis with the *alpha* line. A metric with no finite value
+        is left out.
+    :param entries: The compared fits, in x order.
+    :param n_components: Leading components drawn.
+    :param connect: Join an entry to the next (an ordered sweep, e.g. ``n_pca``).
+    :param alpha: Significance level marked on the p-value panels.
+    :param title: Figure title.
+    :param save_path: Optional output path.
+    :return: The figure, or ``None`` when no panel has data.
+    """
+    entries = list(entries)
+    position = {entry: i for i, entry in enumerate(entries)}
+    shown = [
+        p
+        for p in panels
+        if np.isfinite(metrics.loc[metrics["metric"] == p[0], "value"]).any()
+    ]
+    if not shown:
+        return None
+    fig, axes = _component_grid(len(shown), width=3.4, height=2.9)
+    for ax, (metric, panel_title, is_p) in zip(axes.flat, shown):
+        rows = metrics[metrics["metric"] == metric]
+        conditions = list(dict.fromkeys(rows["condition"]))
+        for k in range(n_components):
+            for ci, condition in enumerate(conditions):
+                sel = rows[
+                    (rows["component"] == k + 1) & (rows["condition"] == condition)
+                ]
+                if sel.empty:
+                    continue
+                values = np.full(len(entries), np.nan)
+                for entry, value in zip(sel["entry"], sel["value"]):
+                    values[position[entry]] = value
+                offset = (ci - (len(conditions) - 1) / 2) * 0.12 + (
+                    k - (n_components - 1) / 2
+                ) * 0.04
+                ls, marker = COMPARISON_CONDITION_STYLES.get(condition, ("-.", "v"))
+                ax.plot(
+                    np.arange(len(entries)) + offset,
+                    values,
+                    ls=ls if connect else "none",
+                    marker=marker,
+                    ms=4.5,
+                    lw=1.1,
+                    color=_component_color(k),
+                    mfc="white" if condition == "Psilocybin" else _component_color(k),
+                )
+        if is_p:
+            ax.set_yscale("log")
+            ax.axhline(alpha, color="red", ls="--", lw=0.7)
+        else:
+            ax.axhline(0.0, color="0.6", lw=0.6)
+        _entry_axis(ax, entries)
+        ax.set_title(panel_title, fontsize=8)
+        ax.tick_params(which="both", labelsize=7)
+
+    handles = [
+        plt.Line2D([], [], color=_component_color(k), lw=1.5, label=f"CC {k + 1}")
+        for k in range(n_components)
+    ]
+    used = list(dict.fromkeys(metrics["condition"]))
+    handles += [
+        plt.Line2D(
+            [],
+            [],
+            color="0.3",
+            ls=COMPARISON_CONDITION_STYLES.get(c, ("-.", "v"))[0],
+            marker=COMPARISON_CONDITION_STYLES.get(c, ("-.", "v"))[1],
+            mfc="white" if c == "Psilocybin" else "0.3",
+            label=c or "fit (no condition)",
+        )
+        for c in used
+    ]
+    fig.legend(
+        handles=handles, loc="outside lower center", ncol=len(handles), fontsize=8
+    )
+    fig.suptitle(title, fontsize=10)
+    save_fig(fig, save_path)
+    return fig
+
+
+def plot_comparison_topomaps(
+    maps: Sequence[np.ndarray],
+    infos: Sequence,
+    row_labels: Sequence[str],
+    n_components: int,
+    *,
+    isc: Sequence[np.ndarray],
+    reference_r: Sequence[Optional[np.ndarray]],
+    title: str,
+    save_path: Optional[Path] = None,
+    cmap="RdBu_r",
+):
+    """One row per compared fit, one column per component, each panel on its own
+    symmetric scale (a CorrCA component's scale is the fit's, not a shared one).
+
+    :param maps: Per row, ``(K, C)`` shared maps (filters or forward patterns).
+    :param infos: Per row, the MNE ``Info`` of its ``C`` channels.
+    :param row_labels: Per row, the fit's label.
+    :param n_components: Leading components drawn.
+    :param isc: Per row, ``(K,)`` the fit's ISC, shown in each panel title.
+    :param reference_r: Per row, ``(K,)`` Pearson r of each map with the first
+        row's same component, or ``None`` (the first row, other channels).
+    :param title: Figure title.
+    :param save_path: Optional output path.
+    :return: The figure, or ``None`` with no rows.
+    """
+    from mne.viz import plot_topomap
+
+    if not maps:
+        return None
+    fig, axes = plt.subplots(
+        len(maps),
+        n_components,
+        figsize=(2.3 * n_components + 1.2, 2.5 * len(maps)),
+        squeeze=False,
+        layout="constrained",
+    )
+    for r, (row_maps, info, label) in enumerate(zip(maps, infos, row_labels)):
+        for k in range(n_components):
+            ax = axes[r, k]
+            if k >= row_maps.shape[0]:
+                ax.set_visible(False)
+                continue
+            vlim = safe_vlim(row_maps[k])
+            plot_topomap(
+                row_maps[k],
+                topo_info_subset(info, row_maps.shape[1]),
+                axes=ax,
+                show=False,
+                cmap=cmap,
+                vlim=(-vlim, vlim),
+                contours=4,
+            )
+            text = f"CC {k + 1}  ISC {isc[r][k]:.3f}"
+            if reference_r[r] is not None and np.isfinite(reference_r[r][k]):
+                text += f"\nr vs top row {reference_r[r][k]:+.2f}"
+            ax.set_title(text, fontsize=7)
+        axes[r, 0].text(
+            -0.25,
+            0.5,
+            label,
+            transform=axes[r, 0].transAxes,
+            rotation=90,
+            ha="center",
+            va="center",
+            fontsize=8,
+        )
+    fig.suptitle(title, fontsize=10)
+    save_fig(fig, save_path)
+    return fig
+
+
+def plot_comparison_courses(
+    courses: Sequence[Mapping[str, np.ndarray]],
+    times: np.ndarray,
+    row_labels: Sequence[str],
+    n_components: int,
+    *,
+    window: tuple[float, float],
+    p_values: Sequence[Optional[np.ndarray]],
+    title: str,
+    save_path: Optional[Path] = None,
+):
+    """Trial-normalised SNR course per condition: one row per compared fit, one
+    column per component, every panel on one y-scale.
+
+    :param courses: Per row, condition → ``(participants, K, W)`` courses (each
+        participant's median over trials, in pre-onset SD units).
+    :param times: ``(W,)`` seconds from onset.
+    :param row_labels: Per row, the fit's label.
+    :param n_components: Leading components drawn.
+    :param window: The stimulus window the contrast was scored on, shaded.
+    :param p_values: Per row, ``(K,)`` the condition contrast's p, or ``None``.
+    :param title: Figure title.
+    :param save_path: Optional output path.
+    :return: The figure, or ``None`` with no rows.
+    """
+    if not courses:
+        return None
+    fig, axes = plt.subplots(
+        len(courses),
+        n_components,
+        figsize=(3.0 * n_components, 2.2 * len(courses)),
+        squeeze=False,
+        sharex=True,
+        sharey=True,
+        layout="constrained",
+    )
+    for r, (by_condition, label) in enumerate(zip(courses, row_labels)):
+        for k in range(n_components):
+            ax = axes[r, k]
+            ax.axvspan(*window, color="0.9", zorder=0)
+            for condition, data in by_condition.items():
+                if k < data.shape[1]:
+                    _mean_band(
+                        ax,
+                        times,
+                        data[:, k],
+                        CONDITION_COLORS.get(condition, "0.4"),
+                        f"{condition} (n={data.shape[0]})",
+                    )
+            _onset_lines(ax, times)
+            text = f"{label} — CC {k + 1}"
+            if p_values[r] is not None and np.isfinite(p_values[r][k]):
+                text += f"\ncontrast p {p_values[r][k]:.3g}"
+            ax.set_title(text, fontsize=7)
+            if r == 0 and k == n_components - 1:
+                ax.legend(fontsize=6, loc="upper right")
+    for ax in axes[:, 0]:
+        ax.set_ylabel("SNR (pre-onset SD)", fontsize=8)
+    for ax in axes[-1]:
+        ax.set_xlabel("Time relative to onset (s)", fontsize=8)
+    fig.suptitle(title, fontsize=10)
+    save_fig(fig, save_path)
+    return fig
+
+
+#: The two terms of the CorrCA ratio: column stem, row label.
+_VARIANCE_TERMS = {
+    "within": "R_w term: variance per unit filter",
+    "between": "R_b term: shared covariance per unit filter",
+}
+
+
+def plot_comparison_variance_terms(
+    per_participant: pd.DataFrame,
+    tests: pd.DataFrame,
+    entries: Sequence[str],
+    n_components: int,
+    *,
+    title: str,
+    save_path: Optional[Path] = None,
+):
+    """The two terms of each component's ISC per condition, across the compared fits.
+
+    Row 1 is ``R_w``'s term (the variance the component carries), row 2 ``R_b``'s
+    (its covariance with the other participants); a column per component. Per fit
+    and condition: every participant a small dot, the condition mean a bar; the
+    paired test's p over the pair.
+
+    :param per_participant: ``entry``, ``component``, ``condition``,
+        ``participant``, ``within``, ``between``.
+    :param tests: ``entry``, ``component``, ``term`` (``within`` / ``between``),
+        ``p_value``; may be empty.
+    :param entries: The compared fits, in x order.
+    :param n_components: Leading components drawn.
+    :param title: Figure title.
+    :param save_path: Optional output path.
+    :return: The figure, or ``None`` with no data.
+    """
+    if per_participant.empty:
+        return None
+    entries = list(entries)
+    conditions = list(dict.fromkeys(per_participant["condition"]))
+    width = 0.32
+    fig, axes = plt.subplots(
+        len(_VARIANCE_TERMS),
+        n_components,
+        figsize=(max(3.0, 0.9 * len(entries)) * n_components, 5.6),
+        squeeze=False,
+        sharex=True,
+        layout="constrained",
+    )
+    for r, (term, row_label) in enumerate(_VARIANCE_TERMS.items()):
+        for k in range(n_components):
+            ax = axes[r, k]
+            rows = per_participant[per_participant["component"] == k + 1]
+            for e, entry in enumerate(entries):
+                for ci, condition in enumerate(conditions):
+                    values = rows.loc[
+                        (rows["entry"] == entry) & (rows["condition"] == condition),
+                        term,
+                    ].to_numpy()
+                    if values.size == 0:
+                        continue
+                    x = e + (ci - (len(conditions) - 1) / 2) * width
+                    color = CONDITION_COLORS.get(condition, "0.4")
+                    ax.scatter(
+                        np.full(values.size, x),
+                        values,
+                        s=9,
+                        color=color,
+                        alpha=0.6,
+                        lw=0,
+                        zorder=2,
+                    )
+                    ax.hlines(
+                        values.mean(),
+                        x - width / 2.5,
+                        x + width / 2.5,
+                        color=color,
+                        lw=2.2,
+                        zorder=3,
+                    )
+                test = (
+                    tests[
+                        (tests["entry"] == entry)
+                        & (tests["component"] == k + 1)
+                        & (tests["term"] == term)
+                    ]
+                    if not tests.empty
+                    else tests
+                )
+                if not test.empty and np.isfinite(test["p_value"].iloc[0]):
+                    ax.annotate(
+                        f"p {test['p_value'].iloc[0]:.2g}",
+                        (e, 1.0),
+                        xycoords=("data", "axes fraction"),
+                        ha="center",
+                        va="top",
+                        fontsize=6,
+                    )
+            if term == "within":
+                ax.set_yscale("log")
+            else:
+                ax.axhline(0.0, color="0.6", lw=0.6)
+            _entry_axis(ax, entries)
+            ax.tick_params(which="both", labelsize=7)
+            if r == 0:
+                ax.set_title(f"CC {k + 1}", fontsize=9)
+            if k == 0:
+                ax.set_ylabel(row_label, fontsize=8)
+    handles = [
+        plt.Line2D(
+            [], [], color=CONDITION_COLORS.get(c, "0.4"), marker="o", ls="", label=c
+        )
+        for c in conditions
+    ]
+    fig.legend(
+        handles=handles, loc="outside lower center", ncol=len(handles), fontsize=8
+    )
+    fig.suptitle(title, fontsize=10)
+    save_fig(fig, save_path)
+    return fig
+
+
+def plot_comparison_variance_shift(
+    influence: pd.DataFrame,
+    entries: Sequence[str],
+    n_components: int,
+    *,
+    title: str,
+    save_path: Optional[Path] = None,
+):
+    """How each ISC term moves when one participant is left out, across the fits.
+
+    Per left-out participant: the refit (filled) and the full fit's filter on the
+    reduced data (hollow), as ``Δ within / within`` (row 1, relative) and
+    ``Δ between / within`` (row 2, in ISC units, so it reads as the ISC change the
+    shared covariance alone would make).
+
+    :param influence: ``entry``, ``component`` and the ``within_*`` / ``between_*``
+        columns of :func:`~src.analysis.corrca.leave_group_out_influence`, one row
+        per (entry, left-out participant, component).
+    :param entries: The compared fits, in x order.
+    :param n_components: Leading components drawn.
+    :param title: Figure title.
+    :param save_path: Optional output path.
+    :return: The figure, or ``None`` with no data.
+    """
+    if influence.empty:
+        return None
+    entries = list(entries)
+    readings = {
+        "without": ("refit", True, -0.12),
+        "fixed": ("full filter", False, 0.12),
+    }
+    labels = {
+        "within": "Δ R_w term / R_w term (full)",
+        "between": "Δ R_b term / R_w term (full)",
+    }
+    fig, axes = plt.subplots(
+        2,
+        n_components,
+        figsize=(max(3.0, 0.8 * len(entries)) * n_components, 5.4),
+        squeeze=False,
+        sharex=True,
+        layout="constrained",
+    )
+    for r, term in enumerate(("within", "between")):
+        for k in range(n_components):
+            ax = axes[r, k]
+            rows = influence[influence["component"] == k + 1]
+            for e, entry in enumerate(entries):
+                sel = rows[rows["entry"] == entry]
+                if sel.empty:
+                    continue
+                for reading, (_label, filled, offset) in readings.items():
+                    shift = (sel[f"{term}_{reading}"] - sel[f"{term}_full"]) / sel[
+                        "within_full"
+                    ]
+                    ax.scatter(
+                        np.full(len(shift), e + offset),
+                        shift,
+                        s=12,
+                        facecolor=_component_color(k) if filled else "white",
+                        edgecolor=_component_color(k),
+                        lw=0.8,
+                        zorder=2,
+                    )
+            ax.axhline(0.0, color="0.6", lw=0.6)
+            _entry_axis(ax, entries)
+            ax.tick_params(which="both", labelsize=7)
+            if r == 0:
+                ax.set_title(f"CC {k + 1}", fontsize=9)
+            if k == 0:
+                ax.set_ylabel(labels[term], fontsize=8)
+    handles = [
+        plt.Line2D(
+            [],
+            [],
+            marker="o",
+            ls="",
+            color="0.3",
+            mfc="0.3" if filled else "white",
+            label=f"{label}, participant left out",
+        )
+        for label, filled, _offset in readings.values()
+    ]
+    fig.legend(handles=handles, loc="outside lower center", ncol=2, fontsize=8)
+    fig.suptitle(title, fontsize=10)
     save_fig(fig, save_path)
     return fig

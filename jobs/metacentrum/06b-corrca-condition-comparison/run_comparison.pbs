@@ -1,0 +1,151 @@
+#!/bin/bash
+#PBS -N PSILO_CORRCA_06B_COMPARISON
+#PBS -l walltime=2:00:00
+#PBS -l select=1:ncpus=1:mem=8gb:scratch_local=1gb
+#PBS -m ae
+#PBS -j oe
+
+# ---------------------------------------------------------------------------
+# Stage-06b CorrCA — the fits side by side. READ-ONLY: nothing is fitted.
+#
+# scripts/run_corrca_comparison.py (the same code as
+# notebooks/06b-corrca-condition-comparison/corrca_comparison_{pca,band,join}.ipynb) reads the
+# full-montage, raw-power fit of each compared run (never _log, _roi, _non_roi)
+# and compares CC 1-3 by index:
+#   - ISC: the fit's own, per condition on the whole recording and on the
+#     onset-locked maps
+#   - held out: median held-out ISC, in-sample - held-out gap, topography |r|
+#     of the leave-one-participant-out refits
+#   - Placebo vs Psilocybin p: LOO-ISC (whole, onset), SNR contrast (40 Hz,
+#     0-0.5 s and 0.2-0.5 s), R_w and R_b terms
+#   - SNR courses per condition, shared filters and forward patterns
+#   - the two terms of each ISC (R_w's, R_b's) per condition and participant,
+#     from the stored sources, and how they move with a participant left out
+#     (from the influence CSV; fits run before those columns existed are
+#     skipped with a warning -- rerun their fit job to add them)
+#
+# Three comparisons (COMPARE picks them):
+#   pca  : RUN at every PCAS                                  (broadband)
+#   band : each of RUNS at N_PCA, broadband / 1-30hz / 30-50hz, one call per run
+#   join : RUNS against each other at N_PCA, once per JOIN_BANDS band
+# RUNS: any of separate placebo_fit tracks individual (individual = each
+# condition fitted alone, two rows, never paired).
+# A missing store, CSV or grid is a warning and a gap, never an error, so the
+# job runs on whatever fits exist. It needs the fit jobs (run_condition_*.pbs,
+# run_individual_conditions*.pbs) at those N_PCA, with their SNR grids.
+#
+# qsub -v RUN=separate,PCAS="3 5 10 20 30",N_PCA=10,COMPARE="pca join"
+# qsub -v N_PCA=10,COMPARE="band join",JOIN_BANDS="broadband 30-50hz"
+# (defaults: RUN=tracks, PCAS="3 5 10 20", N_PCA=5, COMPARE="pca band join",
+#  RUNS="tracks separate placebo_fit", JOIN_BANDS=broadband).
+#
+# Output:
+#   plots/06b-corrca-condition-comparison/Comparison_ASSR/
+#       broadband/pca__<variant>/            # pca
+#       band__<variant>/pca_<N>/             # band, one per run of RUNS
+#       {broadband,bands}/join__<RUNS joined by ->/pca_<N>/   # join
+#           (a band's files carry its '<band>_' prefix)
+#           corrca_comparison_{metrics,topomap_filter,topomap_pattern,
+#                              snr_course,variance_terms,variance_shift}.png
+#           corrca_comparison_metrics.csv, _variance_terms.csv,
+#           _variance_terms_tests.csv, _variance_shift.csv
+#
+# MEMORY: one store at a time, only CC 1-3 kept, streamed one recording at a
+# time: a 20-component broadband store peaks at ~1.5 GB (measured: 0.8 GB for a
+# 5-component 30-50 Hz store). CPU: single-threaded numpy.
+# ---------------------------------------------------------------------------
+
+set -e
+
+cleanup() {
+  echo "Running clean_scratch at $(date)"
+  clean_scratch
+}
+trap cleanup EXIT
+
+echo "Task started at $(date)"
+
+PROJECT_NAME="psilocybin-eeg"
+SERVER_LOCATION="praha1"
+DATADIR="/storage/$SERVER_LOCATION/home/$USER/$PROJECT_NAME"
+SIF_IMAGE="/storage/$SERVER_LOCATION/home/$USER/singularity-images/psilo_music_new.sif"
+
+export TMPDIR=$SCRATCHDIR
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+
+test -n "$SCRATCHDIR" || {
+  echo >&2 "SCRATCHDIR is not set!"
+  exit 1
+}
+
+cd "$DATADIR" || {
+  echo >&2 "Failed to enter DATADIR"
+  exit 1
+}
+
+cd "$SCRATCHDIR"
+
+RUN="${RUN:-tracks}"
+PCAS="${PCAS:-3 5 10 20}"
+N_PCA="${N_PCA:-5}"
+COMPARE="${COMPARE:-pca band join}"
+RUNS="${RUNS:-tracks separate placebo_fit}"
+JOIN_BANDS="${JOIN_BANDS:-broadband}"
+echo "run: $RUN, n_pca sweep: $PCAS, n_pca: $N_PCA, comparisons: $COMPARE," \
+     "runs: $RUNS, join bands: $JOIN_BANDS"
+
+# The runner heredoc below is quoted, so these are read from the container
+# environment at run time rather than substituted here.
+for VAR in RUN PCAS N_PCA COMPARE RUNS JOIN_BANDS; do
+  export "SINGULARITYENV_$VAR=${!VAR}" "APPTAINERENV_$VAR=${!VAR}"
+done
+
+cat << 'EOF' > run_inside.sh
+#!/bin/bash
+set -e
+source /opt/myproject/.venv/bin/activate
+
+DATA_DIR="/mnt/data/processed"
+COMMON=(
+    --experiment assr
+    --music_type ASSR
+    --conditions Placebo Psilocybin
+    --components 3
+    --snr_selection 40hz
+    --snr_windows 0-0.5s 0.2-0.5s
+    --store_dir "$DATA_DIR"
+    --fit_plots_dir /mnt/plots
+    --results_dir /mnt/results/assr
+    --save_dir /mnt/plots
+)
+
+for MODE in $COMPARE; do
+    echo "=== comparison: $MODE at $(date) ==="
+    case "$MODE" in
+        pca)  python /mnt/scripts/run_corrca_comparison.py --compare pca \
+                  --run "$RUN" --n_pca $PCAS "${COMMON[@]}" ;;
+        band) for ONE in $RUNS; do
+                  python /mnt/scripts/run_corrca_comparison.py --compare band \
+                      --run "$ONE" --n_pca "$N_PCA" "${COMMON[@]}"
+              done ;;
+        join) for BAND in $JOIN_BANDS; do
+                  python /mnt/scripts/run_corrca_comparison.py --compare join \
+                      --runs $RUNS --band "$BAND" --n_pca "$N_PCA" "${COMMON[@]}"
+              done ;;
+        *) echo >&2 "unknown comparison $MODE"; exit 1 ;;
+    esac
+done
+EOF
+
+chmod +x run_inside.sh
+
+echo "Running inside Singularity at $(date)"
+
+singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
+    echo >&2 "Python script failed"
+    exit 1
+}
+
+echo "Task finished at $(date)"
+
+clean_scratch
