@@ -18,6 +18,11 @@ compared panel for panel.
 | SNR / contrast grid on the stored components (§5) | `scripts/run_corrca_snr_grid.py` | the same job, second step |
 | Compare fits across `n_pca`, bands or joins, read-only (§5d) | `scripts/run_corrca_comparison.py` | `run_comparison.pbs` |
 
+Every job in `jobs/metacentrum/06b-corrca-condition-comparison/` is set through `qsub -v`
+variables. Its header opens with USAGE (example submissions) and PARAMETERS (every
+variable, with its default); `bash <job>.pbs --help` prints that block without running
+anything, and `bash help.sh` in the same directory lists every job in one line each.
+
 **By default a job fits only the full montage on raw power**, and its SNR grid reads only
 that store's own sources (`full`). The other fits and readings are opt-in, with the same
 flags for the fit scripts and the readers (`qsub -v FITS="..."` in every job, any of the
@@ -607,10 +612,10 @@ grid is not touched. No `tf_baseline` file is written, because the maps are draw
 Only the per-participant medians of the normalised trials are stored, not the trials, so
 this re-reads the cache. The whole-recording TF maps (`condition_mean_tf_maps.png`) do
 not depend on the baseline and are not redrawn. The read-only job
-`run_snr_grid_baseline.pbs` runs this for every run: on the broadband and 30-50 Hz
-stores, and on both band-swap readings. Use `qsub -v BASELINE=lo:hi` for another window,
-`VARIANTS=<one run>` to split the runs across jobs, and `TF_MAPS=0` to read the cache at
-the 40 Hz bins only.
+`run_snr_grid_baseline.pbs` runs this for the runs in `RUNS` (default `tracks`): on the
+broadband and 30-50 Hz stores, and on both band-swap readings. Use `qsub -v
+BASELINE=lo:hi` for another window, `RUNS="separate placebo_fit"` for other runs, and
+`TF_MAPS=0` to read the cache at the 40 Hz bins only.
 
 ### Raw voltages through the topographies
 
@@ -666,8 +671,8 @@ Figures go to a `raw_weighted/` subdirectory of each fit's directory, for each r
 - `participants/`: one grid per weighting.
 
 All figures of one call share two y-ranges, over both readouts: one for the curves and
-one for the differences. The job reads all three runs in one call, so this holds
-across every fit, band and run. `--ylim` / `--ylim_diff` pin them by hand. Every panel
+one for the differences. The job reads every run of `RUNS` (default `tracks`) and band
+of `BANDS` in one call, so this holds across every fit, band and run read. `--ylim` / `--ylim_diff` pin them by hand. Every panel
 marks the stimulus onset (dashed) and offset (dotted). The uniform reference is a
 dashed dark-grey line in the overlays and has a grey panel face where it has its own
 panel.
@@ -725,7 +730,10 @@ and rerunning the fit job adds them.
 
 The stores are read with only the compared components, one recording at a time
 (`load_iva_components(..., components=)`). A missing store, CSV or grid leaves a gap
-and a warning. A 1-30 Hz fit has no SNR grid. A band store's grid file is named
+and a warning. A 1-30 Hz fit has no 40 Hz bin and so no SNR grid of its own: its SNR
+rows (contrast p-values and courses) are its filters read on the broadband input, the
+band-swap grid (`--swap_band 1-30hz`, `run_band_swap.pbs`), marked as such in the
+figures, and a gap until that has run. A band store's grid file is named
 `__bands__` whatever its band, so the 30-50 Hz grid is the one read.
 
 Outputs, in `plots/06b-corrca-condition-comparison/Comparison_<MusicType>/`:

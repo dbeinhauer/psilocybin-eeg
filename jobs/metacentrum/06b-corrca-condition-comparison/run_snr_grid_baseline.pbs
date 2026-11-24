@@ -5,65 +5,75 @@
 #PBS -m ae
 #PBS -j oe
 
-# ---------------------------------------------------------------------------
-# DEFAULT: only each run's full-montage, raw-power store is read. qsub -v
-# FITS="<any of: log_power roi_fit non_roi_fit roi_masked>" adds the other
-# stores (as the fit jobs' FITS made them) and, with roi_masked / log_power, the masked and swapped_filter rows.
+# ===========================================================================
+# run_snr_grid_baseline.pbs
+#   The SNR grid and the stimulus-averaged TF maps on ANOTHER BASELINE. READ-ONLY.
+#   Stage 06b; the default figures and files are not touched
 #
-# Stage-06b CorrCA — the SNR grid and the stimulus-averaged TF maps again,
-# normalised by ANOTHER BASELINE.
-# READ-ONLY: nothing is fitted, and the default figures and files are not touched.
+# USAGE   (bash run_snr_grid_baseline.pbs --help prints this block)
+#   qsub run_snr_grid_baseline.pbs
+#       the tracks run at N_PCA=5, baseline -300 to -50 ms
+#   qsub -v BASELINE=-0.25:-0.05,RUNS=separate run_snr_grid_baseline.pbs
+#       another window and run
+#   qsub -v TF_MAPS=0 run_snr_grid_baseline.pbs
+#       the grid only (the cache read at 40 Hz, several times faster)
+#   qsub -v STORE_BANDS="",SWAP_BANDS=1-30hz run_snr_grid_baseline.pbs
+#       the broadband grid and one band-swap reading only
+#
+# PARAMETERS   (qsub -v NAME=value,NAME2="a b"; the defaults in brackets)
+#   BASELINE       [-0.3:-0.05]  pre-stimulus window, seconds lo:hi (hi <= 0); 'default'
+#                            = the whole pre-onset span, i.e. the fit jobs' own grid
+#                            and maps redrawn into the usual directories (overwriting)
+#   RUNS           [tracks]  which runs, any of: tracks (time-axis join),
+#                            separate (subject-axis join), placebo_fit (separate,
+#                            filters fitted on Placebo), individual (each condition
+#                            alone)
+#   N_PCA          [5]       the component count of the stores read
+#   STORE_BANDS    [30-50hz] band stores whose own grid is also redone ("" = none;
+#                            1-30hz has no 40 Hz bin)
+#   SWAP_BANDS     [30-50hz 1-30hz]  band-swap readings of the broadband store ("" = none)
+#   TF_MAPS        [1]       1: also the TF maps at every store frequency; 0: grid only
+#   FITS           [none]    also read the runs' other fits, any of: log_power,
+#                            roi_fit, non_roi_fit, roi_masked (as the fit jobs'
+#                            FITS made them; see run_condition_tracks.pbs --help)
+# END USAGE
+#
+# WHAT IT DOES
 #
 # scripts/run_corrca_snr_grid.py --baseline=<lo>:<hi> normalises every trial by
-# that pre-stimulus window (default -0.3:-0.05 s) instead of the whole
-# pre-onset span: its own mean subtracted, divided by the SD pooled over
-# trials, and the ROI reference likewise. The trials are not stored (only
-# their medians), so the cache is read again, at every store frequency for
-# the TF maps (--masked_tf_maps).
+# that pre-stimulus window instead of the whole pre-onset span: its own mean
+# subtracted, divided by the SD pooled over trials, and the ROI reference
+# likewise. The trials are not stored (only their medians), so the cache is
+# read again. Per run, with the fit jobs' grid settings (0 and +-5 Hz, windows
+# 0-0.5 s and 0.2-0.5 s, contrast / discrimination / snr tests): (1) the
+# store's own grid, broadband and each of STORE_BANDS; (2) the band-swap
+# reading of the broadband store for each of SWAP_BANDS. A run whose full store
+# is missing fails on its own; the job carries on and exits 1 at the end.
 #
-# Into <fit dir>/baseline_<lo>_<hi>ms/, laid out like the fit's directory:
+# OUTPUT   (into <fit dir>/baseline_<lo>_<hi>ms/, laid out like the fit's directory)
 #   snr_grid/<selection>/<window>/*.png      the grid figures
-#   condition_mean_tf_maps_onset.png         stored sources, every component
-#   roi_masked_*, non_roi_masked_*           every component
+#   condition_mean_tf_maps_onset.png         the stored sources, every component
+#   roi_masked_*, non_roi_masked_*           with FITS roi_masked
 #   swapped_filter_*, band_swapped_filter_<band>_*   CC 1-3
 #   participants/*onset_*                    the same per participant
-#
-# For each run (joined separate, joined tracks, individual conditions), with
-# the fit jobs' grid settings (0 and +-5 Hz, windows 0-0.5 s and 0.2-0.5 s,
-# contrast / discrimination / snr tests):
-#   1. every store's own grid, broadband and each of STORE_BANDS
-#      (default 30-50hz; 1-30hz has no 40 Hz bin of its own)
-#   2. the band-swap reading on broadband (--swap_band), each of SWAP_BANDS
-#      (default "30-50hz 1-30hz")
-# Needs the stores; a missing optional one (_log, _roi, ...) is skipped with a
-# warning. A run whose full store is missing (today: individual conditions)
-# fails on its own; the job carries on and exits 1 at the end.
-#
-# qsub -v BASELINE=-0.25:-0.05 another window (seconds, lo:hi, hi <= 0).
-# qsub -v BASELINE=default the whole pre-onset span, i.e. the fit jobs' own
-#   grid and TF maps redrawn READ-ONLY into the usual directories (overwriting
-#   them), without refitting.
-# qsub -v VARIANTS=corrca_channel_joined_separate one run per job, to run the
-#   runs in parallel (each ~half the walltime).
-# qsub -v TF_MAPS=0 only the grid and the stored sources' onset maps: the
-#   cache read at the 40 Hz bins only, several times faster.
-# qsub -v N_PCA=10 reads another component count (default 5).
-# qsub -v STORE_BANDS="" SWAP_BANDS=1-30hz only the broadband grid and one
-#   band-swap reading.
-#
-# Output:
-#   plots/06b-corrca-condition-comparison/<Join>_ASSR/<spectrum>/<variant>/pca_<N>/
-#       baseline_<lo>_<hi>ms/   (see above)
 #   results/assr/assr_snr_grid_baseline_<lo>_<hi>ms__<variant>__<spectrum>__pca<N>*
 #   results/assr/corrca_band_swap_snr_baseline_<lo>_<hi>ms__<variant>__<band>__pca<N>*
 #
-# TIME: a cache pass at every frequency took ~16 s per participant and
-# condition on a 20000-sample cut (local test), so ~15 min per store at full
-# length; ~21 passes per run (6 stores x broadband, 30-50hz, two swaps).
-# MEMORY: one ~1 GB store, and per condition three (P, 5, 50, T) float32
-# projections (~2 GB each). CPU: numpy z-scoring is single-threaded; the
-# projections use BLAS.
-# ---------------------------------------------------------------------------
+# RESOURCES
+#   A cache pass at every frequency takes ~15 min per store at full length,
+#   four passes per run by default (broadband, 30-50hz, two swaps): walltime 2
+#   h covers one run; raise it for several RUNS or with FITS. Memory: one ~1 GB
+#   store and per condition three (P, 5, 50, T) float32 projections (~2 GB
+#   each), growing with N_PCA. numpy z-scoring is single-threaded; the
+#   projections use BLAS.
+# ===========================================================================
+
+# --help: print the USAGE block above and exit, without submitting or running
+# anything (bash <this job>.pbs --help).
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    sed -n '/^# USAGE/,/^# END USAGE/{/^# END USAGE/d;s/^# \{0,1\}//;p}' "$0"
+    exit 0
+fi
 
 set -e
 
@@ -98,17 +108,15 @@ cd "$SCRATCHDIR"
 N_PCA="${N_PCA:-5}"
 BASELINE="${BASELINE:--0.3:-0.05}"
 STORE_BANDS="${STORE_BANDS-30-50hz}"
-ALL_VARIANTS="corrca_channel_joined_separate corrca_channel_joined_tracks"
-ALL_VARIANTS+=" corrca_channel_individual_conditions"
-VARIANTS="${VARIANTS:-$ALL_VARIANTS}"
+RUNS="${RUNS:-tracks}"
 TF_MAPS="${TF_MAPS:-1}"
 SWAP_BANDS="${SWAP_BANDS-30-50hz 1-30hz}"
 echo "PCA dimensions: $N_PCA, baseline: $BASELINE s, store bands: broadband" \
-     "$STORE_BANDS, band swaps: $SWAP_BANDS, runs: $VARIANTS, TF maps: $TF_MAPS"
+     "$STORE_BANDS, band swaps: $SWAP_BANDS, runs: $RUNS, TF maps: $TF_MAPS"
 
 # The runner heredoc below is quoted, so these are read from the container
 # environment at run time rather than substituted here.
-for NAME in N_PCA BASELINE STORE_BANDS SWAP_BANDS VARIANTS TF_MAPS; do
+for NAME in N_PCA BASELINE STORE_BANDS SWAP_BANDS RUNS TF_MAPS; do
   export "SINGULARITYENV_$NAME=${!NAME}" "APPTAINERENV_$NAME=${!NAME}"
 done
 
@@ -122,6 +130,18 @@ set -e
 source /opt/myproject/.venv/bin/activate
 
 DATA_DIR="/mnt/data/processed"
+
+# RUNS -> store variants (the full fit of each; FITS adds its other fits).
+VARIANTS=""
+for RUN in ${RUNS:-tracks}; do
+    case "$RUN" in
+        separate)    VARIANTS+=" corrca_channel_joined_separate" ;;
+        tracks)      VARIANTS+=" corrca_channel_joined_tracks" ;;
+        placebo_fit) VARIANTS+=" corrca_channel_placebo_fit" ;;
+        individual)  VARIANTS+=" corrca_channel_individual_conditions" ;;
+        *) echo >&2 "unknown RUNS entry: $RUN"; exit 1 ;;
+    esac
+done
 
 # Opt-in stores and readings (FITS); the full-montage raw-power store always.
 FIT_FLAGS=()

@@ -5,71 +5,78 @@
 #PBS -m ae
 #PBS -j oe
 
-# ---------------------------------------------------------------------------
-# DEFAULT: only the full montage on raw power is fitted, and only its stored
-# sources ('full') are read by the grid. qsub -v FITS="<any of: log_power roi_fit
-# non_roi_fit roi_masked>" adds the log-power twins, the ROI / non-ROI cuts, the
-# masked readings (roi_masked, non_roi_masked) and, with log_power, the
-# swapped_filter rows. The fits and memory below describe every fit selected;
-# the full fit alone needs the raw tensor plus one full-montage fit.
+# ===========================================================================
+# run_condition_tracks_1_30hz.pbs
+#   CorrCA on the time-axis join (tracks), 1-30 Hz, fit only
+#   Stage 06b. Band twins: run_condition_tracks{,_gamma,_1_30hz}.pbs
 #
-# RESOURCES: memory and CPUs as for every fit (mem=350gb, ncpus=4,
-# --parallel_fits 2), so any FITS selection fits; only the walltime is sized for
-# the default full fit (2:00:00). With FITS, request the old walltime too: qsub
-# -l walltime=2:00:00. PARALLEL_FITS (default 2) sets how many fits run at once.
+# USAGE   (bash run_condition_tracks_1_30hz.pbs --help prints this block)
+#   qsub run_condition_tracks_1_30hz.pbs
+#       the full fit (full montage, raw power) at N_PCA=5
+#   qsub -v N_PCA=10 run_condition_tracks_1_30hz.pbs
+#       another component count
+#   qsub -v FITS="log_power roi_fit" run_condition_tracks_1_30hz.pbs
+#       add the log-power and ROI fits
+#   qsub -v FORCE_FIT=1 run_condition_tracks_1_30hz.pbs
+#       refit although a store for this N_PCA exists (default: read it back)
 #
-# Stage-06b CorrCA — condition comparison on the JOINED_TRACKS condition.
+# PARAMETERS   (qsub -v NAME=value,NAME2="a b"; the defaults in brackets)
+#   N_PCA          [5]     components = dimension of the covariance subspace
+#   FITS           [none]  extra fits and readings, any of:
+#                    log_power    the log10-power twin of each selected fit ('_log');
+#                                 a fit only
+#                    roi_fit      a fit on the ASSR ROI electrodes alone ('_roi')
+#                    non_roi_fit  a fit on every other electrode ('_non_roi')
+#                    roi_masked   the full fit read through the ROI and through the
+#                                 rest of the head (roi_masked_*, non_roi_masked_*)
+#                  The default walltime (2:00:00) covers any FITS.
+#   FORCE_FIT      [0]     1 refits each selected fit; 0 reads a stored one back
+#   PARALLEL_FITS  [2]     fits run at once (a memory budget, see RESOURCES)
+# END USAGE
 #
-# 1. FIT: scripts/run_corrca_condition_tracks.py (the same code as
-#    notebooks/06b-corrca-condition-comparison/corrca_channel_joined_tracks.ipynb)
-#    on full data. Each matched participant is one subject whose Placebo track is
-#    followed by their Psilocybin track; CorrCA fits ONE channel filter per
-#    component over both, so a component is the same spatial combination in both
-#    conditions by construction. The projected sources are split back into the
-#    two segments and each component's ISC is measured per condition.
-#    Z-scoring is per condition before concatenation (--zscore_mode
-#    per_condition): an overall power difference is normalised away.
+# WHAT IT DOES
 #
-#    Six fits from the ONE loaded tensor, in this order:
-#      1. full montage                    2. full montage on log power ('_log')
-#      3. ASSR ROI alone ('_roi')         4. every other electrode ('_non_roi')
-#      5. '_log_roi'                      6. '_log_non_roi'
-#    Each cut is made BEFORE the z-scoring (ROI -> z-score -> PCA -> CorrCA). The
-#    log-power fits take log10 of the power (floored at the dtype's smallest
-#    normal number) BEFORE any z-scoring. Both full-montage fits also draw their
-#    filter read through the ROI alone (roi_masked_*) and through the rest of the
-#    head (non_roi_masked_*). Only the ones FITS selects (see the top).
-#    The fits run in parallel, each in its own forked process reading the one
-#    loaded tensor; --parallel_fits caps how many at once (see MEMORY).
+# 1. FIT, scripts/run_corrca_condition_tracks.py (the same code as
+#    notebooks/06b-corrca-condition-comparison/corrca_channel_joined_tracks.ipynb).
+#    Each matched participant is one subject whose Placebo track is followed by
+#    their Psilocybin track, each z-scored on its own first (--zscore_mode
+#    per_condition: an overall power difference is normalised away). ONE filter
+#    per component over both tracks, so a component is the same spatial
+#    combination in both conditions; the sources are split back into the two
+#    segments for the per-condition ISC. One sign per component, from the
+#    shared pattern against the ASSR electrode mask.
 #
-#    A fit whose store for this N_PCA already exists is READ BACK, not refit
-#    (--skip_stored), and every figure is still drawn from it; the data is
-#    loaded either way, for the masked maps and any missing fit. A store
-#    fitted on other data is refused. qsub -v FORCE_FIT=1 refits all six.
+#    Fits, in this order, from the ONE loaded tensor: full, '_log', '_roi',
+#    '_non_roi', '_log_roi', '_log_non_roi' (only the full one unless FITS adds
+#    the others). An electrode cut is made BEFORE the z-scoring (ROI -> z-score
+#    -> PCA -> CorrCA); log10 power (floored at the dtype's smallest normal
+#    number) is taken BEFORE any z-scoring. N_PCA is the covariance subspace
+#    dimension, i.e. the component count. A fit whose store for this N_PCA
+#    exists is READ BACK (--skip_stored) and every figure is redrawn from it; a
+#    store fitted on other data is refused. Each fit also writes its
+#    leave-one-participant-out influence and the leave-subset-out refits the
+#    grid's robustness rows read.
 #
-# 1-30 HZ BAND (everything below gamma): the frequency axis is cut to 1-30 Hz
-# (--band_range 1 30) BEFORE the fit, so the filter is chosen on delta-beta
-# samples only, the counterpart of the 30-50 Hz (_gamma) run. Stored and plotted
-# under the band token '1-30hz' (plots under bands/, a '1-30hz_' prefix), beside
-# the broadband and 30-50 Hz runs rather than over either.
+#    BAND: 1-30 Hz, everything below gamma. The frequency axis is cut
+#    (--band_range 1 30) BEFORE the fit, so the filter is chosen on delta-beta
+#    alone. Stored and drawn under '1-30hz' (bands/, a '1-30hz_' prefix).
 #
-# FIT ONLY: no SNR grid. The grid reads its 'full' rows at 40 Hz on the store's
-# own bins, which a 1-30 Hz store does not have (it refuses such a store). Whether
-# these filters carry the 40 Hz response is read by run_band_swap.pbs instead:
-# the 1-30 Hz filters applied to the broadband input, at every frequency
-# (band_swapped_filter_1-30hz_* in the broadband fit's directory). Submit it
-# after this job (qsub -v BANDS=1-30hz run_band_swap.pbs).
+#    FIT ONLY, no SNR grid: the grid reads 40 Hz on the store's own bins, which
+#    a 1-30 Hz store does not have. Whether these filters carry the 40 Hz
+#    response is read by run_band_swap.pbs (the 1-30 Hz filters on the
+#    broadband input), submitted after this job and the broadband one.
 #
-# qsub -v N_PCA=10 fits another component count (default 5).
-#
-# Output:
+# OUTPUT
 #   plots/06b-corrca-condition-comparison/JoinedTracks_ASSR/bands/
-#       corrca_channel_joined_tracks/pca_<N>/       # + _log, _roi, _non_roi,
-#                                         _log_roi, _log_non_roi
-#           condition_mean_*, participants/, corrca_*,
-#           roi_masked_*, non_roi_masked_*,            # fit
+#       corrca_channel_joined_tracks[_log,_roi,...]/pca_<N>/
+#           1-30hz_condition_mean_tf_maps*, 1-30hz_corrca_*, influence/, participants/
 #   data/processed/assr/iva_results/JoinedTracks/
-#       corrca_channel_joined_tracks{,_log,_roi,_non_roi,_log_roi,_log_non_roi}__ASSR__1-30hz__pca<N>.npz   (unsplit)
+#       corrca_channel_joined_tracks[_log,...]__ASSR__1-30hz__pca<N>.npz (+ __subset_refits.npz)
+#
+# RESOURCES
+#   mem=350gb and ncpus=4 cover every fit at PARALLEL_FITS=2, so FITS never
+#   needs more memory; walltime=2:00:00 is sized for the default full fit and
+#   covers any FITS.
 #
 # MEMORY (499 GB is the hard cap). Loading peaks briefly at ~290 GB, as in
 # the broadband run (per-condition tensors, standardised segments and the
@@ -81,7 +88,14 @@
 # as their share of the channels: ROI ~0.2, non-ROI ~0.8), so ~230 GB. Do not
 # raise --parallel_fits without raising mem. Check resources_used.mem after a
 # run.
-# ---------------------------------------------------------------------------
+# ===========================================================================
+
+# --help: print the USAGE block above and exit, without submitting or running
+# anything (bash <this job>.pbs --help).
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    sed -n '/^# USAGE/,/^# END USAGE/{/^# END USAGE/d;s/^# \{0,1\}//;p}' "$0"
+    exit 0
+fi
 
 set -e
 

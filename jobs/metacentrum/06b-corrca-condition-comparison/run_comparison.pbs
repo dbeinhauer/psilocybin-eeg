@@ -5,55 +5,83 @@
 #PBS -m ae
 #PBS -j oe
 
-# ---------------------------------------------------------------------------
-# Stage-06b CorrCA — the fits side by side. READ-ONLY: nothing is fitted.
+# ===========================================================================
+# run_comparison.pbs
+#   CorrCA fits side by side across n_pca, bands or methods. READ-ONLY.
+#   Stage 06b; notebooks corrca_comparison_{pca,band,join}.ipynb
 #
-# scripts/run_corrca_comparison.py (the same code as
-# notebooks/06b-corrca-condition-comparison/corrca_comparison_{pca,band,join}.ipynb) reads the
-# full-montage, raw-power fit of each compared run (never _log, _roi, _non_roi)
-# and compares CC 1-3 by index:
-#   - ISC: the fit's own, per condition on the whole recording and on the
-#     onset-locked maps
-#   - held out: median held-out ISC, in-sample - held-out gap, topography |r|
-#     of the leave-one-participant-out refits
-#   - Placebo vs Psilocybin p: LOO-ISC (whole, onset), SNR contrast (40 Hz,
-#     0-0.5 s and 0.2-0.5 s), R_w and R_b terms
-#   - SNR courses per condition, shared filters and forward patterns
-#   - the two terms of each ISC (R_w's, R_b's) per condition and participant,
-#     from the stored sources, and how they move with a participant left out
-#     (from the influence CSV; fits run before those columns existed are
-#     skipped with a warning -- rerun their fit job to add them)
+# USAGE   (bash run_comparison.pbs --help prints this block)
+#   qsub run_comparison.pbs
+#       all three comparisons with the defaults below
+#   qsub -v COMPARE=pca,RUN=separate,PCAS="3 5 10 20 30" run_comparison.pbs
+#       one run across component counts
+#   qsub -v COMPARE=band,RUNS="tracks placebo_fit",N_PCA=10 run_comparison.pbs
+#       each run across broadband / 1-30 Hz / 30-50 Hz
+#   qsub -v COMPARE=join,RUNS="tracks separate placebo_fit individual" run_comparison.pbs
+#       the methods against each other
+#   qsub -v COMPARE=join,JOIN_BANDS="broadband 30-50hz" run_comparison.pbs
+#       the methods, once per band
 #
-# Three comparisons (COMPARE picks them):
-#   pca  : RUN at every PCAS                                  (broadband)
-#   band : each of RUNS at N_PCA, broadband / 1-30hz / 30-50hz, one call per run
-#   join : RUNS against each other at N_PCA, once per JOIN_BANDS band
-# RUNS: any of separate placebo_fit tracks individual (individual = each
-# condition fitted alone, two rows, never paired).
-# A missing store, CSV or grid is a warning and a gap, never an error, so the
-# job runs on whatever fits exist. It needs the fit jobs (run_condition_*.pbs,
-# run_individual_conditions*.pbs) at those N_PCA, with their SNR grids.
+# PARAMETERS   (qsub -v NAME=value,NAME2="a b"; the defaults in brackets)
+#   COMPARE        [pca band join]  which comparisons, one call each:
+#                    pca   RUN at every PCAS (broadband)
+#                    band  each of RUNS at N_PCA: broadband, 1-30hz, 30-50hz
+#                    join  RUNS against each other at N_PCA, per JOIN_BANDS band
+#   RUN            [tracks]   the run of the pca comparison
+#   PCAS           [3 5 10 20]  the component counts of the pca comparison
+#   RUNS           [tracks separate placebo_fit]  the runs of band and join, any of
+#                    tracks, separate, placebo_fit, individual; in join the first
+#                    is the topomaps' reference row
+#   N_PCA          [5]        the component count of band and join
+#   JOIN_BANDS     [broadband]  the band(s) join runs in: broadband, 30-50hz, 1-30hz
+# END USAGE
 #
-# qsub -v RUN=separate,PCAS="3 5 10 20 30",N_PCA=10,COMPARE="pca join"
-# qsub -v N_PCA=10,COMPARE="band join",JOIN_BANDS="broadband 30-50hz"
-# (defaults: RUN=tracks, PCAS="3 5 10 20", N_PCA=5, COMPARE="pca band join",
-#  RUNS="tracks separate placebo_fit", JOIN_BANDS=broadband).
+# WHAT IT DOES
 #
-# Output:
+# scripts/run_corrca_comparison.py reads the FULL fit (full montage, raw power)
+# of each compared run and compares CC 1-3 by index (never re-matched):
+#   - ISC: the fit's own (in-sample), per condition on the whole recording and on
+#     the onset-locked maps
+#   - held out: median held-out ISC, in-sample - held-out gap, topography |r| of
+#     the leave-one-participant-out refits (median, worst)
+#   - Placebo vs Psilocybin p (uncorrected): LOO-ISC whole and onset, SNR contrast
+#     at 40 Hz in 0-0.5 s and 0.2-0.5 s, the R_w and R_b terms
+#   - SNR courses per condition; shared filters and forward patterns as topomaps
+#   - the two terms of each ISC (R_w: the component's variance, R_b: its
+#     covariance with the others) per condition and participant, from the stored
+#     sources, and how both move with a participant left out (influence CSV)
+#
+# Needs the fit jobs (run_condition_*, run_placebo_fit*,
+# run_individual_conditions*) at those N_PCA, with their SNR grids. A missing
+# store, CSV or grid is a warning and a gap in the figures, never an error. A
+# 1-30 Hz fit has no 40 Hz bin: its SNR rows are its filters on the broadband
+# input, from run_band_swap.pbs (run it first, with the same RUNS and N_PCA). A
+# fit whose influence CSV predates the R_w / R_b columns has no shift figure
+# (rerun its fit job).
+#
+# OUTPUT
 #   plots/06b-corrca-condition-comparison/Comparison_ASSR/
-#       broadband/pca__<variant>/            # pca
-#       band__<variant>/pca_<N>/             # band, one per run of RUNS
-#       {broadband,bands}/join__<RUNS joined by ->/pca_<N>/   # join
-#           (a band's files carry its '<band>_' prefix)
+#       broadband/pca__<variant>/                     pca
+#       band__<variant>/pca_<N>/                      band, one per run
+#       {broadband,bands}/join__<RUNS joined by ->/pca_<N>/   join ('<band>_' prefix)
 #           corrca_comparison_{metrics,topomap_filter,topomap_pattern,
 #                              snr_course,variance_terms,variance_shift}.png
-#           corrca_comparison_metrics.csv, _variance_terms.csv,
-#           _variance_terms_tests.csv, _variance_shift.csv
+#           corrca_comparison_metrics.csv, _variance_terms{,_tests}.csv,
+#           _variance_shift.csv
 #
-# MEMORY: one store at a time, only CC 1-3 kept, streamed one recording at a
-# time: a 20-component broadband store peaks at ~1.5 GB (measured: 0.8 GB for a
-# 5-component 30-50 Hz store). CPU: single-threaded numpy.
-# ---------------------------------------------------------------------------
+# RESOURCES
+#   One store at a time, only CC 1-3 kept, streamed one recording at a time: a
+#   20-component broadband store peaks at ~1.5 GB (0.8 GB measured for a
+#   5-component 30-50 Hz store); ~30 s to 2 min per store. Single-threaded
+#   numpy.
+# ===========================================================================
+
+# --help: print the USAGE block above and exit, without submitting or running
+# anything (bash <this job>.pbs --help).
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    sed -n '/^# USAGE/,/^# END USAGE/{/^# END USAGE/d;s/^# \{0,1\}//;p}' "$0"
+    exit 0
+fi
 
 set -e
 

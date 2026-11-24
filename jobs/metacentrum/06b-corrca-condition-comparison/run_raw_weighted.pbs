@@ -5,45 +5,63 @@
 #PBS -m ae
 #PBS -j oe
 
-# ---------------------------------------------------------------------------
-# DEFAULT: only each run's full-montage, raw-power store is read. qsub -v
-# FITS="<any of: log_power roi_fit non_roi_fit roi_masked>" adds the other
-# stores (as the fit jobs' FITS made them).
+# ===========================================================================
+# run_raw_weighted.pbs
+#   Raw voltages weighted by the CorrCA topographies, read as PC1 and as the mean
+#   over all electrodes. READ-ONLY. Stage 06b; notebook corrca_raw_weighted.ipynb
 #
-# Stage-06b CorrCA — raw voltages weighted by the CC topographies, read as PC1
-# and as the mean over all electrodes. READ-ONLY: nothing is fitted.
+# USAGE   (bash run_raw_weighted.pbs --help prints this block)
+#   qsub run_raw_weighted.pbs
+#       the tracks run at N_PCA=5, broadband and 30-50 Hz
+#   qsub -v RUNS="tracks separate individual" run_raw_weighted.pbs
+#       several runs, sharing one y-scale
+#   qsub -v N_PCA=10,BANDS=broadband run_raw_weighted.pbs
+#       another component count, broadband only
+#
+# PARAMETERS   (qsub -v NAME=value,NAME2="a b"; the defaults in brackets)
+#   RUNS           [tracks]  which runs, any of: tracks (time-axis join),
+#                            separate (subject-axis join), placebo_fit (separate,
+#                            filters fitted on Placebo), individual (each condition
+#                            alone)
+#   N_PCA          [5]       the component count of the stores read
+#   BANDS          [broadband 30-50hz]  store bands read (broadband, 30-50hz, 1-30hz)
+#   FITS           [none]    also read the runs' other fits, any of: log_power,
+#                            roi_fit, non_roi_fit, roi_masked (as the fit jobs'
+#                            FITS made them; see run_condition_tracks.pbs --help)
+# END USAGE
+#
+# WHAT IT DOES
 #
 # scripts/run_corrca_raw_weighted.py, per recording: z-score the RAW
-# concatenated voltage per channel -> cut at every fam+ onset -> multiply every
-# electrode by its weight (|CC 1|, |CC 2| and |CC 3| shared topography of every stored
-# fit, the binary ASSR ROI, or uniform = the stage-00 reference). Then two
-# readouts, each trial minus its pre-onset mean / pre-onset SD pooled over
-# trials -> trial mean:
-#   pc1  : PCA of the weighted trial mean (stage 00's) -> every trial on PC1,
-#          sign aligned across every recording of both conditions
-#   mean : mean over all electrodes (all data, no component separated)
+# concatenated voltage per channel, cut at every fam+ onset, multiply every
+# electrode by its weight (|CC 1|, |CC 2| and |CC 3| shared topography of each
+# fit read, the binary ASSR ROI, or uniform = the stage-00 reference). Two
+# readouts, each trial minus its pre-onset mean over the pre-onset SD pooled
+# over trials, then the trial mean: pc1 (the PCA of the weighted trial mean,
+# stage 00's, every trial on PC1, sign aligned across every recording of both
+# conditions) and mean (over all electrodes, no component separated). Every run
+# read goes into ONE call, so all its figures share one y-range for the curves
+# and one for the differences. A missing store skips only itself.
 #
-# Every fit of each run (full, _log, _roi, _non_roi, _log_roi, _log_non_roi),
-# broadband and 30-50 Hz. All three runs go in ONE call, so every figure shares
-# one y-range for the curves (both readouts) and one for the differences. A missing store
-# skips only itself, with a warning. Needs the stores of
-# run_condition_{separate,tracks}.pbs, their _gamma twins and, if wanted,
-# run_individual_conditions*.pbs.
-#
-# qsub -v N_PCA=10 reads another component count (default 5).
-#
-# Output, in each fit's own directory, <r> = pc1 or mean:
+# OUTPUT   (in each fit's own directory; <r> = pc1 or mean)
 #   plots/06b-corrca-condition-comparison/<Join>_ASSR/{broadband,bands}/<variant>/pca_<N>/
-#       raw_weighted/[30-50hz_]raw_weighted_<r>.png              rows = conditions
-#       raw_weighted/[30-50hz_]raw_weighted_<r>_overlay.png      uniform vs each
-#       raw_weighted/[30-50hz_]raw_weighted_<r>_differences.png
-#       raw_weighted/participants/[30-50hz_]raw_weighted_<r>_{cc1,cc2,roi,uniform}.png
+#       raw_weighted/[<band>_]raw_weighted_<r>.png              rows = conditions
+#       raw_weighted/[<band>_]raw_weighted_<r>_overlay.png      uniform vs each
+#       raw_weighted/[<band>_]raw_weighted_<r>_differences.png
+#       raw_weighted/participants/[<band>_]raw_weighted_<r>_{cc1,cc2,cc3,roi,uniform}.png
 #
-# MEMORY: one recording at a time: its raw voltage and z-scored copy (195 x
-# 46980 float64, ~75 MB each) plus its trials (~70 MB); every store's curves
-# are a few MB. Each recording is read once and serves every store.
-# CPU: single-threaded numpy.
-# ---------------------------------------------------------------------------
+# RESOURCES
+#   One recording at a time: its raw voltage and z-scored copy (195 x 46980
+#   float64, ~75 MB each) plus its trials (~70 MB); every store's curves are a
+#   few MB. Single-threaded numpy.
+# ===========================================================================
+
+# --help: print the USAGE block above and exit, without submitting or running
+# anything (bash <this job>.pbs --help).
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    sed -n '/^# USAGE/,/^# END USAGE/{/^# END USAGE/d;s/^# \{0,1\}//;p}' "$0"
+    exit 0
+fi
 
 set -e
 
@@ -76,11 +94,15 @@ cd "$DATADIR" || {
 cd "$SCRATCHDIR"
 
 N_PCA="${N_PCA:-5}"
-echo "PCA dimensions: $N_PCA"
+RUNS="${RUNS:-tracks}"
+BANDS="${BANDS:-broadband 30-50hz}"
+echo "runs: $RUNS, PCA dimensions: $N_PCA, bands: $BANDS"
 
 # The runner heredoc below is quoted, so this is read from the container
 # environment at run time rather than substituted here.
 export SINGULARITYENV_N_PCA="$N_PCA" APPTAINERENV_N_PCA="$N_PCA"
+export SINGULARITYENV_RUNS="$RUNS" APPTAINERENV_RUNS="$RUNS"
+export SINGULARITYENV_BANDS="$BANDS" APPTAINERENV_BANDS="$BANDS"
 
 FITS="${FITS:-}"
 echo "opt-in fits and readings: ${FITS:-none}"
@@ -92,6 +114,18 @@ set -e
 source /opt/myproject/.venv/bin/activate
 
 DATA_DIR="/mnt/data/processed"
+
+# RUNS -> store variants (the full fit of each; FITS adds its other fits).
+VARIANTS=""
+for RUN in ${RUNS:-tracks}; do
+    case "$RUN" in
+        separate)    VARIANTS+=" corrca_channel_joined_separate" ;;
+        tracks)      VARIANTS+=" corrca_channel_joined_tracks" ;;
+        placebo_fit) VARIANTS+=" corrca_channel_placebo_fit" ;;
+        individual)  VARIANTS+=" corrca_channel_individual_conditions" ;;
+        *) echo >&2 "unknown RUNS entry: $RUN"; exit 1 ;;
+    esac
+done
 
 # Opt-in stores and readings (FITS); the full-montage raw-power store always.
 FIT_FLAGS=()
@@ -108,10 +142,9 @@ done
 echo "=== raw weighted (PC1 + mean): every run at $(date) ==="
 python /mnt/scripts/run_corrca_raw_weighted.py \
     --experiment assr \
-    --variant corrca_channel_joined_separate corrca_channel_joined_tracks \
-              corrca_channel_individual_conditions \
+    --variant $VARIANTS \
     --music_type ASSR \
-    --bands broadband 30-50hz \
+    --bands ${BANDS:-broadband 30-50hz} \
     --conditions Placebo Psilocybin \
     --n_pca "${N_PCA:-5}" \
     --components 3 \

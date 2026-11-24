@@ -5,79 +5,91 @@
 #PBS -m ae
 #PBS -j oe
 
-# ---------------------------------------------------------------------------
-# DEFAULT: only the full montage on raw power is fitted, and only its stored
-# sources ('full') are read by the grid. qsub -v FITS="<any of: log_power roi_fit
-# non_roi_fit roi_masked>" adds the log-power twins, the ROI / non-ROI cuts, the
-# masked readings (roi_masked, non_roi_masked) and, with log_power, the
-# swapped_filter rows. The fits and memory below describe every fit selected;
-# the full fit alone needs the raw tensor plus one full-montage fit.
+# ===========================================================================
+# run_placebo_fit_gamma.pbs
+#   CorrCA fitted on Placebo alone (placebo_fit), 30-50 Hz, then its SNR grid
+#   Stage 06b. Band twins: run_placebo_fit{,_gamma,_1_30hz}.pbs
 #
-# RESOURCES: memory and CPUs as for every fit (mem=300gb, ncpus=4,
-# --parallel_fits 3), so any FITS selection fits; only the walltime is sized for
-# the default full fit (2:00:00). With FITS, request the old walltime too: qsub
-# -l walltime=2:00:00. PARALLEL_FITS (default 3) sets how many fits run at once.
+# USAGE   (bash run_placebo_fit_gamma.pbs --help prints this block)
+#   qsub run_placebo_fit_gamma.pbs
+#       the full fit (full montage, raw power) at N_PCA=5, then its SNR grid
+#   qsub -v N_PCA=10 run_placebo_fit_gamma.pbs
+#       another component count
+#   qsub -v FITS="log_power roi_fit" run_placebo_fit_gamma.pbs
+#       add the log-power and ROI fits
+#   qsub -v FORCE_FIT=1 run_placebo_fit_gamma.pbs
+#       refit although a store for this N_PCA exists (default: read it back)
 #
-# Stage-06b CorrCA — PLACEBO-FITTED filters on the JOINED_SEPARATE condition,
-# 30-50 Hz only, then the ASSR SNR / condition-contrast grid on the stored fit.
-# The 30-50 Hz twin of run_placebo_fit.pbs (as run_condition_separate_gamma.pbs
-# is of run_condition_separate.pbs).
+# PARAMETERS   (qsub -v NAME=value,NAME2="a b"; the defaults in brackets)
+#   N_PCA          [5]     components = dimension of the covariance subspace
+#   FITS           [none]  extra fits and readings, any of:
+#                    log_power    the log10-power twin of each selected fit ('_log');
+#                                 in the grid also the swapped_filter rows
+#                    roi_fit      a fit on the ASSR ROI electrodes alone ('_roi')
+#                    non_roi_fit  a fit on every other electrode ('_non_roi')
+#                    roi_masked   the full fit read through the ROI and through the
+#                                 rest of the head (roi_masked_*, non_roi_masked_*)
+#                  The default walltime (2:00:00) covers any FITS.
+#   FORCE_FIT      [0]     1 refits each selected fit; 0 reads a stored one back
+#   PARALLEL_FITS  [3]     fits run at once (a memory budget, see RESOURCES)
+# END USAGE
 #
-# 1. FIT: scripts/run_corrca_condition_comparison.py --fit_condition Placebo (the
-#    same code as
-#    notebooks/06b-corrca-condition-comparison/corrca_channel_placebo_fit.ipynb)
-#    on full data. The join is run_condition_separate.pbs's: Placebo and
-#    Psilocybin on the SUBJECT axis (2P recordings). But Correlated Component
-#    Analysis is fitted on the P PLACEBO recordings ALONE, and every recording of
-#    BOTH conditions is then projected through those filters. Psilocybin never
-#    shapes the filters: its ISC is out-of-sample, Placebo's in-sample.
-#    --n_pca is the dimension of the Placebo covariance subspace = component count.
-#    The influence check and the leave-subset-out refits refit on Placebo alone.
-#    Sign: one per component, from the shared pattern against the ASSR electrode
-#    mask (never per recording — the filter is shared).
+# WHAT IT DOES
 #
-#    Six fits from the ONE loaded tensor, in this order:
-#      1. full montage                    2. full montage on log power ('_log')
-#      3. ASSR ROI alone ('_roi')         4. every other electrode ('_non_roi')
-#      5. '_log_roi'                      6. '_log_non_roi'
-#    Each cut is made BEFORE the z-scoring (ROI -> z-score -> PCA -> CorrCA). The
-#    log-power fits take log10 of the power (floored at the dtype's smallest
-#    normal number) BEFORE any z-scoring. Both full-montage fits also draw their
-#    filter read through the ROI alone (roi_masked_*) and through the rest of the
-#    head (non_roi_masked_*). Only the ones FITS selects (see the top).
-#    The fits run in parallel, each in its own forked process reading the one
-#    loaded tensor; --parallel_fits caps how many at once (see MEMORY).
+# 1. FIT, scripts/run_corrca_condition_comparison.py --fit_condition Placebo
+#    (the same code as
+#    notebooks/06b-corrca-condition-comparison/corrca_channel_placebo_fit.ipynb).
+#    The subject-axis join of run_condition_separate.pbs, but CorrCA is fitted
+#    on the P Placebo recordings ALONE and every recording of both conditions
+#    is then projected through those filters: Psilocybin never shapes them, so
+#    its ISC is out-of-sample and Placebo's in-sample. The influence check and
+#    the leave-subset-out refits refit on Placebo alone. The store sits beside
+#    the separate run's (JoinedSeparate/), the figures under
+#    JoinedPlaceboFitted_ASSR/.
 #
-#    A fit whose store for this N_PCA already exists is READ BACK, not refit
-#    (--skip_stored), and every figure is still drawn from it; the data is
-#    loaded either way, for the masked maps and any missing fit. A store
-#    fitted on other data is refused. qsub -v FORCE_FIT=1 refits all six.
+#    Fits, in this order, from the ONE loaded tensor: full, '_log', '_roi',
+#    '_non_roi', '_log_roi', '_log_non_roi' (only the full one unless FITS adds
+#    the others). An electrode cut is made BEFORE the z-scoring (ROI -> z-score
+#    -> PCA -> CorrCA); log10 power (floored at the dtype's smallest normal
+#    number) is taken BEFORE any z-scoring. N_PCA is the covariance subspace
+#    dimension, i.e. the component count. A fit whose store for this N_PCA
+#    exists is READ BACK (--skip_stored) and every figure is redrawn from it; a
+#    store fitted on other data is refused. Each fit also writes its
+#    leave-one-participant-out influence and the leave-subset-out refits the
+#    grid's robustness rows read.
 #
-# GAMMA BAND: the frequency axis is cut to 30-50 Hz (--band_range 30 50) BEFORE
-# the fit, so the Placebo filter is chosen on gamma-band samples only and the
-# 40 Hz steady state is not blended with the low-frequency onset response.
-# Stored and plotted under the band token '30-50hz' (plots under bands/, a
-# '30-50hz_' prefix), beside the broadband run rather than over it; the grid
-# reads that store with --band 30-50hz.
+#    BAND: 30-50 Hz. The frequency axis is cut (--band_range 30 50) BEFORE the
+#    fit, so the filter is chosen on gamma alone and the 40 Hz steady state is
+#    not blended with the low-frequency onset response. Stored and drawn under
+#    the band token '30-50hz' (plots under bands/, a '30-50hz_' file prefix),
+#    beside the broadband run; the grid reads that store with --band 30-50hz.
 #
-# 2. SNR GRID: scripts/run_corrca_snr_grid.py on all six 30-50 Hz stores, in the
-#    fit order. The contrast (Placebo - Psilocybin) reads Placebo through
-#    filters fitted on it and Psilocybin through filters that never saw it, so it
-#    leans towards Placebo; the robustness 'held_out' rows are the unbiased read.
-#    Signal variants: full, roi_masked, non_roi_masked, swapped_filter (the
-#    raw <-> log twin's 30-50 Hz filters), with --masked_tf_maps.
-#    A '_non_roi' store has no ASSR electrode: only its full rows.
+# 2. SNR GRID, scripts/run_corrca_snr_grid.py (the same code as
+#    corrca_component_analysis_placebo_fit.ipynb) on every stored fit, in the
+#    fit order: the stage-06 trials, three ASSR references and test families
+#    (contrast, discrimination, snr; exact Wilcoxon over participants,
+#    uncorrected), at 40 Hz and 35-45 Hz, windows 0-0.5 s and 0.2-0.5 s. Reads
+#    the stored sources ('full'); FITS roi_masked adds the roi_masked /
+#    non_roi_masked rows and log_power the swapped_filter rows (the raw <-> log
+#    twin's filters on this input; its CC 1-3 TF maps drawn into the fit's
+#    directory). A '_non_roi' store has no ASSR electrode: only its full rows,
+#    against ASSR-mask (full). The contrast reads Placebo through filters
+#    fitted on it and Psilocybin through filters that never saw it, so it leans
+#    towards Placebo; the robustness 'held_out' rows are the unbiased read.
 #
-# qsub -v N_PCA=10 fits / reads another component count (default 5).
-#
-# Output (the grid in a snr_grid/ subdirectory of the fit's):
+# OUTPUT
 #   plots/06b-corrca-condition-comparison/JoinedPlaceboFitted_ASSR/bands/
-#       corrca_channel_placebo_fit/pca_<N>/       # + _log, _roi, _non_roi,
-#                                         _log_roi, _log_non_roi
-#           30-50hz_* (fit figures), snr_grid/<selection>/<window>/*.png
+#       corrca_channel_placebo_fit[_log,_roi,...]/pca_<N>/
+#           30-50hz_condition_mean_tf_maps*, 30-50hz_corrca_*, influence/, participants/
+#           snr_grid/<selection>/<window>/*.png        (the SNR grid)
 #   data/processed/assr/iva_results/JoinedSeparate/
-#       corrca_channel_placebo_fit{,_log,_roi,_non_roi,_log_roi,_log_non_roi}__ASSR__30-50hz__pca<N>.npz
-#   results/assr/assr_snr_grid__corrca_channel_placebo_fit{,_log,_roi,_non_roi,_log_roi,_log_non_roi}__30-50hz__pca<N>*
+#       corrca_channel_placebo_fit[_log,...]__ASSR__30-50hz__pca<N>.npz (+ __subset_refits.npz)
+#   results/assr/assr_snr_grid__corrca_channel_placebo_fit[_log,...]__bands__pca<N>*
+#
+# RESOURCES
+#   mem=300gb and ncpus=4 cover every fit at PARALLEL_FITS=3, so FITS never
+#   needs more memory; walltime=2:00:00 is sized for the default full fit and
+#   covers any FITS.
 #
 # MEMORY — run_condition_separate_gamma.pbs's: every recording is still loaded,
 # z-scored and projected; only the covariances skip Psilocybin. The band is cut
@@ -85,7 +97,14 @@
 # 30-50 Hz cut). A full-montage gamma fit peaks at ~55 GB and --parallel_fits 3
 # runs three full-montage fits' worth at once, so ~230 GB. Check
 # resources_used.mem after a run.
-# ---------------------------------------------------------------------------
+# ===========================================================================
+
+# --help: print the USAGE block above and exit, without submitting or running
+# anything (bash <this job>.pbs --help).
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    sed -n '/^# USAGE/,/^# END USAGE/{/^# END USAGE/d;s/^# \{0,1\}//;p}' "$0"
+    exit 0
+fi
 
 set -e
 

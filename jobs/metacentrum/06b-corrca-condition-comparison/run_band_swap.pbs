@@ -5,75 +5,81 @@
 #PBS -m ae
 #PBS -j oe
 
-# ---------------------------------------------------------------------------
-# WHAT IS READ: only the selected runs (RUNS, default "tracks"; any of
-# separate tracks placebo_fit individual) at one component count (N_PCA, default
-# 5), and of each only its FULL fit: full montage, raw power. The '_log',
-# '_roi', '_non_roi' fits are never read here.
+# ===========================================================================
+# run_band_swap.pbs
+#   Band-swapped CorrCA filters: broadband <-> 30-50 Hz and 1-30 Hz. READ-ONLY.
+#   Stage 06b
 #
+# USAGE   (bash run_band_swap.pbs --help prints this block)
+#   qsub run_band_swap.pbs
+#       the tracks run at N_PCA=5, both bands, TF maps and SNR grid
 #   qsub -v RUNS=separate,N_PCA=10 run_band_swap.pbs
-#   qsub -v RUNS="separate placebo_fit tracks" run_band_swap.pbs
+#       another run and component count
+#   qsub -v RUNS="tracks separate placebo_fit" -l walltime=5:00:00 run_band_swap.pbs
+#       several runs (about 1.5 h each)
+#   qsub -v BANDS=1-30hz,STEPS=tf run_band_swap.pbs
+#       one band, the TF maps only
 #
-# Stage-06b CorrCA — band-swapped filters, READ-ONLY: nothing is fitted.
+# PARAMETERS   (qsub -v NAME=value,NAME2="a b"; the defaults in brackets)
+#   RUNS           [tracks]  which runs, any of: tracks (time-axis join),
+#                            separate (subject-axis join), placebo_fit (separate,
+#                            filters fitted on Placebo), individual (each condition
+#                            alone)
+#   N_PCA          [5]       the component count of the stores read
+#   BANDS          [30-50hz 1-30hz]  the band twins each broadband store is swapped with
+#   STEPS          [tf snr]  tf: the TF maps; snr: the SNR grid of the same reading
+# END USAGE
 #
-# scripts/run_corrca_band_swap.py pairs each selected run's broadband full
-# store with its band twin (same run, same N_PCA) and reads each fit
-# through the other's filters, once per band in BANDS (default
-# "30-50hz 1-30hz"):
-#   - the band fit's filters on the broadband fit's input (every
-#     frequency, 1-50 Hz) -> drawn into the BROADBAND fit's directory, with
-#     the band's inner edge (30 Hz) marked beside the 40 Hz line. For 1-30hz
-#     this is the main reading: does a topography chosen below 30 Hz also
-#     carry the 40 Hz response above the edge?
-#   - the broadband fit's filters on the band fit's input (the band only)
-#     -> drawn into the BAND fit's directory
-# Input as each fit saw it: z-scored along time per (channel, frequency), per
-# condition. TF maps of CC 1-3 (whole
-# recording + stimulus average + participants/), plus the topomap / filter
-# Pearson r of every component (the same CSV as the raw <-> log
-# swapped_filter reading).
+# WHAT IT DOES
 #
-# Needs, for each run of RUNS at N_PCA, the broadband store and its band twins:
-# the run's fit job and its _gamma (30-50hz) and _1_30hz twins
-# (run_condition_{separate,tracks}*, run_placebo_fit*,
-# run_individual_conditions*). A missing store skips only its pair, with a
-# warning; a run with no store at all only logs "nothing to do".
+# Each selected run is read on its FULL fit only (full montage, raw power); the
+# '_log', '_roi', '_non_roi' fits are never read here.
 #
-# One pass over the wavelet cache per condition, run and band.
+#   1. tf: scripts/run_corrca_band_swap.py pairs the broadband store with its
+#      band twin (same run and N_PCA) and reads each fit through the other's
+#      filters, input z-scored along time per (channel, frequency) and
+#      condition. The band fit's filters on the broadband input (every
+#      frequency, 1-50 Hz) go into the BROADBAND fit's directory, the band's
+#      inner edge (30 Hz) marked beside the 40 Hz line: for 1-30hz this is the
+#      main reading, whether a topography chosen below 30 Hz also carries the
+#      40 Hz response. The broadband filters on the band input go into the BAND
+#      fit's directory. TF maps of CC 1-3 (whole recording, stimulus average,
+#      participants/) and the topomap / filter r of every component.
 #
-# Then the SNR GRID of the same reading (scripts/run_corrca_snr_grid.py
-# --swap_band <band>): every broadband store read through its band twin's
-# filters at 40 Hz (0 and +-5 Hz selections, windows 0-0.5 s and 0.2-0.5 s),
-# against the store's usual ASSR references, with the stage-06 tests
-# (contrast, discrimination, snr). Its figures go into the broadband fit's
-# snr_grid/ beside the store's own grid, named band_swapped_filter_<band>; its
-# results into corrca_band_swap_snr__* files, so the store's own grid files are
-# never touched. The grid reads only the 40 Hz bins of the cache.
+#   2. snr: scripts/run_corrca_snr_grid.py --swap_band <band>: the broadband
+#      store read through its band twin's filters at 40 Hz (0 and +-5 Hz,
+#      windows 0-0.5 s and 0.2-0.5 s) against the store's usual ASSR
+#      references, with the stage-06 tests. Its own result files, so the
+#      store's grid is never overwritten.
 #
-# qsub -v BANDS=1-30hz reads one band only.
-# qsub -v STEPS=snr runs only the SNR grid (STEPS=tf only the TF maps;
-#   default both).
+# Needs, for each run at N_PCA, the broadband store and its band twins (the
+# run's fit job and its _gamma and _1_30hz twins). A missing store skips only
+# its pair.
 #
-# Output:
+# OUTPUT
 #   plots/06b-corrca-condition-comparison/<Join>_ASSR/broadband/<variant>/pca_<N>/
-#       band_swapped_filter_<band>_condition_mean_tf_maps{,_onset}.png
-#       band_swapped_filter_<band>_topomap_correlation.csv,
-#       participants/band_swapped_filter_<band>_*
+#       band_swapped_filter_<band>_condition_mean_tf_maps{,_onset}.png,
+#       band_swapped_filter_<band>_topomap_correlation.csv, participants/
+#       snr_grid/<selection>/<window>/*__band_swapped_filter_<band>.png
 #   plots/06b-corrca-condition-comparison/<Join>_ASSR/bands/<variant>/pca_<N>/
-#       <band>_band_swapped_filter_*   (the same, the other way round)
-#   results/assr/corrca_band_swap__<variant>__<band>__pca<N>.csv  (every pair)
-#   plots/06b-corrca-condition-comparison/<Join>_ASSR/broadband/<variant>/pca_<N>/
-#       snr_grid/<selection>/<window>/
-#           {pvalue_summary,snr_by_condition,trial_course_by_source}__band_swapped_filter_<band>.png
+#       <band>_band_swapped_filter_*        (the other way round)
+#   results/assr/corrca_band_swap__<variant>__<band>__pca<N>.csv
 #   results/assr/corrca_band_swap_snr__<variant>__<band>__pca<N>{.csv,__courses.npz,__values.npz}
 #
-# MEMORY: one participant's broadband block (~2.4 GB float32, full montage)
-# plus its z-scored copy and the float64 upcast of a projection, beside the
-# CC 1-3 projections of the pair x two conditions: well below the request, which
-# is kept as it was sized for all six pairs. WALLTIME: about 1.5 h per run of
-# RUNS (both bands, both steps); raise it for more than two runs. The SNR grid holds one ~1 GB store and the 40 Hz bins. CPU: numpy
-# z-scoring is single-threaded; the projections use BLAS.
-# ---------------------------------------------------------------------------
+# RESOURCES
+#   One participant's broadband block (~2.4 GB float32) plus its z-scored copy
+#   and the float64 upcast of a projection, beside the CC 1-3 projections of
+#   the pair, well below mem=100gb (kept as sized for all six pairs of a run).
+#   Walltime 3 h: about 1.5 h per run (both bands, both steps). numpy z-scoring
+#   is single-threaded; the projections use BLAS (2 threads).
+# ===========================================================================
+
+# --help: print the USAGE block above and exit, without submitting or running
+# anything (bash <this job>.pbs --help).
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    sed -n '/^# USAGE/,/^# END USAGE/{/^# END USAGE/d;s/^# \{0,1\}//;p}' "$0"
+    exit 0
+fi
 
 set -e
 
