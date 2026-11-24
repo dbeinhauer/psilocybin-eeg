@@ -739,7 +739,13 @@ def run(args: argparse.Namespace) -> None:
     metrics = pd.DataFrame(
         [m for r in readings for m in r.metrics],
         columns=["entry", "fit", "component", "condition", "metric", "value"],
-    )
+    ).astype({"value": float})
+    if metrics.empty:
+        _logger.warning(
+            f"nothing to compare: none of {labels} has a store, CSV or grid at "
+            f"{out_dir.name}. Run the fit jobs for them first."
+        )
+        return
     _write_csv(metrics, out_dir / f"{prefix}{STEM}_metrics.csv")
     _log_summary(metrics, labels, n)
     swapped = [r.fit.label for r in readings if r.snr_note]

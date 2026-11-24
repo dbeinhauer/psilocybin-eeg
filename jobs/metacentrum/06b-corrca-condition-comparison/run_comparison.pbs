@@ -152,22 +152,30 @@ COMMON=(
     --save_dir /mnt/plots
 )
 
+# One failing comparison must not stop the others: each runs, and the job exits 1
+# at the end if any failed.
+FAILED=0
+compare() {
+    python /mnt/scripts/run_corrca_comparison.py "$@" "${COMMON[@]}" || {
+        echo >&2 "FAILED: run_corrca_comparison.py $*"
+        FAILED=1
+    }
+}
+
 for MODE in $COMPARE; do
     echo "=== comparison: $MODE at $(date) ==="
     case "$MODE" in
-        pca)  python /mnt/scripts/run_corrca_comparison.py --compare pca \
-                  --run "$RUN" --n_pca $PCAS "${COMMON[@]}" ;;
+        pca)  compare --compare pca --run "$RUN" --n_pca $PCAS ;;
         band) for ONE in $RUNS; do
-                  python /mnt/scripts/run_corrca_comparison.py --compare band \
-                      --run "$ONE" --n_pca "$N_PCA" "${COMMON[@]}"
+                  compare --compare band --run "$ONE" --n_pca "$N_PCA"
               done ;;
         join) for BAND in $JOIN_BANDS; do
-                  python /mnt/scripts/run_corrca_comparison.py --compare join \
-                      --runs $RUNS --band "$BAND" --n_pca "$N_PCA" "${COMMON[@]}"
+                  compare --compare join --runs $RUNS --band "$BAND" --n_pca "$N_PCA"
               done ;;
         *) echo >&2 "unknown comparison $MODE"; exit 1 ;;
     esac
 done
+exit "$FAILED"
 EOF
 
 chmod +x run_inside.sh
@@ -175,7 +183,7 @@ chmod +x run_inside.sh
 echo "Running inside Singularity at $(date)"
 
 singularity exec --nv -B "$DATADIR":/mnt "$SIF_IMAGE" bash run_inside.sh || {
-    echo >&2 "Python script failed"
+    echo >&2 "Python script failed (see FAILED lines above)"
     exit 1
 }
 

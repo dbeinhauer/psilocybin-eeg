@@ -958,7 +958,9 @@ def plot_comparison_metrics(
     shown = [
         p
         for p in panels
-        if np.isfinite(metrics.loc[metrics["metric"] == p[0], "value"]).any()
+        if np.isfinite(
+            pd.to_numeric(metrics.loc[metrics["metric"] == p[0], "value"])
+        ).any()
     ]
     if not shown:
         return None
