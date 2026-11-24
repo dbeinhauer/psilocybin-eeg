@@ -53,6 +53,7 @@ import logging
 import os
 import re
 import time
+import zipfile
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -867,6 +868,46 @@ def _wait_until_readable(path: Path) -> None:
             time.sleep(_BUSY_WAIT_S)
 
 
+def _read_exactly(handle, n_bytes: int) -> bytes:
+    chunks, remaining = [], n_bytes
+    while remaining:
+        chunk = handle.read(remaining)
+        if not chunk:
+            raise ValueError(f"Stored array ended {remaining} byte(s) early.")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _read_leading_components(path: Path, key: str, n_components: int) -> np.ndarray:
+    """``(S, n, ...)`` the leading *n_components* of one stored ``(S, K, ...)`` array.
+
+    Read one recording at a time from the compressed archive member, so only the
+    kept components are ever held whole: a 30-component broadband store's TF maps
+    are several gigabytes, its first three a tenth of that.
+    """
+    with zipfile.ZipFile(path) as archive, archive.open(f"{key}.npy") as handle:
+        version = np.lib.format.read_magic(handle)
+        read_header = (
+            np.lib.format.read_array_header_1_0
+            if version == (1, 0)
+            else np.lib.format.read_array_header_2_0
+        )
+        shape, fortran_order, dtype = read_header(handle)
+        if fortran_order or len(shape) < 2 or dtype.hasobject:
+            raise ValueError(
+                f"{path.name}:{key} is not a C-ordered (S, K, ...) numeric array."
+            )
+        row_shape = tuple(shape[1:])
+        row_bytes = int(np.prod(row_shape)) * dtype.itemsize
+        keep = min(int(n_components), shape[1])
+        out = np.empty((shape[0], keep, *shape[2:]), dtype=dtype)
+        for s in range(shape[0]):
+            row = np.frombuffer(_read_exactly(handle, row_bytes), dtype=dtype)
+            out[s] = row.reshape(row_shape)[:keep]
+    return out
+
+
 def load_iva_components(
     path: Path | str | None = None,
     *,
@@ -877,12 +918,18 @@ def load_iva_components(
     band: str | None = None,
     n_pca: int | None = None,
     processed_data_dir: Path | None = None,
+    components: int | None = None,
 ) -> IvaComponentResults:
     """Read one store entry, with its participant mapping.
 
     Either pass *path* directly, or the descriptor of the run
     (*experiment*, *condition*, *variant*, *music_type*, *n_pca*, and *band* when
     the run was band-restricted) and let the path be derived.
+
+    *components* keeps only the leading components of every component array,
+    streamed one recording at a time, so the rest is never held in memory. The
+    extras (and :attr:`~IvaComponentResults.n_components`) still describe the whole
+    run.
 
     :param path: Path to a stored ``.npz``. When given, every descriptor argument
         is ignored.
@@ -966,7 +1013,11 @@ def load_iva_components(
                 str(name) for name in stored["subject_conditions"]
             ),
             arrays={
-                key[len(_ARRAY_PREFIX) :]: stored[key]
+                key[len(_ARRAY_PREFIX) :]: (
+                    stored[key]
+                    if components is None
+                    else _read_leading_components(path, key, components)
+                )
                 for key in sorted(keys)
                 if key.startswith(_ARRAY_PREFIX)
             },

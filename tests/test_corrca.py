@@ -20,7 +20,10 @@ from src.analysis.corrca import (
     annotate_influence,
     channel_corrca_influence,
     component_isc,
+    component_variance_terms,
     condition_isc,
+    condition_variance_terms,
+    covariance_terms,
     corrca_covariances,
     decompose_channel_corrca,
     fit_corrca,
@@ -321,6 +324,49 @@ def test_paired_test_detects_a_synchrony_drop(two_conditions):
     assert row["p_value"] < 0.01
 
 
+def test_variance_terms_split_the_isc_and_ignore_the_filter_scale(data):
+    model = fit_corrca(data, n_pca=4)
+    y = model.transform(data)
+    norms = (model.filters**2).sum(axis=0)
+    within, between = component_variance_terms(y, norms)
+    np.testing.assert_allclose(
+        between.mean(axis=0) / within.mean(axis=0), projected_isc(y), rtol=1e-10
+    )
+    # A filter 3x larger carries 9x the variance: per unit norm, nothing changes.
+    scaled = component_variance_terms(3.0 * y, 9.0 * norms)
+    np.testing.assert_allclose(scaled[0], within, rtol=1e-10)
+    np.testing.assert_allclose(scaled[1], between, rtol=1e-10)
+
+
+def test_covariance_terms_are_the_subject_means_on_zscored_data(data):
+    x = (data - data.mean(axis=-1, keepdims=True)) / data.std(axis=-1, keepdims=True)
+    model = fit_corrca(x, n_pca=4)
+    within, between = component_variance_terms(
+        model.transform(x), (model.filters**2).sum(axis=0)
+    )
+    from_cov = covariance_terms(corrca_covariances(x), model.filters)
+    np.testing.assert_allclose(from_cov[0], within.mean(axis=0), rtol=1e-8)
+    np.testing.assert_allclose(from_cov[1], between.mean(axis=0), rtol=1e-8)
+
+
+def test_condition_variance_terms_and_their_paired_test(two_conditions):
+    sources, participants = two_conditions
+    group, per_participant = condition_variance_terms(
+        sources, {c: participants for c in sources}, np.ones(1)
+    )
+    isc, _ = condition_isc(sources, {c: participants for c in sources})
+    np.testing.assert_allclose(group["isc"], isc["isc"], rtol=1e-10)
+    # The weak condition adds unshared variance; the shared covariance stays.
+    by = group.set_index("condition")
+    assert by.loc["Psilocybin", "within"] > 5 * by.loc["Placebo", "within"]
+    assert by.loc["Psilocybin", "between"] == pytest.approx(
+        by.loc["Placebo", "between"], rel=0.3
+    )
+    test = paired_condition_test(per_participant, ["Placebo", "Psilocybin"], "within")
+    assert test["median_difference"].iloc[0] > 0
+    assert test["p_value"].iloc[0] < 0.01
+
+
 def test_paired_test_pairs_by_label_not_position():
     """Rows in a different order per condition must still pair correctly."""
     per_participant = pd.DataFrame(
@@ -475,6 +521,27 @@ def test_heldout_isc_uses_the_refit_filter(data):
     top = influence[influence["component"] == 1]
     assert (top["pattern_r"] > 0.95).all()
     assert top["influence"].abs().max() < 0.05
+
+
+def test_influence_terms_are_the_ratios_behind_each_isc(data):
+    model = fit_corrca(data, n_pca=4)
+    stats = jackknife_statistics([data], PAIRS)
+    influence = leave_group_out_influence(stats, model, n_pca=4, gamma=0.0)
+    np.testing.assert_allclose(
+        influence["between_full"] / influence["within_full"],
+        influence["isc_full"],
+        rtol=1e-8,
+    )
+    np.testing.assert_allclose(
+        influence["between_without"] / influence["within_without"],
+        influence["isc_without"],
+        rtol=1e-8,
+    )
+    first = influence[influence["group"] == 0].sort_values("component")
+    fixed = isc_from_covariances(stats.without(0), model.filters)
+    np.testing.assert_allclose(
+        first["between_fixed"] / first["within_fixed"], fixed[first["component"] - 1]
+    )
 
 
 def test_influence_flags_a_participant_driving_a_component(data, topography):

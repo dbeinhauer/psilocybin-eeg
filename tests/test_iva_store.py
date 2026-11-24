@@ -172,6 +172,16 @@ class TestPaths:
 
 
 class TestRoundTrip:
+    def test_leading_components_are_the_full_arrays_cut(self, tmp_path):
+        path = _save(tmp_path)
+        full = load_iva_components(path)
+        cut = load_iva_components(path, components=2)
+        for name, values in full.arrays.items():
+            np.testing.assert_array_equal(cut.arrays[name], values[:, :2])
+        assert cut.n_components == N_PCA  # the run's, not the read's
+        wide = load_iva_components(path, components=N_PCA + 4)
+        np.testing.assert_array_equal(wide.tf_maps, full.tf_maps)
+
     def test_every_array_and_axis_comes_back(self, tmp_path):
         arrays = _arrays()
         path = _save(tmp_path, arrays=arrays)

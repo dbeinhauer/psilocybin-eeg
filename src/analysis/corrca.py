@@ -534,16 +534,117 @@ def condition_isc(
     return pd.DataFrame(group_rows), pd.DataFrame(subject_rows)
 
 
+def component_variance_terms(
+    y: np.ndarray, filter_norms: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Each subject's share of the two terms of the CorrCA ratio, per unit filter.
+
+    The ISC is ``wᵀR_b w / wᵀR_w w``; this splits it per subject:
+
+    - ``within[s, k]`` — the variance of subject *s*'s component signal, the
+      subject's term of ``R_w``;
+    - ``between[s, k]`` — its mean covariance with every other subject's, the
+      subject's term of ``R_b``.
+
+    Both are divided by ``‖w_k‖²``, so they no longer depend on the filter's
+    arbitrary scale: on data z-scored per feature they are in units of one
+    feature's variance, and two fits (another ``n_pca``, band or join) can be set
+    side by side. ``between.mean(0) / within.mean(0)`` is :func:`projected_isc`.
+
+    :param y: ``(S, K, ...)`` projected components, trailing axes = samples.
+    :param filter_norms: ``(K,)`` ``‖w_k‖²`` of the filters *y* came through.
+    :return: ``(within, between)``, each ``(S, K)``.
+    :raises ValueError: If *filter_norms* does not have one positive entry per
+        component.
+    """
+    y = _as_projected(y)
+    norms = np.asarray(filter_norms, dtype=float)
+    if norms.shape != (y.shape[1],) or not np.all(norms > 0):
+        raise ValueError(
+            f"filter_norms must be ({y.shape[1]},) and positive; got {norms}."
+        )
+    n_subjects, n_samples = y.shape[0], y.shape[2]
+    total = np.zeros(y.shape[1:])
+    for s in range(n_subjects):
+        total += _centred(y[s])
+    within = np.empty(y.shape[:2])
+    between = np.empty(y.shape[:2])
+    for s in range(n_subjects):
+        ys = _centred(y[s])
+        within[s] = np.einsum("kn,kn->k", ys, ys) / n_samples
+        between[s] = np.einsum("kn,kn->k", ys, total - ys) / (
+            n_samples * (n_subjects - 1)
+        )
+    return within / norms, between / norms
+
+
+def condition_variance_terms(
+    sources_by_condition: Mapping[str, np.ndarray],
+    participants_by_condition: Mapping[str, Sequence[str]],
+    filter_norms: np.ndarray,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """:func:`component_variance_terms` within each condition, as long frames.
+
+    Whether a condition's ISC moves through its shared covariance (``between``) or
+    through the variance the component carries (``within``): the ratio alone
+    cannot tell a weaker shared response from a stronger unshared one.
+
+    :param sources_by_condition: Condition → ``(P_c, K, ...)`` projected sources.
+    :param participants_by_condition: Condition → participant label per row.
+    :param filter_norms: ``(K,)`` ``‖w_k‖²`` of the filters.
+    :return: ``(group, per_participant)``. ``group`` has ``component`` (1-based),
+        ``condition``, ``within``, ``between``, ``isc`` (their ratio) and
+        ``n_subjects``; ``per_participant`` has ``component``, ``condition``,
+        ``participant``, ``within`` and ``between``.
+    :raises ValueError: If a condition's labels do not match its row count.
+    """
+    group_rows: list[dict] = []
+    subject_rows: list[dict] = []
+    for condition, sources in sources_by_condition.items():
+        participants = list(participants_by_condition[condition])
+        if len(participants) != np.shape(sources)[0]:
+            raise ValueError(
+                f"{condition!r} has {np.shape(sources)[0]} row(s) but "
+                f"{len(participants)} participant label(s)."
+            )
+        within, between = component_variance_terms(sources, filter_norms)
+        for k in range(within.shape[1]):
+            w, b = float(within[:, k].mean()), float(between[:, k].mean())
+            group_rows.append(
+                {
+                    "component": k + 1,
+                    "condition": condition,
+                    "within": w,
+                    "between": b,
+                    "isc": b / w if w > 0 else np.nan,
+                    "n_subjects": len(participants),
+                }
+            )
+            for s, participant in enumerate(participants):
+                subject_rows.append(
+                    {
+                        "component": k + 1,
+                        "condition": condition,
+                        "participant": participant,
+                        "within": float(within[s, k]),
+                        "between": float(between[s, k]),
+                    }
+                )
+    return pd.DataFrame(group_rows), pd.DataFrame(subject_rows)
+
+
 def paired_condition_test(
-    per_participant: pd.DataFrame, conditions: Sequence[str]
+    per_participant: pd.DataFrame, conditions: Sequence[str], value: str = "loo_isc"
 ) -> pd.DataFrame:
-    """Wilcoxon signed-rank test of per-participant ISC between two conditions.
+    """Wilcoxon signed-rank test of a per-participant value between two conditions.
 
     Pairs are formed by participant label, so only participants present in both
     conditions count. P-values are per component and **uncorrected**.
 
-    :param per_participant: The second frame of :func:`condition_isc`.
+    :param per_participant: The second frame of :func:`condition_isc` (or of
+        :func:`condition_variance_terms`).
     :param conditions: Exactly two conditions; differences are second − first.
+    :param value: The column tested.
     :return: One row per component: ``component``, ``n_pairs``,
         ``mean_difference``, ``median_difference``, ``statistic``, ``p_value``
         (``NaN`` when fewer than two non-zero differences leave nothing to test).
@@ -553,7 +654,7 @@ def paired_condition_test(
         raise ValueError(f"A paired test needs two conditions; got {conditions}.")
     first, second = conditions
     wide = per_participant.pivot_table(
-        index=["component", "participant"], columns="condition", values="loo_isc"
+        index=["component", "participant"], columns="condition", values=value
     )
     rows: list[dict] = []
     for component, block in wide.groupby(level="component"):
@@ -842,6 +943,27 @@ def _quadratic(filters: np.ndarray, matrix: np.ndarray) -> np.ndarray:
     return np.einsum("dk,de,ek->k", filters, matrix, filters)
 
 
+def covariance_terms(
+    cov: CorrcaCovariances, filters: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """``(within, between)`` ``(K,)`` of *filters* on *cov*, on the scale of
+    :func:`component_variance_terms`' subject means.
+
+    ``wᵀR_w w`` and ``wᵀR_b w`` divided by ``‖w‖²`` and by ``tr(R_w) / D`` (the
+    subjects × samples × mean feature variance), so ``within`` is the mean subject
+    variance and ``between`` the mean pairwise covariance per unit filter, in units
+    of a mean feature's variance. Their ratio is :func:`isc_from_covariances`. NaN
+    for an all-zero filter (an unmatched refit component).
+    """
+    scale = np.trace(cov.within) / cov.within.shape[0]
+    norms = (filters**2).sum(axis=0) * scale
+    norms = np.where(norms > 0, norms, np.nan)
+    return (
+        _quadratic(filters, cov.within) / norms,
+        _quadratic(filters, cov.between) / norms,
+    )
+
+
 def _reference_isc(
     stats: JackknifeStatistics, g: int, filters: np.ndarray, reference: np.ndarray
 ) -> np.ndarray:
@@ -950,6 +1072,13 @@ def leave_group_out_influence(
     The reference excludes the whole group, so a participant's other recording never
     serves as its own partner.
 
+    The two terms of each ISC (:func:`covariance_terms`: ``within`` from ``R_w``,
+    ``between`` from ``R_b``, per unit filter) say which one moves without *g*:
+    ``*_full`` (the fit on every group), ``*_fixed`` (the fit's filter on the data
+    without *g*: what removing *g*'s data alone does) and ``*_without`` (the
+    matched refit on that data, whose ratio is ``isc_without``: the filter's move
+    added on top).
+
     :param stats: Output of :func:`jackknife_statistics` on the data *model* was
         fitted to.
     :param model: The full-data fit; its orientation is irrelevant (|r|, ISC are
@@ -959,11 +1088,13 @@ def leave_group_out_influence(
     :return: One row per (row of the data, component): ``group``, ``row``,
         ``component`` (1-based), ``isc_full``, ``isc_without``, ``influence``
         (``isc_full - isc_without``), ``pattern_r``, ``insample_isc``,
-        ``heldout_isc``, ``within_participant_isc``. ``isc_full`` is the fit's
-        training ISC; refit columns are
-        NaN when the refit has fewer components than *model*.
+        ``heldout_isc``, ``within_participant_isc``, ``within_full``,
+        ``between_full``, ``within_fixed``, ``between_fixed``, ``within_without``,
+        ``between_without``. ``isc_full`` is the fit's training ISC; refit columns
+        are NaN when the refit has fewer components than *model*.
     """
     isc_full = isc_from_covariances(stats.covariances, model.filters)
+    within_full, between_full = covariance_terms(stats.covariances, model.filters)
     n_components = model.n_components
     rows: list[dict] = []
     for g, members in enumerate(stats.groups):
@@ -972,6 +1103,8 @@ def leave_group_out_influence(
         )
         has_match = matched >= 0
         filters = _matched_filters(model, refit, matched)
+        within_fixed, between_fixed = covariance_terms(reduced, model.filters)
+        within_without, between_without = covariance_terms(reduced, filters)
         insample = _reference_isc(stats, g, model.filters, reduced.total)
         own_group = _own_group_isc(stats, g, model.filters)
         heldout = _reference_isc(stats, g, filters, reduced.total)
@@ -996,6 +1129,12 @@ def leave_group_out_influence(
                         "insample_isc": float(insample[i, k]),
                         "heldout_isc": float(heldout[i, k]),
                         "within_participant_isc": float(own_group[i, k]),
+                        "within_full": float(within_full[k]),
+                        "between_full": float(between_full[k]),
+                        "within_fixed": float(within_fixed[k]),
+                        "between_fixed": float(between_fixed[k]),
+                        "within_without": float(within_without[k]),
+                        "between_without": float(between_without[k]),
                     }
                 )
     return pd.DataFrame(rows)
