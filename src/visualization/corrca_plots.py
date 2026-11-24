@@ -1098,7 +1098,7 @@ def plot_comparison_topomaps(
 
 def plot_comparison_courses(
     courses: Sequence[Mapping[str, np.ndarray]],
-    times: np.ndarray,
+    times: Sequence[np.ndarray],
     row_labels: Sequence[str],
     n_components: int,
     *,
@@ -1112,7 +1112,7 @@ def plot_comparison_courses(
 
     :param courses: Per row, condition → ``(participants, K, W)`` courses (each
         participant's median over trials, in pre-onset SD units).
-    :param times: ``(W,)`` seconds from onset.
+    :param times: Per row, ``(W,)`` seconds from onset (rows may differ).
     :param row_labels: Per row, the fit's label.
     :param n_components: Leading components drawn.
     :param window: The stimulus window the contrast was scored on, shaded.
@@ -1132,7 +1132,9 @@ def plot_comparison_courses(
         sharey=True,
         layout="constrained",
     )
-    for r, (by_condition, label) in enumerate(zip(courses, row_labels)):
+    for r, (by_condition, label, row_times) in enumerate(
+        zip(courses, row_labels, times)
+    ):
         for k in range(n_components):
             ax = axes[r, k]
             ax.axvspan(*window, color="0.9", zorder=0)
@@ -1140,12 +1142,12 @@ def plot_comparison_courses(
                 if k < data.shape[1]:
                     _mean_band(
                         ax,
-                        times,
+                        row_times,
                         data[:, k],
                         CONDITION_COLORS.get(condition, "0.4"),
                         f"{condition} (n={data.shape[0]})",
                     )
-            _onset_lines(ax, times)
+            _onset_lines(ax, row_times)
             text = f"{label} — CC {k + 1}"
             if p_values[r] is not None and np.isfinite(p_values[r][k]):
                 text += f"\ncontrast p {p_values[r][k]:.3g}"
@@ -1364,6 +1366,79 @@ def plot_comparison_variance_shift(
         for label, filled, _offset in readings.values()
     ]
     fig.legend(handles=handles, loc="outside lower center", ncol=2, fontsize=8)
+    fig.suptitle(title, fontsize=10)
+    save_fig(fig, save_path)
+    return fig
+
+
+def plot_comparison_tf_maps(
+    rows: Sequence[tuple[str, str, np.ndarray, np.ndarray, np.ndarray]],
+    n_components: int,
+    *,
+    title: str,
+    freq_marks: Optional[Sequence[float]] = None,
+    epoch_marks: Optional[Sequence[float]] = None,
+    save_path: Optional[Path] = None,
+):
+    """Condition-mean TF maps of the compared fits: one row per (fit, condition),
+    each fit's conditions on consecutive rows, one column per component.
+
+    The panels are the fits' own ``condition_mean_tf_maps`` without the difference
+    row. A fit's condition rows share one symmetric limit per component, so its
+    Placebo and Psilocybin read on one scale; fits never share one, since each
+    CorrCA fit sets its components' scale.
+
+    :param rows: ``(fit label, condition, (K, F, T) mean, freqs, times)`` in row
+        order; the rows of one fit must be consecutive.
+    :param n_components: Leading components drawn.
+    :param title: Figure title.
+    :param freq_marks: Frequencies (Hz) to mark (off a row's band, skipped).
+    :param epoch_marks: Times (s) to mark, e.g. the stimulus onset and offset.
+    :param save_path: Optional output path.
+    :return: The figure, or ``None`` with no rows.
+    """
+    from src.visualization.iva_condition_plots import _decorate_tf, _tf_extent
+
+    if not rows:
+        return None
+    limits: dict[tuple[str, int], float] = {}
+    for label, _condition, mean, _freqs, _times in rows:
+        for k in range(min(n_components, mean.shape[0])):
+            limits[(label, k)] = max(limits.get((label, k), 0.0), safe_vlim(mean[k]))
+    fig, axes = plt.subplots(
+        len(rows),
+        n_components,
+        figsize=(3.0 * n_components + 0.6, 2.1 * len(rows)),
+        squeeze=False,
+        layout="constrained",
+    )
+    previous = None
+    for r, (label, condition, mean, freqs, times) in enumerate(rows):
+        for k in range(n_components):
+            ax = axes[r, k]
+            if k >= mean.shape[0]:
+                ax.set_visible(False)
+                continue
+            vlim = limits[(label, k)]
+            ax.imshow(
+                mean[k],
+                aspect="auto",
+                origin="lower",
+                extent=_tf_extent(freqs, times),
+                cmap="RdBu_r",
+                vmin=-vlim,
+                vmax=vlim,
+            )
+            _decorate_tf(
+                ax, time_marks=None, freq_marks=freq_marks, epoch_marks=epoch_marks
+            )
+            ax.tick_params(labelsize=7)
+            if label != previous:
+                ax.set_title(f"CC {k + 1}  (|max| {vlim:.3g})", fontsize=8)
+            if r == len(rows) - 1:
+                ax.set_xlabel("Time (s)", fontsize=7)
+        axes[r, 0].set_ylabel(f"{label}\n{condition}\nFrequency (Hz)", fontsize=8)
+        previous = label
     fig.suptitle(title, fontsize=10)
     save_fig(fig, save_path)
     return fig

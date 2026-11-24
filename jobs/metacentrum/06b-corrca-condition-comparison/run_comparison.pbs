@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -N PSILO_CORRCA_06B_COMPARISON
 #PBS -l walltime=2:00:00
-#PBS -l select=1:ncpus=1:mem=8gb:scratch_local=1gb
+#PBS -l select=1:ncpus=1:mem=16gb:scratch_local=1gb
 #PBS -m ae
 #PBS -j oe
 
@@ -47,6 +47,8 @@
 #   - Placebo vs Psilocybin p (uncorrected): LOO-ISC whole and onset, SNR contrast
 #     at 40 Hz in 0-0.5 s and 0.2-0.5 s, the R_w and R_b terms
 #   - SNR courses per condition; shared filters and forward patterns as topomaps
+#   - condition-mean TF maps, whole recording and onset-locked: each fit's
+#     Placebo row above its Psilocybin row, the next fit's pair below
 #   - the two terms of each ISC (R_w: the component's variance, R_b: its
 #     covariance with the others) per condition and participant, from the stored
 #     sources, and how both move with a participant left out (influence CSV)
@@ -65,15 +67,18 @@
 #       band__<variant>/pca_<N>/                      band, one per run
 #       {broadband,bands}/join__<RUNS joined by ->/pca_<N>/   join ('<band>_' prefix)
 #           corrca_comparison_{metrics,topomap_filter,topomap_pattern,
-#                              snr_course,variance_terms,variance_shift}.png
+#                              tf_maps,tf_maps_onset,snr_course,
+#                              variance_terms,variance_shift}.png
 #           corrca_comparison_metrics.csv, _variance_terms{,_tests}.csv,
 #           _variance_shift.csv
 #
 # RESOURCES
-#   One store at a time, only CC 1-3 kept, streamed one recording at a time: a
-#   20-component broadband store peaks at ~1.5 GB (0.8 GB measured for a
-#   5-component 30-50 Hz store); ~30 s to 2 min per store. Single-threaded
-#   numpy.
+#   One store at a time, only CC 1-3 kept, streamed one recording at a time.
+#   The per-condition TF maps (float64 copies of each condition's maps) set the
+#   peak: 4.5 GB measured for a 10-component broadband join, beside the file
+#   cache of streaming multi-GB stores, which the cgroup counts too; mem=16gb
+#   leaves room for both (8gb hit 'Cgroup memsw limit exceeded'). ~1-2 min per
+#   broadband store. Single-threaded numpy.
 # ===========================================================================
 
 # --help: print the USAGE block above and exit, without submitting or running

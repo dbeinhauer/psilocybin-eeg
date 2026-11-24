@@ -740,7 +740,10 @@ Outputs, in `plots/06b-corrca-condition-comparison/Comparison_<MusicType>/`:
 `<spectrum>/pca__<variant>/`, `band__<variant>/pca_<n>/` or `<spectrum>/join__<runs>/pca_<n>/` (the runs joined by
 `-`, e.g. `join__separate-placebo_fit-tracks`),
 each with `corrca_comparison_metrics.{png,csv}`, `_topomap_filter.png`,
-`_topomap_pattern.png`, `_snr_course.png`, `_variance_terms.{png,csv}` (+
+`_topomap_pattern.png`, `_tf_maps.png` and `_tf_maps_onset.png` (each condition's
+group-mean TF map, the fit's `condition_mean_tf_maps` without the difference row: one
+row per fit and condition, a fit's Placebo above its Psilocybin, one colour scale per
+fit and component), `_snr_course.png`, `_variance_terms.{png,csv}` (+
 `_variance_terms_tests.csv`) and `_variance_shift.{png,csv}`.
 
 ## 6. Not here yet

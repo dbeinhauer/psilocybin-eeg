@@ -39,6 +39,11 @@ wrote:
   (``__courses.npz``), mean ± SEM over participants;
 * **topographies** — the shared filters ``W`` (what the fit draws) and the shared
   forward patterns (what the held-out |r| compares), one row per fit;
+* **TF maps** — each condition's group-mean TF map, as the fit's
+  ``condition_mean_tf_maps`` draws it without the difference row: the whole
+  recording (participants equal-weighted) and the onset-locked average (each trial
+  in its pre-onset SD). One row per (fit, condition): a fit's Placebo above its
+  Psilocybin, the next fit's pair below, one colour scale per fit and component;
 * **the two terms of the ISC** — ``R_w``'s (the variance the component carries) and
   ``R_b``'s (its covariance with the other participants) per condition and per
   participant, from the stored sources, each per unit filter norm so fits of other
@@ -67,6 +72,7 @@ Output::
         <spectrum>/join__<run>-<run>.../pca_<n>/  # --compare join
             corrca_comparison_metrics.png / .csv
             corrca_comparison_topomap_filter.png, corrca_comparison_topomap_pattern.png
+            corrca_comparison_tf_maps.png, corrca_comparison_tf_maps_onset.png
             corrca_comparison_snr_course.png
             corrca_comparison_variance_terms.png / .csv (+ _tests.csv)
             corrca_comparison_variance_shift.png / .csv
@@ -112,6 +118,9 @@ from scripts.analysis_common import (  # noqa: E402
     MAX_DRAWN_COMPONENTS,
     corrca_plots_dir,
 )
+
+# The fits' own stimulus average, so the maps are the fits' condition_mean_tf_maps.
+from scripts.run_iva_condition_comparison import _onset_average  # noqa: E402
 from scripts.run_corrca_snr_grid import (  # noqa: E402
     _STORE_CONDITIONS,
     BAND_SWAPPED_READING,
@@ -121,8 +130,11 @@ from src.analysis.corrca import (  # noqa: E402
     matched_component_correlation,
     paired_condition_test,
 )
-from src.analysis.iva_quality import ASSR_FREQ  # noqa: E402
-from src.definitions.constants import ProjectPaths  # noqa: E402
+from src.analysis.iva_quality import (  # noqa: E402
+    ASSR_FREQ,
+    equalize_subject_influence,
+)
+from src.definitions.constants import AssrEpoch, ProjectPaths  # noqa: E402
 from src.definitions.fields import (  # noqa: E402
     ConditionVariants,
     ExperimentNames,
@@ -140,6 +152,7 @@ from src.io.loading import load_snr_courses  # noqa: E402
 from src.visualization.corrca_plots import (  # noqa: E402
     plot_comparison_courses,
     plot_comparison_metrics,
+    plot_comparison_tf_maps,
     plot_comparison_topomaps,
     plot_comparison_variance_shift,
     plot_comparison_variance_terms,
@@ -217,6 +230,12 @@ class FitReading:
     course_p: np.ndarray | None = None
     #: How the SNR rows were read, when not from the fit's own grid.
     snr_note: str = ""
+    #: Condition -> ``((n, F, T) mean, times)``: the whole-recording TF map, each
+    #: participant equal-weighted, and the onset-locked one, trial-normalised.
+    tf_whole: dict[str, tuple[np.ndarray, np.ndarray]] = field(default_factory=dict)
+    tf_onset: dict[str, tuple[np.ndarray, np.ndarray]] = field(default_factory=dict)
+    tf_freqs: np.ndarray | None = None
+    epoch_marks: list[float] | None = None
 
 
 def _band_token(band: str) -> str | None:
@@ -451,6 +470,43 @@ def read_store(reading: FitReading, n: int) -> None:
             f"[{fit.label}] CC {row.component} {row.condition}: R_w term "
             f"{row.within:.4g}, R_b term {row.between:.4g}, ISC {row.isc:.4f}"
         )
+    read_tf_maps(reading, results, by_condition)
+
+
+#: Stimulus epochs a condition needs before its onset average is drawn (the fits').
+MIN_ONSETS = 5
+
+
+def read_tf_maps(
+    reading: FitReading,
+    results: IvaComponentResults,
+    by_condition: dict[str, np.ndarray],
+) -> None:
+    """Each condition's group-mean TF maps, as the fit's ``condition_mean_tf_maps``
+    draws them: the whole recording with every participant equal-weighted, and the
+    onset-locked average, each trial in its pre-onset SD, median over trials."""
+    reading.tf_freqs = np.asarray(results.freqs, dtype=float)
+    for condition, sources in by_condition.items():
+        times = (
+            results.times_for(condition)
+            if results.segment_conditions
+            else np.asarray(results.times, dtype=float)
+        )
+        reading.tf_whole[condition] = (
+            equalize_subject_influence(sources).mean(axis=0),
+            times,
+        )
+        averaged = _onset_average(
+            sources,
+            results.stimulus_onsets(condition),
+            label=f"{reading.fit.label}, {condition}",
+            n_times=sources.shape[-1],
+            sfreq=results.sfreq,
+            min_onsets=MIN_ONSETS,
+        )
+        if averaged is not None:
+            onset_tf, epoch_times, reading.epoch_marks = averaged
+            reading.tf_onset[condition] = (onset_tf.mean(axis=0), epoch_times)
 
 
 def read_isc_csvs(reading: FitReading, n: int) -> None:
@@ -536,6 +592,12 @@ def read_snr(
     (``run_corrca_snr_grid.py --swap_band <band>``), when that has run.
     """
     fit = reading.fit
+    if reading.maps is None:
+        # The grid reads the store; a grid whose store is gone is from another fit.
+        _logger.warning(
+            f"[{fit.label}] no store, so no SNR rows (a grid left is stale)."
+        )
+        return
     bounds = _band_range(band)
     csv_path, signal = fit.snr_csv, "full"
     if bounds is not None and not bounds[0] <= ASSR_FREQ <= bounds[1]:
@@ -554,6 +616,18 @@ def read_snr(
     grid = _read_csv(csv_path, "SNR grid", fit.label)
     if grid is None:
         return
+    courses_path = csv_path.with_name(f"{csv_path.stem}__courses.npz")
+    if not courses_path.is_file():
+        _logger.warning(f"[{fit.label}] no SNR courses at {courses_path}.")
+        return
+    _participants, labels, times, courses = load_snr_courses(courses_path)
+    if not np.isclose(times[0], -AssrEpoch.PRE_ONSET_S, atol=0.5 / ASSR_FREQ):
+        _logger.warning(
+            f"[{fit.label}] {csv_path.name} was cut from {times[0]:+.3f} s, not the "
+            f"current {-AssrEpoch.PRE_ONSET_S:+.3f} s pre-onset window: a stale grid, "
+            "skipped. Rerun the fit job's SNR grid."
+        )
+        return
     sources = [f"CC {k + 1}" for k in range(n)]
     contrast = grid[
         (grid["family"] == "contrast")
@@ -567,11 +641,6 @@ def read_snr(
             _metric(reading, k + 1, "", f"p_snr_contrast__{window}", value)
         if window == args.snr_windows[0] and len(fit.conditions) == 2:
             reading.course_p = p
-    courses_path = csv_path.with_name(f"{csv_path.stem}__courses.npz")
-    if not courses_path.is_file():
-        _logger.warning(f"[{fit.label}] no SNR courses at {courses_path}.")
-        return
-    _participants, labels, times, courses = load_snr_courses(courses_path)
     by_condition = courses.get((signal, args.snr_selection))
     if by_condition is None:
         _logger.warning(f"[{fit.label}] no {signal}/{args.snr_selection} courses.")
@@ -716,10 +785,39 @@ def run(args: argparse.Namespace) -> None:
         )
         plt.close("all")
 
+    # One row per (entry, condition), each entry's conditions on consecutive rows.
+    marks = next((r.epoch_marks for r in readings if r.epoch_marks), None)
+    for attr, suffix, what, epoch_marks in (
+        ("tf_whole", "", "whole recording, participants equal-weighted", None),
+        (
+            "tf_onset",
+            "_onset",
+            "onset-locked, each trial in its pre-onset SD, median over trials",
+            marks,
+        ),
+    ):
+        tf_rows = [
+            (r.fit.entry, c, mean, r.tf_freqs, times)
+            for r in readings
+            for c in args.conditions
+            if c in getattr(r, attr)
+            for mean, times in [getattr(r, attr)[c]]
+        ]
+        plot_comparison_tf_maps(
+            tf_rows,
+            n,
+            title=f"{title}: condition-mean TF maps, {what}; one colour scale per "
+            "fit and component",
+            freq_marks=[ASSR_FREQ],
+            epoch_marks=epoch_marks,
+            save_path=out_dir / f"{prefix}{STEM}_tf_maps{suffix}.png",
+        )
+        plt.close("all")
+
     # One row per entry: an individual-conditions entry joins its two fits' courses.
-    course_rows, course_p, course_labels, times = [], [], [], None
+    course_rows, course_p, course_labels, course_times = [], [], [], []
     for entry in entries:
-        merged, p, note = {}, None, ""
+        merged, p, note, times = {}, None, "", None
         for r in readings:
             if r.fit.entry == entry.label and r.courses:
                 merged.update(r.courses)
@@ -728,12 +826,13 @@ def run(args: argparse.Namespace) -> None:
                 note = r.snr_note or note
         if merged:
             course_rows.append(merged)
+            course_times.append(times)
             course_p.append(p)
             course_labels.append(f"{entry.label} ({note})" if note else entry.label)
     if course_rows:
         plot_comparison_courses(
             course_rows,
-            times,
+            course_times,
             course_labels,
             n,
             window=_window_bounds(args.snr_windows[0]),
